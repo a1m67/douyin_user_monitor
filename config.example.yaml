@@ -1,0 +1,24 @@
+upstream:
+  # Douyin_TikTok_Download_API 地址
+  base_url: "http://127.0.0.1:8899"
+  # 上游请求超时（秒）
+  timeout_seconds: 30
+
+monitor:
+  # 监控状态文件
+  state_path: "data/monitor_users.json"
+  # 下载目录
+  download_root: "download"
+
+notifications:
+  telegram:
+    # 是否开启 Telegram 提醒
+    enabled: false
+    # Bot Token (可用环境变量 DYMON_TG_BOT_TOKEN 覆盖)
+    bot_token: ""
+    # Chat ID (可用环境变量 DYMON_TG_CHAT_ID 覆盖)
+    chat_id: ""
+    # Telegram API 基地址
+    api_base: "https://api.telegram.org"
+    # 请求超时（秒）
+    timeout_seconds: 10

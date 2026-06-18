@@ -1,0 +1,991 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>抖音用户监控台 | Douyin Monitor</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+    :root {
+      /* Mosaic Lite Color Palette */
+      --bg-body: #f1f5f9;      /* slate-100 */
+      --bg-surface: #ffffff;
+      --bg-sidebar: #1e293b;   /* slate-800 */
+      --bg-sidebar-hover: #334155; /* slate-700 */
+      
+      --text-main: #1e293b;    /* slate-800 */
+      --text-muted: #64748b;   /* slate-500 */
+      --text-lighter: #94a3b8; /* slate-400 */
+      --text-inverse: #f8fafc; /* slate-50 */
+      
+      --border-color: #e2e8f0; /* slate-200 */
+      --border-dark: #334155;  /* slate-700 */
+      
+      --primary: #4f46e5;      /* indigo-600 */
+      --primary-hover: #4338ca;/* indigo-700 */
+      --primary-light: #e0e7ff;/* indigo-100 */
+      
+      --success: #10b981;      /* emerald-500 */
+      --success-light: #d1fae5;
+      --danger: #ef4444;       /* red-500 */
+      --danger-hover: #dc2626;
+      --danger-light: #fee2e2;
+      
+      --radius-sm: 4px;
+      --radius: 8px;
+      --radius-lg: 12px;
+      
+      --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+      --shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px -1px rgba(0, 0, 0, 0.1);
+      --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.1);
+      
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    
+    body {
+      background-color: var(--bg-body);
+      color: var(--text-main);
+      -webkit-font-smoothing: antialiased;
+      line-height: 1.5;
+      display: flex;
+      height: 100vh;
+      overflow: hidden;
+    }
+
+    /* --- Sidebar (Mosaic Style) --- */
+    .sidebar {
+      width: 260px;
+      background-color: var(--bg-sidebar);
+      color: var(--text-inverse);
+      display: flex;
+      flex-direction: column;
+      flex-shrink: 0;
+      transition: all 0.3s ease;
+      z-index: 40;
+    }
+    .sidebar-header {
+      height: 64px;
+      display: flex;
+      align-items: center;
+      padding: 0 24px;
+      font-size: 18px;
+      font-weight: 700;
+      letter-spacing: -0.5px;
+      gap: 10px;
+      background-color: rgba(15, 23, 42, 0.2); /* Darker header */
+    }
+    .sidebar-header svg {
+      width: 28px; height: 28px; color: #818cf8; /* indigo-400 */
+    }
+    .sidebar-nav {
+      flex: 1;
+      padding: 24px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      overflow-y: auto;
+    }
+    .nav-label {
+      font-size: 12px;
+      text-transform: uppercase;
+      color: var(--text-muted);
+      font-weight: 600;
+      margin: 8px 0 4px 8px;
+      letter-spacing: 0.5px;
+    }
+    .nav-item {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 10px 12px;
+      border-radius: var(--radius);
+      color: var(--text-lighter);
+      text-decoration: none;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .nav-item:hover {
+      background-color: var(--bg-sidebar-hover);
+      color: var(--text-inverse);
+    }
+    .nav-item.active {
+      background-color: rgba(79, 70, 229, 0.15); /* Primary tinted */
+      color: #818cf8;
+    }
+    .nav-item svg { width: 20px; height: 20px; flex-shrink: 0; }
+
+    /* --- Main Wrapper --- */
+    .app-wrapper {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+      overflow: hidden;
+    }
+
+    /* --- Header --- */
+    .top-header {
+      height: 64px;
+      background-color: var(--bg-surface);
+      border-bottom: 1px solid var(--border-color);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 24px;
+      flex-shrink: 0;
+      z-index: 30;
+    }
+    
+    .header-right {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+    .btn.mobile-sidebar-toggle { display: none; }
+
+    /* Status Indicator */
+    .status-badge {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 12px;
+      background: var(--bg-body);
+      border: 1px solid var(--border-color);
+      border-radius: 999px;
+      font-size: 13px;
+      font-weight: 600;
+    }
+    .status-dot {
+      width: 8px; height: 8px; border-radius: 50%; background: var(--text-lighter);
+    }
+    .status-dot.running {
+      background: var(--success);
+      box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.2);
+    }
+
+    /* --- Main Content Area --- */
+    .main-content {
+      flex: 1;
+      overflow-y: auto;
+      padding: 32px 24px;
+    }
+    
+    .content-container {
+      max-width: 1200px;
+      margin: 0 auto;
+      display: flex;
+      flex-direction: column;
+      gap: 24px;
+    }
+
+    /* Page Header */
+    .page-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-end;
+      margin-bottom: 8px;
+    }
+    .page-title {
+      font-size: 28px;
+      font-weight: 700;
+      color: var(--text-main);
+      letter-spacing: -0.5px;
+    }
+    .page-actions {
+      display: flex;
+      gap: 12px;
+    }
+
+    /* Stats Grid */
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 24px;
+    }
+    .stat-card {
+      background: var(--bg-surface);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius);
+      padding: 20px;
+      box-shadow: var(--shadow-sm);
+      display: flex;
+      flex-direction: column;
+    }
+    .stat-card-icon {
+      width: 40px; height: 40px; border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      margin-bottom: 16px;
+    }
+    .stat-card-icon svg { width: 20px; height: 20px; }
+    .stat-label { font-size: 13px; color: var(--text-muted); font-weight: 500; margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.5px;}
+    .stat-value { font-size: 24px; font-weight: 700; color: var(--text-main); line-height: 1; }
+    
+    /* Layout Grid for Main Content */
+    .dashboard-grid {
+      display: grid;
+      grid-template-columns: 2fr 1fr;
+      gap: 24px;
+      align-items: flex-start;
+    }
+
+    /* Cards */
+    .card {
+      background: var(--bg-surface);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow-sm);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    .card-header {
+      padding: 20px 24px;
+      border-bottom: 1px solid var(--border-color);
+      background: #f8fafc; /* Very light gray for header */
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 12px;
+    }
+    .card-title {
+      font-size: 16px;
+      font-weight: 600;
+      color: var(--text-main);
+    }
+    .card-header-actions {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-left: auto;
+      min-width: 0;
+    }
+    .card-body {
+      padding: 24px;
+    }
+
+    /* Forms & Inputs */
+    .input-group { display: flex; gap: 12px; }
+    .input {
+      flex: 1; padding: 10px 16px; border: 1px solid var(--border-color);
+      border-radius: var(--radius-sm); font-size: 14px; font-family: inherit;
+      color: var(--text-main); outline: none; transition: all 0.2s;
+    }
+    .input:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.2); }
+    .input-search { width: 280px; }
+    
+    /* Buttons */
+    .btn {
+      display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+      padding: 10px 16px; border: 1px solid transparent; border-radius: var(--radius-sm);
+      font-size: 14px; font-weight: 500; font-family: inherit; cursor: pointer; transition: all 0.2s;
+    }
+    .btn svg { width: 18px; height: 18px; }
+    .btn-primary { background: var(--primary); color: white; box-shadow: 0 1px 2px rgba(0,0,0,0.05); }
+    .btn-primary:hover { background: var(--primary-hover); }
+    .btn-danger { background: var(--danger); color: white; }
+    .btn-danger:hover { background: var(--danger-hover); }
+    .btn-secondary { background: var(--bg-surface); color: var(--text-main); border-color: var(--border-color); box-shadow: 0 1px 2px rgba(0,0,0,0.05); }
+    .btn-secondary:hover { background: var(--bg-body); border-color: #cbd5e1; }
+    .btn-sm { padding: 6px 12px; font-size: 13px; }
+    
+    .btn-text {
+      background: transparent; border: none; padding: 6px 10px; color: var(--primary);
+      font-size: 13px; font-weight: 500; cursor: pointer; border-radius: var(--radius-sm);
+      display: inline-flex; align-items: center; gap: 4px; transition: all 0.2s;
+    }
+    .btn-text:hover { background: var(--primary-light); }
+    
+    /* Users List */
+    .users-list { display: flex; flex-direction: column; }
+    .user-row {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 16px 24px; border-bottom: 1px solid var(--border-color);
+      transition: background 0.2s;
+    }
+    .user-row:last-child { border-bottom: none; }
+    .user-row:hover { background-color: #f8fafc; }
+    
+    .user-info { display: flex; align-items: center; gap: 16px; flex: 1; min-width: 0; }
+    .user-avatar {
+      width: 40px; height: 40px; border-radius: 50%; background: var(--primary-light);
+      color: var(--primary); display: flex; align-items: center; justify-content: center;
+      font-weight: 600; font-size: 16px; flex-shrink: 0; overflow: hidden;
+    }
+    .user-avatar img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .user-details { display: flex; flex-direction: column; min-width: 0; }
+    .user-name { font-weight: 600; font-size: 15px; color: var(--text-main); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: flex; align-items: center; gap: 8px;}
+    .user-meta { font-size: 13px; color: var(--text-muted); display: flex; gap: 16px; margin-top: 4px; }
+    .user-meta-item { display: flex; align-items: center; gap: 4px; }
+    .user-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+
+    /* Activity Feed */
+    .activity-feed { padding: 0 24px; max-height: 500px; overflow-y: auto; }
+    .feed-item { display: flex; gap: 16px; padding: 20px 0; border-bottom: 1px solid var(--border-color); }
+    .feed-item:last-child { border-bottom: none; }
+    .feed-icon {
+      width: 32px; height: 32px; border-radius: 50%; display: flex; align-items: center; justify-content: center;
+      flex-shrink: 0; margin-top: 2px;
+    }
+    .feed-icon.video { background: #ede9fe; color: #6366f1; }
+    .feed-icon.photo { background: #fce7f3; color: #ec4899; }
+    .feed-icon svg { width: 16px; height: 16px; }
+    .feed-content { flex: 1; font-size: 14px; }
+    .feed-header { display: flex; justify-content: space-between; margin-bottom: 4px; }
+    .feed-user { font-weight: 600; color: var(--text-main); }
+    .feed-time { color: var(--text-lighter); font-size: 12px; }
+    .feed-desc { color: var(--text-muted); }
+
+    /* Modals / Drawers */
+    .overlay {
+      position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(15, 23, 42, 0.5);
+      z-index: 1000; opacity: 0; pointer-events: none; transition: opacity 0.3s; backdrop-filter: blur(2px);
+    }
+    .overlay.show { opacity: 1; pointer-events: auto; }
+    #sidebarOverlay {
+      z-index: 39;
+      background: rgba(15, 23, 42, 0.28);
+      backdrop-filter: none;
+    }
+    #settingsOverlay { z-index: 1000; }
+    
+    .drawer {
+      position: fixed; top: 0; right: -400px; width: 100%; max-width: 400px; height: 100vh;
+      background: var(--bg-surface); box-shadow: -4px 0 24px rgba(0,0,0,0.1); z-index: 1001;
+      transition: right 0.3s cubic-bezier(0.16, 1, 0.3, 1); display: flex; flex-direction: column;
+    }
+    .drawer.show { right: 0; }
+    .drawer-header { padding: 24px; border-bottom: 1px solid var(--border-color); display: flex; justify-content: space-between; align-items: center; }
+    .drawer-body { padding: 24px; overflow-y: auto; flex: 1; display: flex; flex-direction: column; gap: 24px; }
+
+    /* Toast */
+    .toast-container { position: fixed; bottom: 24px; right: 24px; display: flex; flex-direction: column; gap: 12px; z-index: 9999; }
+    .toast { background: var(--text-main); color: white; padding: 16px 20px; border-radius: var(--radius); box-shadow: var(--shadow-md); display: flex; align-items: center; gap: 12px; width: 320px; transform: translateX(120%); opacity: 0; transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1); }
+    .toast.show { transform: translateX(0); opacity: 1; }
+    .toast-success { border-left: 4px solid var(--success); }
+    .toast-error { border-left: 4px solid var(--danger); }
+    .toast svg { width: 20px; height: 20px; flex-shrink: 0; }
+
+    @media (max-width: 1024px) {
+      .dashboard-grid { grid-template-columns: 1fr; }
+      .stats-grid { grid-template-columns: repeat(2, 1fr); }
+      .sidebar { position: fixed; left: -260px; height: 100vh; z-index: 40; }
+      .sidebar.show { left: 0; }
+      .btn.mobile-sidebar-toggle { display: inline-flex; }
+    }
+    @media (max-width: 640px) {
+      .stats-grid { grid-template-columns: 1fr; }
+      .card-header-actions { width: 100%; margin-left: 0; }
+      .input-search { width: 100%; min-width: 0; }
+      .user-row { flex-direction: column; align-items: flex-start; gap: 16px; }
+      .user-actions { width: 100%; display: flex; justify-content: flex-end; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Sidebar -->
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-header">
+      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M14.25 9.75 16.5 12l-2.25 2.25m-4.5 0L7.5 12l2.25-2.25M6 20.25h12A2.25 2.25 0 0 0 20.25 18V6A2.25 2.25 0 0 0 18 3.75H6A2.25 2.25 0 0 0 3.75 6v12A2.25 2.25 0 0 0 6 20.25Z" />
+      </svg>
+      Douyin Monitor
+    </div>
+    <nav class="sidebar-nav">
+      <div class="nav-label">Menu</div>
+      <a class="nav-item active" href="/api/monitor/dashboard" onclick="return navigateToPage('/api/monitor/dashboard')">
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M3.75 6A2.25 2.25 0 0 1 6 3.75h2.25A2.25 2.25 0 0 1 10.5 6v2.25a2.25 2.25 0 0 1-2.25 2.25H6a2.25 2.25 0 0 1-2.25-2.25V6ZM3.75 15.75A2.25 2.25 0 0 1 6 13.5h2.25a2.25 2.25 0 0 1 2.25 2.25V18a2.25 2.25 0 0 1-2.25 2.25H6A2.25 2.25 0 0 1 3.75 18v-2.25ZM13.5 6a2.25 2.25 0 0 1 2.25-2.25H18A2.25 2.25 0 0 1 20.25 6v2.25A2.25 2.25 0 0 1 18 10.5h-2.25a2.25 2.25 0 0 1-2.25-2.25V6ZM13.5 15.75a2.25 2.25 0 0 1 2.25-2.25H18a2.25 2.25 0 0 1 2.25 2.25V18A2.25 2.25 0 0 1 18 20.25h-2.25A2.25 2.25 0 0 1 13.5 18v-2.25Z" /></svg>
+        数据大盘
+      </a>
+      <a class="nav-item" href="/api/monitor/statistics/dashboard" onclick="return navigateToPage('/api/monitor/statistics/dashboard')">
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M7.5 3.75h9A2.25 2.25 0 0 1 18.75 6v12A2.25 2.25 0 0 1 16.5 20.25h-9A2.25 2.25 0 0 1 5.25 18V6A2.25 2.25 0 0 1 7.5 3.75Zm1.5 4.5h6m-6 3h6m-6 3h3" /></svg>
+        用户统计
+      </a>
+      <a class="nav-item" onclick="toggleSettings()">
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.325.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 0 1 1.37.49l1.296 2.247a1.125 1.125 0 0 1-.26 1.431l-1.003.827c-.293.241-.438.613-.43.992a7.723 7.723 0 0 1 0 .255c-.008.378.137.75.43.991l1.004.827c.424.35.534.955.26 1.43l-1.298 2.247a1.125 1.125 0 0 1-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.47 6.47 0 0 1-.22.128c-.331.183-.581.495-.644.869l-.213 1.281c-.09.543-.56.94-1.11.94h-2.594c-.55 0-1.019-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 0 1-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 0 1-1.369-.49l-1.297-2.247a1.125 1.125 0 0 1 .26-1.431l1.004-.827c.292-.24.437-.613.43-.991a6.932 6.932 0 0 1 0-.255c.007-.38-.138-.751-.43-.992l-1.004-.827a1.125 1.125 0 0 1-.26-1.43l1.297-2.247a1.125 1.125 0 0 1 1.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.086.22-.128.332-.183.582-.495.644-.869l.214-1.28Z" /><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z" /></svg>
+        调度配置
+      </a>
+      <a class="nav-item" onclick="refreshAll()">
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99" /></svg>
+        刷新数据
+      </a>
+    </nav>
+  </aside>
+
+  <!-- Main Wrapper -->
+  <div class="app-wrapper">
+    <!-- Top Header -->
+    <header class="top-header">
+      <div style="display: flex; align-items: center; gap: 16px;">
+        <button class="btn btn-secondary btn-sm mobile-sidebar-toggle" onclick="toggleSidebar()" style="border: none; box-shadow: none; padding: 4px;">
+          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" style="width: 24px; height: 24px;"><path stroke-linecap="round" stroke-linejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5" /></svg>
+        </button>
+      </div>
+      
+      <div class="header-right">
+        <div class="status-badge" title="系统运行状态">
+          <div id="runStateDot" class="status-dot"></div>
+          <span id="runStateText">加载中...</span>
+        </div>
+      </div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="main-content">
+      <div class="content-container">
+        
+        <!-- Page Title & Global Actions -->
+        <div class="page-header">
+          <div>
+            <h1 class="page-title">数据大盘</h1>
+          </div>
+          <div class="page-actions">
+            <button id="btnStart" class="btn btn-primary" onclick="startMonitor()">
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.347a1.125 1.125 0 0 1 0 1.972l-11.54 6.347a1.125 1.125 0 0 1-1.667-.986V5.653Z" /></svg> 
+              启动后台监控
+            </button>
+            <button id="btnStop" class="btn btn-danger" onclick="stopMonitor()" style="display: none;">
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M5.25 7.5A2.25 2.25 0 0 1 7.5 5.25h9a2.25 2.25 0 0 1 2.25 2.25v9a2.25 2.25 0 0 1-2.25 2.25h-9a2.25 2.25 0 0 1-2.25-2.25v-9Z" /></svg>
+              停止后台监控
+            </button>
+            <button class="btn btn-secondary" onclick="runOnce()" title="立即触发一次全量轮询">
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="m3.75 13.5 10.5-11.25L12 10.5h8.25L9.75 21.75 12 13.5H3.75Z" /></svg>
+            </button>
+          </div>
+        </div>
+
+        <!-- 4-Column Stats Grid -->
+        <div class="stats-grid">
+          <div class="stat-card">
+            <div class="stat-card-icon" style="background: var(--primary-light); color: var(--primary);">
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 6a3.75 3.75 0 1 1-7.5 0 3.75 3.75 0 0 1 7.5 0ZM4.501 20.118a7.5 7.5 0 0 1 14.998 0A17.933 17.933 0 0 1 12 21.75c-2.676 0-5.216-.584-7.499-1.632Z" /></svg>
+            </div>
+            <div class="stat-label">监控用户数</div>
+            <div class="stat-value" id="metric-users">-</div>
+          </div>
+          
+          <div class="stat-card">
+            <div class="stat-card-icon" style="background: #e0f2fe; color: #0ea5e9;">
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9Z" /></svg>
+            </div>
+            <div class="stat-label">上次下载作品数</div>
+            <div class="stat-value" id="metric-downloads">-</div>
+          </div>
+
+          <div class="stat-card">
+            <div class="stat-card-icon" style="background: var(--success-light); color: var(--success);">
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" /></svg>
+            </div>
+            <div class="stat-label">调度模式</div>
+            <div class="stat-value" id="metric-mode-name" style="font-size: 20px;">-</div>
+            <div style="font-size: 12px; color: var(--text-muted); margin-top: 4px;" id="metric-mode-desc"></div>
+          </div>
+
+          <div class="stat-card">
+            <div class="stat-card-icon" style="background: #fef08a; color: #0284c7;">
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M3.75 3v11.25A2.25 2.25 0 0 0 6 16.5h2.25M3.75 3h-1.5m1.5 0h16.5m0 0h1.5m-1.5 0v11.25A2.25 2.25 0 0 1 19.5 16.5h-2.25m-9 0h9l-4.5 5.25v-5.25Z" /></svg>
+            </div>
+            <div class="stat-label">系统状态</div>
+            <div class="stat-value" id="metric-health" style="font-size: 20px; color: var(--success);">正常运行</div>
+          </div>
+        </div>
+
+        <!-- Main Content 2-Column Grid -->
+        <div class="dashboard-grid">
+          
+          <!-- Left: Users Card -->
+          <div class="card">
+            <div class="card-header">
+              <h2 class="card-title">监控用户列表 <span id="userCountText" style="color:var(--text-muted); font-weight:normal;">(0)</span></h2>
+              <div class="card-header-actions">
+                <input
+                  id="userSearchInput"
+                  type="search"
+                  class="input input-search"
+                  placeholder="搜索监控用户（昵称 / sec_user_id / 用户ID）"
+                  oninput="handleUserSearch()"
+                />
+                <button id="toggleAllUsersBtn" class="btn-text" style="display: none;" onclick="toggleGlobalUserList()"></button>
+              </div>
+            </div>
+
+            <div id="users" class="users-list">
+              <div style="padding: 40px; text-align: center; color: var(--text-muted);">正在加载用户数据...</div>
+            </div>
+          </div>
+
+          <!-- Right: Activity Feed Card -->
+          <div class="card">
+            <div class="card-header">
+              <h2 class="card-title">下载动态</h2>
+              <span id="recordsTotal" style="font-size: 12px; color: var(--text-muted); background: var(--border-color); padding: 2px 8px; border-radius: 12px;">0 条</span>
+            </div>
+            <div class="card-body" style="padding: 0;">
+              <div id="globalRecords" class="activity-feed">
+                <div style="padding: 40px; text-align: center; color: var(--text-muted);">暂无下载记录</div>
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <!-- Mobile Sidebar Overlay -->
+  <div id="sidebarOverlay" class="overlay" onclick="toggleSidebar()"></div>
+
+  <!-- Settings Drawer -->
+  <div id="settingsOverlay" class="overlay" onclick="toggleSettings()"></div>
+  <div id="settingsDrawer" class="drawer">
+    <div class="drawer-header">
+      <h2 style="margin:0; font-size: 18px; display:flex; align-items:center; gap:8px; font-weight: 600;">
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" style="width:20px;height:20px;color:var(--text-muted);"><path stroke-linecap="round" stroke-linejoin="round" d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.325.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 0 1 1.37.49l1.296 2.247a1.125 1.125 0 0 1-.26 1.431l-1.003.827c-.293.241-.438.613-.43.992a7.723 7.723 0 0 1 0 .255c-.008.378.137.75.43.991l1.004.827c.424.35.534.955.26 1.43l-1.298 2.247a1.125 1.125 0 0 1-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.47 6.47 0 0 1-.22.128c-.331.183-.581.495-.644.869l-.213 1.281c-.09.543-.56.94-1.11.94h-2.594c-.55 0-1.019-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 0 1-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 0 1-1.369-.49l-1.297-2.247a1.125 1.125 0 0 1 .26-1.431l1.004-.827c.292-.24.437-.613.43-.991a6.932 6.932 0 0 1 0-.255c.007-.38-.138-.751-.43-.992l-1.004-.827a1.125 1.125 0 0 1-.26-1.43l1.297-2.247a1.125 1.125 0 0 1 1.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.086.22-.128.332-.183.582-.495.644-.869l.214-1.28Z" /><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z" /></svg> 
+        调度与系统配置
+      </h2>
+      <button class="btn-icon" onclick="toggleSettings()"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18 18 6M6 6l12 12" /></svg></button>
+    </div>
+    
+    <div class="drawer-body">
+      <section>
+        <h3 class="section-title">任务调度策略</h3>
+        <div class="form-group">
+          <label class="form-label">监控模式</label>
+          <select id="monitorMode" class="input" onchange="onModeChanged()">
+            <option value="interval">定时轮询 (Interval)</option>
+            <option value="coverage">覆盖轮询 (Coverage)</option>
+          </select>
+        </div>
+        <div class="form-row">
+          <div class="form-group flex-1">
+            <label class="form-label">间隔小时 (Interval)</label>
+            <input id="intervalHours" type="number" class="input" min="0.01" step="0.01" value="0.05" />
+          </div>
+          <div class="form-group flex-1">
+            <label class="form-label">覆盖小时 (Coverage)</label>
+            <input id="coverageHours" type="number" class="input" min="0.1" step="0.1" value="24" />
+          </div>
+        </div>
+        <p class="help-text" id="modeHint"></p>
+        <button class="btn btn-primary w-full" onclick="applySettings()" style="margin-top: 12px;">保存配置并应用</button>
+      </section>
+    </div>
+  </div>
+
+  <div id="toast-container" class="toast-container"></div>
+
+  <script>
+    const Icons = {
+      play: `<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.347a1.125 1.125 0 0 1 0 1.972l-11.54 6.347a1.125 1.125 0 0 1-1.667-.986V5.653Z" /></svg>`,
+      pause: `<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 5.25v13.5m-7.5-13.5v13.5" /></svg>`,
+      bolt: `<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="m3.75 13.5 10.5-11.25L12 10.5h8.25L9.75 21.75 12 13.5H3.75Z" /></svg>`,
+      trash: `<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="m14.74 9-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 0 1-2.244 2.077H8.084a2.25 2.25 0 0 1-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 0 0-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 0 1 3.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 0 0-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 0 0-7.5 0" /></svg>`,
+      video: `<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="m15.75 10.5 4.72-4.72a.75.75 0 0 1 1.28.53v11.38a.75.75 0 0 1-1.28.53l-4.72-4.72M4.5 18.75h9a2.25 2.25 0 0 0 2.25-2.25v-9a2.25 2.25 0 0 0-2.25-2.25h-9A2.25 2.25 0 0 0 2.25 7.5v9a2.25 2.25 0 0 0 2.25 2.25Z" /></svg>`,
+      photo: `<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="m2.25 15.75 5.159-5.159a2.25 2.25 0 0 1 3.182 0l5.159 5.159m-1.5-1.5 1.409-1.409a2.25 2.25 0 0 1 3.182 0l2.909 2.909m-18 3.75h16.5a1.5 1.5 0 0 0 1.5-1.5V6a1.5 1.5 0 0 0-1.5-1.5H3.75A1.5 1.5 0 0 0 2.25 6v12a1.5 1.5 0 0 0 1.5 1.5Zm10.5-11.25h.008v.008h-.008V8.25Zm.375 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Z" /></svg>`,
+      checkCircle: `<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75 11.25 15 15 9.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" /></svg>`,
+      exclamation: `<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3Z" /></svg>`
+    };
+
+    // State Management
+    let isGlobalUserListExpanded = false;
+    let cachedUsers = [];
+    let userSearchKeyword = "";
+
+    // UI Toggles
+    function toggleSettings() {
+      document.getElementById('settingsDrawer').classList.toggle('show');
+      document.getElementById('settingsOverlay').classList.toggle('show');
+    }
+    
+    function toggleSidebar() {
+      if (!isMobileViewport()) {
+        closeSidebarMobile();
+        return false;
+      }
+      document.getElementById('sidebar').classList.toggle('show');
+      document.getElementById('sidebarOverlay').classList.toggle('show');
+      return false;
+    }
+    
+    function closeSidebarMobile() {
+      document.getElementById('sidebar').classList.remove('show');
+      document.getElementById('sidebarOverlay').classList.remove('show');
+    }
+
+    function isMobileViewport() {
+      return window.innerWidth <= 1024;
+    }
+
+    function navigateToPage(path) {
+      closeSidebarMobile();
+      if (window.location.pathname === path) return false;
+      window.location.assign(path);
+      return false;
+    }
+
+    window.addEventListener('resize', () => {
+      if (!isMobileViewport()) closeSidebarMobile();
+    });
+
+    function toggleGlobalUserList() {
+      isGlobalUserListExpanded = !isGlobalUserListExpanded;
+      renderUsers(cachedUsers);
+    }
+
+    function getUserSearchKeyword() {
+      return userSearchKeyword.trim().toLowerCase();
+    }
+
+    function handleUserSearch() {
+      const input = document.getElementById("userSearchInput");
+      userSearchKeyword = String(input?.value || "");
+      renderUsers(cachedUsers);
+    }
+
+    function filterUsers(users) {
+      const keyword = getUserSearchKeyword();
+      if (!keyword) return users;
+      return users.filter(user => [user.nickname, user.sec_user_id, user.id, user.profile_url]
+        .some(value => String(value || "").toLowerCase().includes(keyword)));
+    }
+
+    function buildUserEmptyState(totalUsers, filteredUsers) {
+      if (!totalUsers) return '暂无监控用户';
+      if (getUserSearchKeyword() && !filteredUsers) {
+        return `未找到匹配“${escapeHtml(userSearchKeyword.trim())}”的监控用户`;
+      }
+      return '暂无监控用户';
+    }
+
+    const SHANGHAI_TIME_ZONE = "Asia/Shanghai";
+    const SHANGHAI_OFFSET_SUFFIX = "+08:00";
+    const SHANGHAI_TIME_FORMATTER = new Intl.DateTimeFormat("zh-CN", {
+      timeZone: SHANGHAI_TIME_ZONE,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hourCycle: "h23",
+    });
+
+    function normalizeTimeInput(value) {
+      const text = String(value || "").trim();
+      if (!text || text === "-") return "";
+      const normalized = text.includes("T") ? text : text.replace(" ", "T");
+      if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(normalized)) return normalized;
+      if (/[zZ]$|[+-]\d{2}:\d{2}$/.test(normalized)) return normalized;
+      return `${normalized}${SHANGHAI_OFFSET_SUFFIX}`;
+    }
+
+    function parseTimeValue(value) {
+      const normalized = normalizeTimeInput(value);
+      if (!normalized) return null;
+      const parsed = new Date(normalized);
+      return Number.isNaN(parsed.getTime()) ? null : parsed;
+    }
+
+    function formatTimeParts(date) {
+      return SHANGHAI_TIME_FORMATTER.formatToParts(date).reduce((accumulator, part) => {
+        if (part.type !== "literal") accumulator[part.type] = part.value;
+        return accumulator;
+      }, {});
+    }
+
+    function formatTime(value, emptyText = "-") {
+      const rawText = String(value || "").trim();
+      if (!rawText || rawText === "-") return emptyText;
+      const parsed = parseTimeValue(rawText);
+      if (!parsed) return rawText.replace("T", " ").replace(/(\.\d+)?([+-]\d{2}:\d{2}|Z)$/i, "");
+      const parts = formatTimeParts(parsed);
+      return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}:${parts.second}`;
+    }
+
+    function parseTimeToMillis(value) {
+      const parsed = parseTimeValue(value);
+      return parsed ? parsed.getTime() : 0;
+    }
+
+    function escapeHtml(value) {
+      return String(value ?? "")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#39;");
+    }
+
+    function renderUserAvatar(user) {
+      const initial = escapeHtml((user.nickname || user.sec_user_id || "?").charAt(0).toUpperCase());
+      const avatarUrl = String(user.avatar_url || "").trim();
+      if (!avatarUrl) return `<div class="user-avatar">${initial}</div>`;
+      const userId = encodeURIComponent(String(user.id || "").trim());
+      if (!userId) return `<div class="user-avatar">${initial}</div>`;
+      const version = encodeURIComponent(String(user.updated_at || avatarUrl));
+      const safeUrl = `${API_BASE}/users/${userId}/avatar?v=${version}`;
+      return `<div class="user-avatar"><img src="${safeUrl}" alt="${initial}" loading="lazy" onerror="this.remove();this.parentElement.textContent=this.alt;" /></div>`;
+    }
+
+    const API_BASE = "/api/monitor";
+
+    function showToast(message, type = 'success') {
+      const container = document.getElementById("toast-container");
+      const toast = document.createElement("div");
+      toast.className = `toast toast-${type}`;
+      toast.innerHTML = `<div style="color: ${type==='success'?'var(--success)':'var(--danger)'}">${type === 'success' ? Icons.checkCircle : Icons.exclamation}</div><div style="font-size:14px; font-weight:500;">${message}</div>`;
+      container.appendChild(toast);
+      requestAnimationFrame(() => { requestAnimationFrame(() => { toast.classList.add('show'); }); });
+      setTimeout(() => { toast.classList.remove('show'); setTimeout(() => toast.remove(), 300); }, 3000);
+    }
+
+    async function api(path, options = {}) {
+      const res = await fetch(`${API_BASE}${path}`, { headers: { "Content-Type": "application/json" }, ...options });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data.code !== 200) throw new Error(data?.detail?.message || data?.detail || data?.message || "请求失败");
+      return data.data;
+    }
+
+    function onModeChanged() {
+      const mode = document.getElementById("monitorMode").value;
+      const hint = document.getElementById("modeHint");
+      hint.textContent = mode === "coverage" ? "覆盖模式：系统将 Coverage 小时数均分给所有监控用户并加入随机抖动。" : "定时模式：每隔 Interval 小时对全量用户触发一次抓取。";
+    }
+
+    function renderStatus(status, usersCount) {
+      const mode = status.mode || "interval";
+      const dot = document.getElementById("runStateDot");
+      const text = document.getElementById("runStateText");
+      
+      if (status.is_running) {
+        dot.classList.add("running"); text.textContent = "运行中";
+        document.getElementById("btnStart").style.display = "none"; document.getElementById("btnStop").style.display = "inline-flex";
+        document.getElementById("metric-health").textContent = "正在后台轮询";
+        document.getElementById("metric-health").style.color = "var(--success)";
+      } else {
+        dot.classList.remove("running"); text.textContent = "已停止";
+        document.getElementById("btnStart").style.display = "inline-flex"; document.getElementById("btnStop").style.display = "none";
+        document.getElementById("metric-health").textContent = "服务已暂停";
+        document.getElementById("metric-health").style.color = "var(--text-muted)";
+      }
+
+      document.getElementById("metric-mode-name").textContent = mode === "coverage" ? "Coverage" : "Interval";
+      document.getElementById("metric-mode-desc").textContent = mode === "coverage" ? `${Number(status.coverage_hours || 0)}h/覆盖` : `${Number(status.interval_hours || 0)}h/间隔`;
+      
+      document.getElementById("metric-users").textContent = String(usersCount);
+      document.getElementById("metric-downloads").textContent = String((status.last_run_result || {}).downloaded_items || 0);
+
+      if (status.mode) document.getElementById("monitorMode").value = status.mode;
+      if (status.interval_hours != null) document.getElementById("intervalHours").value = String(status.interval_hours);
+      if (status.coverage_hours != null) document.getElementById("coverageHours").value = String(status.coverage_hours);
+      onModeChanged();
+    }
+
+    function getHistorySync(user) {
+      return user && typeof user.history_sync === "object" && user.history_sync ? user.history_sync : {};
+    }
+
+    function formatHistorySync(historySync) {
+      const status = String(historySync.status || "idle").trim();
+      const labelMap = {
+        pending: "待回填",
+        running: "回填中",
+        paused: "已暂停",
+        completed: "已完成",
+        failed: "部分失败",
+        idle: "未启动",
+      };
+      const label = labelMap[status] || status || "未启动";
+      const pages = Number(historySync.processed_pages || 0);
+      const downloaded = Number(historySync.downloaded_items || 0);
+      return `历史: ${label} · 页数 ${pages} · 已补 ${downloaded}`;
+    }
+
+    function isHistorySyncActive(historySync) {
+      const status = String((historySync || {}).status || "").trim();
+      return ["pending", "running", "failed"].includes(status);
+    }
+
+    function renderUsers(users) {
+      cachedUsers = Array.isArray(users) ? users : [];
+      const filteredUsers = filterUsers(cachedUsers);
+      const root = document.getElementById("users");
+      const toggleBtn = document.getElementById("toggleAllUsersBtn");
+      const isSearching = Boolean(getUserSearchKeyword());
+      const totalUsers = cachedUsers.length;
+      const matchedUsers = filteredUsers.length;
+
+      document.getElementById("userCountText").textContent = isSearching
+        ? `(${matchedUsers}/${totalUsers})`
+        : `(${totalUsers})`;
+
+      if (!matchedUsers) {
+        root.innerHTML = `<div style="padding: 40px; text-align: center; color: var(--text-muted);">${buildUserEmptyState(totalUsers, matchedUsers)}</div>`;
+        if (toggleBtn) toggleBtn.style.display = 'none';
+        return;
+      }
+
+      const MAX_PREVIEW = 5;
+      const needsToggle = !isSearching && matchedUsers > MAX_PREVIEW;
+
+      if (toggleBtn) {
+        if (needsToggle) {
+          toggleBtn.style.display = 'inline-flex';
+          toggleBtn.innerHTML = isGlobalUserListExpanded
+            ? '收起列表'
+            : `展开全部 ${matchedUsers} 个`;
+        } else {
+          toggleBtn.style.display = 'none';
+        }
+      }
+
+      const displayUsers = (isSearching || isGlobalUserListExpanded || !needsToggle)
+        ? filteredUsers
+        : filteredUsers.slice(0, MAX_PREVIEW);
+
+      root.innerHTML = displayUsers.map(user => {
+        const paused = !user.enabled;
+        const historySync = getHistorySync(user);
+        const historyAction = (() => {
+          if (String(historySync.status || "") === "paused") {
+            return `<button class="btn btn-secondary btn-sm" onclick="resumeHistoryBackfill('${user.id}')" title="继续历史回填">继续回填</button>`;
+          }
+          if (isHistorySyncActive(historySync)) {
+            return `<button class="btn btn-secondary btn-sm" onclick="pauseHistoryBackfill('${user.id}')" title="暂停历史回填">暂停回填</button>`;
+          }
+          const label = String(historySync.status || "") === "completed" ? "重扫历史" : "补历史";
+          return `<button class="btn btn-secondary btn-sm" onclick="startHistoryBackfill('${user.id}')" title="启动历史回填">${label}</button>`;
+        })();
+        const displayName = escapeHtml(user.nickname || user.sec_user_id || "-");
+        const avatarHtml = renderUserAvatar(user);
+        const errorHtml = user.last_error ? `<div style="color: var(--danger); font-size: 12px; margin-top: 4px;">异常: ${escapeHtml(user.last_error)}</div>` : "";
+        
+        return `
+          <div class="user-row">
+            <div class="user-info">
+              ${avatarHtml}
+              <div class="user-details">
+                <div class="user-name">
+                  <div class="status-dot ${paused ? '' : 'running'}" style="background: ${paused ? 'var(--text-lighter)' : 'var(--success)'}; box-shadow: none;"></div>
+                  ${displayName}
+                </div>
+                <div class="user-meta">
+                  <span class="user-meta-item">已下载: <strong>${user.downloaded_count || 0}</strong></span>
+                  <span class="user-meta-item">上次检查: ${formatTime(user.last_checked_at, '未检查')}</span>
+                  <span class="user-meta-item">${escapeHtml(formatHistorySync(historySync))}</span>
+                </div>
+                ${errorHtml}
+              </div>
+            </div>
+            
+            <div class="user-actions">
+              <button class="btn btn-secondary btn-sm" onclick="runUserOnce('${user.id}')" title="单独检查">${Icons.bolt} 检查</button>
+              ${historyAction}
+              <button class="btn btn-secondary btn-sm" onclick="runHistoryBackfillOnce('${user.id}')" title="手动补一页">补一页</button>
+              <button class="btn btn-secondary btn-sm" onclick="toggleUser('${user.id}', ${paused})" title="${paused ? '启用' : '暂停'}">
+                ${paused ? Icons.play + ' 启用' : Icons.pause + ' 暂停'}
+              </button>
+              <button class="btn btn-secondary btn-sm" style="color: var(--danger);" onclick="deleteUser('${user.id}')" title="删除">
+                ${Icons.trash}
+              </button>
+            </div>
+          </div>
+        `;
+      }).join("");
+    }
+
+    function renderGlobalRecords(users) {
+      const allRecords = [];
+      for (const user of users) {
+        for (const record of (Array.isArray(user.download_records) ? user.download_records : [])) {
+          allRecords.push({ ...record, user_nickname: user.nickname || user.sec_user_id || "-" });
+        }
+      }
+      allRecords.sort((a, b) => parseTimeToMillis(b.downloaded_at) - parseTimeToMillis(a.downloaded_at));
+      
+      const topRecords = allRecords.slice(0, 50);
+      document.getElementById("recordsTotal").textContent = `${topRecords.length} 条`;
+
+      const root = document.getElementById("globalRecords");
+      if (!topRecords.length) { root.innerHTML = '<div style="padding: 40px; text-align: center; color: var(--text-muted);">暂无下载记录</div>'; return; }
+
+      root.innerHTML = topRecords.map(record => {
+        const isVideo = record.media_type === "video";
+        let metaText = isVideo ? "视频" : "图文";
+        if (!isVideo && record.image_count) metaText += ` (${record.image_count}张)`;
+        return `
+          <div class="feed-item">
+            <div class="feed-icon ${isVideo ? 'video' : 'photo'}">${isVideo ? Icons.video : Icons.photo}</div>
+            <div class="feed-content">
+              <div class="feed-header"><span class="feed-user">${record.user_nickname}</span><span class="feed-time">${formatTime(record.downloaded_at)}</span></div>
+              <div class="feed-desc">[${metaText}] 新增 ${Number(record.downloaded_file_count || 0)} 个文件</div>
+            </div>
+          </div>
+        `;
+      }).join("");
+    }
+
+    async function refreshAll() {
+      try {
+        const [status, usersResp] = await Promise.all([api("/status"), api("/users")]);
+        renderStatus(status, (usersResp.users || []).length);
+        renderGlobalRecords(usersResp.users || []);
+        renderUsers(usersResp.users || []);
+      } catch (err) { showToast(err.message, 'error'); }
+    }
+
+    async function toggleUser(userId, enabled) {
+      try { await api(`/users/${userId}`, { method: "PATCH", body: JSON.stringify({ enabled }) }); showToast(enabled ? "已启用" : "已暂停"); await refreshAll(); } catch (err) { showToast(err.message, 'error'); }
+    }
+
+    async function deleteUser(userId) {
+      if (!confirm("确定要删除该用户的监控任务及相关数据吗？")) return;
+      try { await api(`/users/${userId}`, { method: "DELETE" }); showToast("用户已删除"); await refreshAll(); } catch (err) { showToast(err.message, 'error'); }
+    }
+
+    async function runUserOnce(userId) {
+      try { showToast("已下发检查任务..."); const res = await api(`/users/${userId}/run_once`, { method: "POST" }); showToast(`下载了 ${res.downloaded_items || 0} 个作品`); await refreshAll(); } catch (err) { showToast(err.message, 'error'); }
+    }
+
+    async function startHistoryBackfill(userId) {
+      try { await api(`/users/${userId}/backfill/start`, { method: "POST" }); showToast("已启动历史回填"); await refreshAll(); } catch (err) { showToast(err.message, 'error'); }
+    }
+
+    async function pauseHistoryBackfill(userId) {
+      try { await api(`/users/${userId}/backfill/pause`, { method: "POST" }); showToast("已暂停历史回填"); await refreshAll(); } catch (err) { showToast(err.message, 'error'); }
+    }
+
+    async function resumeHistoryBackfill(userId) {
+      try { await api(`/users/${userId}/backfill/resume`, { method: "POST" }); showToast("已恢复历史回填"); await refreshAll(); } catch (err) { showToast(err.message, 'error'); }
+    }
+
+    async function runHistoryBackfillOnce(userId) {
+      try { const res = await api(`/users/${userId}/backfill/run_once`, { method: "POST" }); showToast(`历史回填新增 ${res.downloaded_items || 0} 个作品`); await refreshAll(); } catch (err) { showToast(err.message, 'error'); }
+    }
+
+    async function startMonitor() {
+      try {
+        await api("/start", { method: "POST", body: JSON.stringify({ mode: document.getElementById("monitorMode").value, interval_hours: Number(document.getElementById("intervalHours").value || "0.05"), coverage_hours: Number(document.getElementById("coverageHours").value || "24") }) });
+        showToast("调度已更新 / 已启动"); await refreshAll();
+      } catch (err) { showToast(err.message, 'error'); }
+    }
+    const applySettings = startMonitor;
+
+    async function stopMonitor() {
+      try { await api("/stop", { method: "POST" }); showToast("已停止"); await refreshAll(); } catch (err) { showToast(err.message, 'error'); }
+    }
+
+    async function runOnce() {
+      try { showToast("开始全局检查..."); const res = await api("/run_once", { method: "POST" }); showToast(`检查 ${res.checked_users || 0} 人, 下载 ${res.downloaded_items || 0} 个作品`); await refreshAll(); } catch (err) { showToast(err.message, 'error'); }
+    }
+
+    onModeChanged(); refreshAll(); setInterval(refreshAll, 15000);
+  </script>
+</body>
+</html>
