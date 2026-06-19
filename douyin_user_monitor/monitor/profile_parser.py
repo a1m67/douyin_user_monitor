@@ -118,15 +118,52 @@ def _detect_deleted_reason(profile_data: Dict[str, Any], status_texts: list[str]
     return None
 
 
+_BANNED_KEYWORDS = frozenset({
+    "账号已封禁",
+    "该账号已封禁",
+    "账号封禁",
+    "已封禁",
+    "该账号因违规已封禁",
+    "账号因违规被封禁",
+    "因违规被封禁",
+    "该账号已被封禁",
+    "账号已被封禁",
+})
+
+
 def _detect_banned_reason(profile_data: Dict[str, Any]) -> str | None:
+    # 1. Check title (existing behavior, exact match)
     titles = (
         _read_nested(profile_data, ("user", "special_state_info", "title")),
         _read_nested(profile_data, ("special_state_info", "title")),
     )
     for title in titles:
         text = sanitize_text(title, "")
-        if text in {"账号已封禁", "该账号已封禁", "账号封禁", "已封禁"}:
+        if text in _BANNED_KEYWORDS:
             return text
+
+    # 2. Check status_msg (whitelist exact match)
+    status_msg_paths = (
+        ("user", "status_msg"),
+        ("status_msg",),
+    )
+    for path in status_msg_paths:
+        raw = _read_nested(profile_data, path)
+        text = sanitize_text(raw, "")
+        if text in _BANNED_KEYWORDS:
+            return text
+
+    # 3. Check content (whitelist exact match)
+    content_paths = (
+        ("user", "special_state_info", "content"),
+        ("special_state_info", "content"),
+    )
+    for path in content_paths:
+        raw = _read_nested(profile_data, path)
+        text = sanitize_text(raw, "")
+        if text in _BANNED_KEYWORDS:
+            return text
+
     return None
 
 

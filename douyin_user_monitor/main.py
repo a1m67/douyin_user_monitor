@@ -14,6 +14,11 @@ async def index() -> RedirectResponse:
     return RedirectResponse(url="/api/monitor/dashboard")
 
 
+@app.on_event("startup")
+async def startup_monitor() -> None:
+    await monitor_service.auto_resume()
+
+
 @app.on_event("shutdown")
 async def shutdown_monitor() -> None:
     await monitor_service.shutdown()

@@ -10,6 +10,9 @@ from douyin_user_monitor.monitor.history_sync import (
 )
 from douyin_user_monitor.monitor.notifier import MonitorNotifierProtocol
 from douyin_user_monitor.monitor.profile_parser import (
+    ACCOUNT_STATUS_BANNED,
+    ACCOUNT_STATUS_DELETED,
+    ACCOUNT_STATUS_NORMAL,
     UserProfileSnapshot,
     build_profile_snapshot_fields,
     extract_account_status,
@@ -65,13 +68,25 @@ class UserSyncService:
         await self._sync_user_with_summary(user, summary)
 
     async def _sync_user_with_summary(self, user: Dict[str, Any], summary: Dict[str, Any]) -> None:
+        old_status = str(user.get("account_status") or ACCOUNT_STATUS_NORMAL).strip()
+        old_nickname = str(user.get("nickname") or "").strip()
         try:
+            snapshot = await self.resolve_profile_snapshot(user["sec_user_id"])
             user.update(
                 build_profile_snapshot_fields(
-                    await self.resolve_profile_snapshot(user["sec_user_id"]),
+                    snapshot,
                     updated_at=utc_now(),
                 )
             )
+            # Preserve existing nickname when API returns empty (deleted/banned users)
+            # resolve_profile_snapshot falls back to sec_user_id[:12] when nickname is empty
+            if old_nickname and snapshot.nickname == user["sec_user_id"][:12]:
+                user["nickname"] = old_nickname
+            new_status = snapshot.account_status
+            await self._notify_if_status_changed(user, old_status, new_status, snapshot.account_status_reason)
+            # Auto-pause monitoring when account is deleted or banned
+            if old_status == ACCOUNT_STATUS_NORMAL and new_status in (ACCOUNT_STATUS_DELETED, ACCOUNT_STATUS_BANNED):
+                user["enabled"] = False
             count = await self._sync_user_latest(user)
             count += await self.sync_history_backfill_step(user)
             summary["downloaded_items"] += count
@@ -85,7 +100,28 @@ class UserSyncService:
             user["last_checked_at"] = utc_now()
             user["updated_at"] = utc_now()
 
+    async def _notify_if_status_changed(
+        self,
+        user: Dict[str, Any],
+        old_status: str,
+        new_status: str,
+        reason: str | None,
+    ) -> None:
+        if old_status == ACCOUNT_STATUS_NORMAL and new_status in (ACCOUNT_STATUS_DELETED, ACCOUNT_STATUS_BANNED):
+            try:
+                await self._notifier.notify_account_status_changed(
+                    user_nickname=str(user.get("nickname") or ""),
+                    old_status=old_status,
+                    new_status=new_status,
+                    reason=reason,
+                )
+            except Exception:
+                pass
+
     async def _sync_user_latest(self, user: Dict[str, Any]) -> int:
+        account_status = str(user.get("account_status") or ACCOUNT_STATUS_NORMAL).strip()
+        if account_status in (ACCOUNT_STATUS_DELETED, ACCOUNT_STATUS_BANNED):
+            return 0
         aweme_list = (await self._fetch_posts_page(
             user["sec_user_id"],
             max_cursor=0,

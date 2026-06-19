@@ -32,6 +32,22 @@ class TelegramNotifier(MonitorNotifierProtocol):
         message = self._build_completed_message(user_nickname=user_nickname, record=record)
         await self._send_message(message)
 
+    async def notify_account_status_changed(
+        self,
+        *,
+        user_nickname: str,
+        old_status: str,
+        new_status: str,
+        reason: str | None,
+    ) -> None:
+        message = self._build_status_changed_message(
+            user_nickname=user_nickname,
+            old_status=old_status,
+            new_status=new_status,
+            reason=reason,
+        )
+        await self._send_message(message)
+
     async def aclose(self) -> None:
         await self._client.aclose()
 
@@ -87,6 +103,33 @@ class TelegramNotifier(MonitorNotifierProtocol):
             f"💾 大小: {size_text}",
             f"⏰ 时间: {downloaded_at}",
         ]
+        return "\n".join(lines)
+
+    _STATUS_LABELS = {
+        "normal": "正常",
+        "deleted": "已注销",
+        "banned": "已封禁",
+    }
+
+    def _build_status_changed_message(
+        self,
+        *,
+        user_nickname: str,
+        old_status: str,
+        new_status: str,
+        reason: str | None,
+    ) -> str:
+        old_label = self._STATUS_LABELS.get(old_status, old_status)
+        new_label = self._STATUS_LABELS.get(new_status, new_status)
+        icon = "🚫" if new_status == "banned" else "⚠️"
+        lines = [
+            f"{icon} 账号状态变更",
+            "",
+            f"👤 用户: {user_nickname}",
+            f"📊 状态: {old_label} → {new_label}",
+        ]
+        if reason:
+            lines.append(f"📝 原因: {reason}")
         return "\n".join(lines)
 
     def _extract_image_count(self, aweme_detail: Dict[str, Any]) -> int:

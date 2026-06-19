@@ -78,6 +78,7 @@ class MonitorService:
     def _reset_runtime_state(self) -> None:
         state = self._storage.load_state()
         monitoring = state["monitoring"]
+        self._was_running = bool(monitoring.get("is_running", False))
         monitoring["is_running"] = False
         self._apply_runtime_from_monitoring(monitoring)
         monitoring["updated_at"] = utc_now()
@@ -86,6 +87,15 @@ class MonitorService:
         monitoring.pop("random_max_seconds", None)
         self._drop_legacy_scan_keys(monitoring)
         self._storage.save_state(state)
+
+    async def auto_resume(self) -> None:
+        """Resume monitoring loop if it was running before restart."""
+        if self._was_running:
+            await self.start_monitoring(
+                mode=self._mode,
+                interval_hours=self._interval_hours,
+                coverage_hours=self._coverage_hours,
+            )
 
     def _apply_runtime_from_monitoring(self, monitoring: Dict[str, Any]) -> None:
         self._mode = str(monitoring.get("mode", DEFAULT_MODE))
@@ -207,8 +217,15 @@ class MonitorService:
     def _merge_profile_snapshot(self, user: Dict[str, Any], profile: Any) -> bool:
         now = utc_now()
         changed = False
+        # Preserve existing nickname when profile returns sec_user_id[:12] fallback
+        # (happens for deleted/banned users whose API returns empty nickname)
+        nickname = profile.nickname
+        old_nickname = str(user.get("nickname") or "").strip()
+        sec_user_id = str(user.get("sec_user_id") or "")
+        if old_nickname and nickname == sec_user_id[:12]:
+            nickname = old_nickname
         fields = {
-            "nickname": profile.nickname,
+            "nickname": nickname,
             "avatar_url": profile.avatar_url,
             "account_status": profile.account_status,
             "account_status_label": profile.account_status_label,

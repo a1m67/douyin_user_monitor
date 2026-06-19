@@ -45,6 +45,42 @@ NON_BANNED_PROFILE = {
     },
 }
 
+BANNED_VIA_STATUS_MSG = {
+    "status_code": 0,
+    "status_msg": "该账号因违规已封禁",
+    "user": {
+        "nickname": "违规账号",
+        "special_state_info": {
+            "title": "",
+            "content": "",
+        },
+    },
+}
+
+BANNED_VIA_CONTENT = {
+    "status_code": 0,
+    "status_msg": "",
+    "user": {
+        "nickname": "内容封禁",
+        "special_state_info": {
+            "title": "",
+            "content": "该账号已被封禁",
+        },
+    },
+}
+
+NON_BANNED_STATUS_MSG_PROFILE = {
+    "status_code": 0,
+    "status_msg": "封禁申诉入口已开放",
+    "user": {
+        "nickname": "申诉用户",
+        "special_state_info": {
+            "title": "帮助中心",
+            "content": "如需申诉封禁，请点击此处",
+        },
+    },
+}
+
 
 class DeletedAccountCrawler:
     def __init__(self):
@@ -77,6 +113,86 @@ class ErrorProfileCrawler(DeletedAccountCrawler):
         raise RuntimeError("上游 400")
 
 
+class BannedAccountCrawler:
+    def __init__(self):
+        self.profile_calls = 0
+        self.fetch_posts_calls = 0
+
+    async def handler_user_profile(self, sec_user_id: str):
+        _ = sec_user_id
+        self.profile_calls += 1
+        return BANNED_PROFILE
+
+    async def get_sec_user_id(self, url: str) -> str:
+        return url
+
+    async def fetch_user_post_videos(self, sec_user_id: str, max_cursor: int, count: int):
+        _ = sec_user_id, max_cursor, count
+        self.fetch_posts_calls += 1
+        return {"aweme_list": None, "has_more": 0, "max_cursor": max_cursor}
+
+    async def fetch_one_video(self, aweme_id: str):
+        _ = aweme_id
+        return {}
+
+    async def get_douyin_headers(self):
+        return {"headers": {}}
+
+
+class TrackingDeletedCrawler:
+    """Tracks whether fetch_user_post_videos is called."""
+    def __init__(self):
+        self.profile_calls = 0
+        self.fetch_posts_calls = 0
+
+    async def handler_user_profile(self, sec_user_id: str):
+        _ = sec_user_id
+        self.profile_calls += 1
+        return DELETED_PROFILE
+
+    async def get_sec_user_id(self, url: str) -> str:
+        return url
+
+    async def fetch_user_post_videos(self, sec_user_id: str, max_cursor: int, count: int):
+        _ = sec_user_id, max_cursor, count
+        self.fetch_posts_calls += 1
+        return {"aweme_list": None, "has_more": 0, "max_cursor": max_cursor}
+
+    async def fetch_one_video(self, aweme_id: str):
+        _ = aweme_id
+        return {}
+
+    async def get_douyin_headers(self):
+        return {"headers": {}}
+
+
+class StatusTrackingNotifier:
+    """Tracks status change notifications."""
+    def __init__(self):
+        self.status_changes: list[dict] = []
+
+    async def notify_new_aweme_detected(self, *, user_nickname: str, aweme_detail):
+        pass
+
+    async def notify_download_completed(self, *, user_nickname: str, record):
+        pass
+
+    async def notify_account_status_changed(
+        self,
+        *,
+        user_nickname: str,
+        old_status: str,
+        new_status: str,
+        reason: str | None,
+    ) -> None:
+        self.status_changes.append({
+            "user_nickname": user_nickname,
+            "old_status": old_status,
+            "new_status": new_status,
+            "reason": reason,
+        })
+
+
 class AccountStatusParsingTests(unittest.TestCase):
     def test_extract_account_status_detects_deleted_before_banned(self):
         status = extract_account_status(DELETED_PROFILE)
@@ -94,6 +210,27 @@ class AccountStatusParsingTests(unittest.TestCase):
 
     def test_extract_account_status_does_not_guess_banned_from_generic_text(self):
         status = extract_account_status(NON_BANNED_PROFILE)
+
+        self.assertEqual(status["account_status"], "normal")
+        self.assertEqual(status["account_status_label"], "正常")
+        self.assertIsNone(status["account_status_reason"])
+
+    def test_extract_account_status_detects_banned_via_status_msg(self):
+        status = extract_account_status(BANNED_VIA_STATUS_MSG)
+
+        self.assertEqual(status["account_status"], "banned")
+        self.assertEqual(status["account_status_label"], "已封禁")
+        self.assertIn("违规已封禁", str(status["account_status_reason"]))
+
+    def test_extract_account_status_detects_banned_via_content(self):
+        status = extract_account_status(BANNED_VIA_CONTENT)
+
+        self.assertEqual(status["account_status"], "banned")
+        self.assertEqual(status["account_status_label"], "已封禁")
+        self.assertIn("已被封禁", str(status["account_status_reason"]))
+
+    def test_extract_account_status_does_not_guess_banned_from_status_msg(self):
+        status = extract_account_status(NON_BANNED_STATUS_MSG_PROFILE)
 
         self.assertEqual(status["account_status"], "normal")
         self.assertEqual(status["account_status_label"], "正常")
@@ -131,6 +268,198 @@ class UserSyncAccountStatusTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(user["account_status_label"], "已注销")
         self.assertIn("账号已经注销", str(user["account_status_reason"]))
         self.assertIsNotNone(user["account_status_updated_at"])
+
+
+class UserSyncSkipFetchTests(unittest.IsolatedAsyncioTestCase):
+    async def test_sync_skips_post_fetch_for_deleted_user(self):
+        crawler = TrackingDeletedCrawler()
+        service = UserSyncService(
+            crawler=crawler,
+            downloader=None,
+            notifier=NoopMonitorNotifier(),
+        )
+        user = {
+            "id": "user-del",
+            "sec_user_id": "sec-del",
+            "nickname": "已注销",
+            "avatar_url": None,
+            "account_status": "deleted",
+            "account_status_label": "已注销",
+            "account_status_reason": "账号已注销",
+            "account_status_updated_at": "2026-01-01T00:00:00Z",
+            "downloaded_count": 0,
+            "downloaded_aweme_ids": [],
+            "download_records": [],
+            "last_aweme_id": None,
+            "history_sync": {"status": "idle", "has_more": False},
+        }
+        summary = {"checked_users": 1, "downloaded_items": 0, "errors": []}
+
+        await service.sync_one_user(user, summary)
+
+        self.assertEqual(crawler.fetch_posts_calls, 0)
+        self.assertEqual(summary["errors"], [])
+
+    async def test_sync_skips_post_fetch_for_banned_user(self):
+        crawler = BannedAccountCrawler()
+        service = UserSyncService(
+            crawler=crawler,
+            downloader=None,
+            notifier=NoopMonitorNotifier(),
+        )
+        user = {
+            "id": "user-ban",
+            "sec_user_id": "sec-ban",
+            "nickname": "已封禁",
+            "avatar_url": None,
+            "account_status": "normal",
+            "account_status_label": "正常",
+            "account_status_reason": None,
+            "account_status_updated_at": None,
+            "enabled": True,
+            "downloaded_count": 0,
+            "downloaded_aweme_ids": [],
+            "download_records": [],
+            "last_aweme_id": None,
+            "history_sync": {"status": "idle", "has_more": False},
+        }
+        summary = {"checked_users": 1, "downloaded_items": 0, "errors": []}
+
+        await service.sync_one_user(user, summary)
+
+        # After sync, account_status becomes "banned" from profile snapshot,
+        # so _sync_user_latest should skip post fetching
+        self.assertEqual(user["account_status"], "banned")
+        self.assertEqual(crawler.fetch_posts_calls, 0)
+        # Auto-pause monitoring
+        self.assertFalse(user["enabled"])
+
+
+class UserSyncNicknamePreservationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_preserves_existing_nickname_when_api_returns_empty(self):
+        """Deleted/banned users should keep their original nickname, not sec_user_id[:12]."""
+        service = UserSyncService(
+            crawler=DeletedAccountCrawler(),
+            downloader=None,
+            notifier=NoopMonitorNotifier(),
+        )
+        user = {
+            "id": "user-1",
+            "sec_user_id": "sec-user-12345",
+            "nickname": "原昵称",
+            "avatar_url": None,
+            "account_status": "normal",
+            "account_status_label": "正常",
+            "account_status_reason": None,
+            "account_status_updated_at": None,
+            "downloaded_count": 0,
+            "downloaded_aweme_ids": [],
+            "download_records": [],
+            "last_aweme_id": None,
+            "history_sync": {"status": "idle", "has_more": False},
+        }
+        summary = {"checked_users": 1, "downloaded_items": 0, "errors": []}
+
+        await service.sync_one_user(user, summary)
+
+        self.assertEqual(user["nickname"], "原昵称")
+        self.assertEqual(user["account_status"], "deleted")
+
+    async def test_uses_fallback_nickname_when_no_existing_nickname(self):
+        """New users added as deleted should still get sec_user_id[:12] as nickname."""
+        service = UserSyncService(
+            crawler=DeletedAccountCrawler(),
+            downloader=None,
+            notifier=NoopMonitorNotifier(),
+        )
+        user = {
+            "id": "user-2",
+            "sec_user_id": "sec-user-12345",
+            "nickname": "",
+            "avatar_url": None,
+            "account_status": "normal",
+            "account_status_label": "正常",
+            "account_status_reason": None,
+            "account_status_updated_at": None,
+            "downloaded_count": 0,
+            "downloaded_aweme_ids": [],
+            "download_records": [],
+            "last_aweme_id": None,
+            "history_sync": {"status": "idle", "has_more": False},
+        }
+        summary = {"checked_users": 1, "downloaded_items": 0, "errors": []}
+
+        await service.sync_one_user(user, summary)
+
+        self.assertEqual(user["nickname"], "sec-user-123")
+        self.assertEqual(user["account_status"], "deleted")
+
+
+class UserSyncNotificationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_notifies_on_normal_to_deleted_transition(self):
+        notifier = StatusTrackingNotifier()
+        service = UserSyncService(
+            crawler=DeletedAccountCrawler(),
+            downloader=None,
+            notifier=notifier,
+        )
+        user = {
+            "id": "user-1",
+            "sec_user_id": "sec-1",
+            "nickname": "测试用户",
+            "avatar_url": None,
+            "account_status": "normal",
+            "account_status_label": "正常",
+            "account_status_reason": None,
+            "account_status_updated_at": None,
+            "enabled": True,
+            "downloaded_count": 0,
+            "downloaded_aweme_ids": [],
+            "download_records": [],
+            "last_aweme_id": None,
+            "history_sync": {"status": "idle", "has_more": False},
+        }
+        summary = {"checked_users": 1, "downloaded_items": 0, "errors": []}
+
+        await service.sync_one_user(user, summary)
+
+        self.assertEqual(len(notifier.status_changes), 1)
+        change = notifier.status_changes[0]
+        # Nickname preserved from existing user data (not overwritten by sec_user_id[:12])
+        self.assertEqual(change["user_nickname"], "测试用户")
+        self.assertEqual(change["old_status"], "normal")
+        self.assertEqual(change["new_status"], "deleted")
+        self.assertIsNotNone(change["reason"])
+        # Auto-pause monitoring on status change
+        self.assertFalse(user["enabled"])
+
+    async def test_no_notification_when_already_deleted(self):
+        notifier = StatusTrackingNotifier()
+        service = UserSyncService(
+            crawler=DeletedAccountCrawler(),
+            downloader=None,
+            notifier=notifier,
+        )
+        user = {
+            "id": "user-1",
+            "sec_user_id": "sec-1",
+            "nickname": "已注销用户",
+            "avatar_url": None,
+            "account_status": "deleted",
+            "account_status_label": "已注销",
+            "account_status_reason": "已注销",
+            "account_status_updated_at": "2026-01-01T00:00:00Z",
+            "downloaded_count": 0,
+            "downloaded_aweme_ids": [],
+            "download_records": [],
+            "last_aweme_id": None,
+            "history_sync": {"status": "idle", "has_more": False},
+        }
+        summary = {"checked_users": 1, "downloaded_items": 0, "errors": []}
+
+        await service.sync_one_user(user, summary)
+
+        self.assertEqual(len(notifier.status_changes), 0)
 
 
 class MonitorServiceAccountHydrationTests(unittest.IsolatedAsyncioTestCase):
