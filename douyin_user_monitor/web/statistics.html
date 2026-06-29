@@ -1060,7 +1060,8 @@
   <script>
     const Icons = {
       checkCircle: `<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75 11.25 15 15 9.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" /></svg>`,
-      exclamation: `<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3Z" /></svg>`
+      exclamation: `<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3Z" /></svg>`,
+      clipboard: `<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M15.666 3.888A2.25 2.25 0 0 0 13.5 2.25h-3c-1.03 0-1.9.693-2.166 1.638m7.332 0c.055.194.084.4.084.612v0a.75.75 0 0 1-.75.75H9.75a.75.75 0 0 1-.75-.75v0c0-.212.03-.418.084-.612m7.332 0c.646.049 1.288.11 1.927.184 1.1.128 1.907 1.077 1.907 2.185V19.5a2.25 2.25 0 0 1-2.25 2.25H6.75A2.25 2.25 0 0 1 4.5 19.5V6.257c0-1.108.806-2.057 1.907-2.185a48.208 48.208 0 0 1 1.927-.184" /></svg>`
     };
 
     const API_BASE = "/api/monitor";
@@ -1210,6 +1211,28 @@
       return `<button class="btn btn-secondary btn-sm" onclick="toggleUser('${user.id}', ${paused})">${label}</button>`;
     }
 
+    function copyUserProfile(profileUrl, nickname) {
+      if (!profileUrl) { showToast('该用户没有主页链接', 'error'); return; }
+      let textToCopy = profileUrl;
+      if (!profileUrl.includes('v.douyin.com')) {
+        textToCopy = `打开抖音搜索，查看TA的更多作品 ${profileUrl}`;
+      }
+      navigator.clipboard.writeText(textToCopy).then(() => {
+        showToast(`已复制 ${nickname} 的抖音分享`);
+      }).catch(() => {
+        const ta = document.createElement('textarea');
+        ta.value = textToCopy; document.body.appendChild(ta); ta.select();
+        document.execCommand('copy'); document.body.removeChild(ta);
+        showToast(`已复制 ${nickname} 的抖音分享`);
+      });
+    }
+
+    function renderCopyUserButton(user) {
+      const profileUrl = (user.profile_url || '').replace(/'/g, "\\'");
+      const nickname = (user.nickname || user.sec_user_id || '').replace(/'/g, "\\'");
+      return `<button class="btn btn-secondary btn-sm" onclick="copyUserProfile('${profileUrl}', '${nickname}')" title="复制主页链接">${Icons.clipboard} 复制</button>`;
+    }
+
     function renderAccountReason(user) {
       const reason = String(user.account_status_reason || "").trim();
       if (!reason) return "";
@@ -1342,6 +1365,7 @@
           <div class="metric-stack actions">
             <strong>${escapeHtml(formatTime(user.last_publish_at))}</strong>
             <span>${user.activity_known ? `最近发布 ${escapeHtml(formatDays(user.days_since_last_publish))}` : "暂无发布时间记录"}</span>
+            ${renderCopyUserButton(user)}
             ${renderToggleUserButton(user)}
           </div>
         </div>
@@ -1370,6 +1394,7 @@
           </div>
           <div class="user-list-side">
             <div class="pill ${pillClass}">${pillFormatter(user)}</div>
+            ${renderCopyUserButton(user)}
             ${renderToggleUserButton(user)}
           </div>
         </div>
@@ -1398,6 +1423,7 @@
           </div>
           <div class="user-list-side">
             <div class="pill warning">待补发布时间</div>
+            ${renderCopyUserButton(user)}
             ${renderToggleUserButton(user)}
           </div>
         </div>
@@ -1427,6 +1453,7 @@
           </div>
           <div class="user-list-side">
             <div class="pill ${getAccountStatusPillClass(user)}">${getAccountStatusLabel(user)}</div>
+            ${renderCopyUserButton(user)}
             ${renderToggleUserButton(user)}
           </div>
         </div>

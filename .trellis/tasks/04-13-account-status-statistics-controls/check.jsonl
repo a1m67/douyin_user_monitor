@@ -1,6 +1,0 @@
-{"file": ".agents/skills/finish-work/SKILL.md", "reason": "Finish work checklist"}
-{"file": ".agents/skills/check-backend/SKILL.md", "reason": "Backend check spec"}
-{"file": ".agents/skills/check-frontend/SKILL.md", "reason": "Frontend check spec"}
-{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Verify data survives storage -> service -> API -> statistics dashboard"}
-{"file": "douyin_user_monitor/monitor/statistics.py", "reason": "Validate summary/list additions and backward compatibility"}
-{"file": "douyin_user_monitor/web/statistics.html", "reason": "Verify enable/disable controls and abnormal-user list rendering"}

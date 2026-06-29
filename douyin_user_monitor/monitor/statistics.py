@@ -90,6 +90,7 @@ def _build_user_row(user: Dict[str, Any], now: datetime) -> Dict[str, Any]:
         "id": str(user.get("id") or "").strip(),
         "nickname": str(user.get("nickname") or user.get("sec_user_id") or "-").strip(),
         "sec_user_id": str(user.get("sec_user_id") or "").strip(),
+        "profile_url": str(user.get("profile_url") or "").strip() or None,
         "avatar_url": str(user.get("avatar_url") or "").strip() or None,
         "enabled": bool(user.get("enabled", True)),
         "account_status": str(user.get("account_status") or ACCOUNT_STATUS_NORMAL).strip() or ACCOUNT_STATUS_NORMAL,
