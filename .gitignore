@@ -13,3 +13,8 @@ logs/
 .claude/
 .codex/
 .trellis/
+
+# Runtime state and local-only helpers
+runtime/
+=4.10
+ig_login.py

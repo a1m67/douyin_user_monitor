@@ -1,0 +1,13 @@
+[Unit]
+Description=Douyin User Monitor OpenList mover
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/root/douyin_user_monitor
+ExecStartPre=/usr/bin/mkdir -p /root/douyin_user_monitor/logs
+ExecStart=/root/douyin_user_monitor/scripts/openlist-auto-move-mp4.sh run --config /root/douyin_user_monitor/scripts/openlist-auto-move-douyin-monitor.conf
+StandardOutput=append:/root/douyin_user_monitor/logs/openlist-auto-move.log
+StandardError=append:/root/douyin_user_monitor/logs/openlist-auto-move.log
+

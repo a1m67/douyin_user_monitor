@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>抖音用户监控台 | Douyin Monitor</title>
+  <title>用户监控台 | Monitor</title>
   <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
 
@@ -395,7 +395,11 @@
       <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
         <path stroke-linecap="round" stroke-linejoin="round" d="M14.25 9.75 16.5 12l-2.25 2.25m-4.5 0L7.5 12l2.25-2.25M6 20.25h12A2.25 2.25 0 0 0 20.25 18V6A2.25 2.25 0 0 0 18 3.75H6A2.25 2.25 0 0 0 3.75 6v12A2.25 2.25 0 0 0 6 20.25Z" />
       </svg>
-      Douyin Monitor
+      用户监控台
+    </div>
+    <div class="platform-tabs" style="display: flex; gap: 4px; padding: 12px 16px 0;">
+      <button class="platform-tab active" data-platform="douyin" onclick="switchPlatform('douyin')" style="flex:1; padding: 8px 12px; border: none; border-radius: var(--radius-sm); cursor: pointer; font-size: 13px; font-weight: 600; background: var(--primary); color: var(--text-inverse); transition: all 0.2s;">抖音</button>
+      <button class="platform-tab" data-platform="instagram" onclick="switchPlatform('instagram')" style="flex:1; padding: 8px 12px; border: none; border-radius: var(--radius-sm); cursor: pointer; font-size: 13px; font-weight: 600; background: var(--bg-sidebar-hover); color: var(--text-lighter); transition: all 0.2s;">Instagram</button>
     </div>
     <nav class="sidebar-nav">
       <div class="nav-label">Menu</div>
@@ -508,7 +512,7 @@
                   id="userSearchInput"
                   type="search"
                   class="input input-search"
-                  placeholder="搜索监控用户（昵称 / sec_user_id / 用户ID）"
+                  placeholder="搜索监控用户..."
                   oninput="handleUserSearch()"
                 />
                 <button id="toggleAllUsersBtn" class="btn-text" style="display: none;" onclick="toggleGlobalUserList()"></button>
@@ -555,7 +559,7 @@
     <div class="drawer-body">
       <section>
         <h3 class="section-title">任务调度策略</h3>
-        <div class="form-group">
+        <div class="form-group douyin-only">
           <label class="form-label">监控模式</label>
           <select id="monitorMode" class="input" onchange="onModeChanged()">
             <option value="interval">定时轮询 (Interval)</option>
@@ -567,7 +571,7 @@
             <label class="form-label">间隔小时 (Interval)</label>
             <input id="intervalHours" type="number" class="input" min="0.01" step="0.01" value="0.05" />
           </div>
-          <div class="form-group flex-1">
+          <div class="form-group flex-1 douyin-only">
             <label class="form-label">覆盖小时 (Coverage)</label>
             <input id="coverageHours" type="number" class="input" min="0.1" step="0.1" value="24" />
           </div>
@@ -652,7 +656,7 @@
     function filterUsers(users) {
       const keyword = getUserSearchKeyword();
       if (!keyword) return users;
-      return users.filter(user => [user.nickname, user.sec_user_id, user.id, user.profile_url]
+      return users.filter(user => [user.nickname, user.sec_user_id, user.id, user.profile_url, user.username, user.full_name]
         .some(value => String(value || "").toLowerCase().includes(keyword)));
     }
 
@@ -724,17 +728,22 @@
     }
 
     function renderUserAvatar(user) {
-      const initial = escapeHtml((user.nickname || user.sec_user_id || "?").charAt(0).toUpperCase());
+      const initial = escapeHtml((user.nickname || user.sec_user_id || user.username || "?").charAt(0).toUpperCase());
       const avatarUrl = String(user.avatar_url || "").trim();
       if (!avatarUrl) return `<div class="user-avatar">${initial}</div>`;
       const userId = encodeURIComponent(String(user.id || "").trim());
       if (!userId) return `<div class="user-avatar">${initial}</div>`;
       const version = encodeURIComponent(String(user.updated_at || avatarUrl));
-      const safeUrl = `${API_BASE}/users/${userId}/avatar?v=${version}`;
+      const safeUrl = `${API_BASE()}/users/${userId}/avatar?v=${version}`;
       return `<div class="user-avatar"><img src="${safeUrl}" alt="${initial}" loading="lazy" onerror="this.remove();this.parentElement.textContent=this.alt;" /></div>`;
     }
 
-    const API_BASE = "/api/monitor";
+    let currentPlatform = localStorage.getItem('monitor_platform') || "douyin";
+    const PLATFORM_CONFIG = {
+      douyin: { api: "/api/monitor", label: "抖音" },
+      instagram: { api: "/api/instagram", label: "Instagram" },
+    };
+    const API_BASE = () => PLATFORM_CONFIG[currentPlatform].api;
 
     function showToast(message, type = 'success') {
       const container = document.getElementById("toast-container");
@@ -747,10 +756,27 @@
     }
 
     async function api(path, options = {}) {
-      const res = await fetch(`${API_BASE}${path}`, { headers: { "Content-Type": "application/json" }, ...options });
+      const res = await fetch(`${API_BASE()}${path}`, { headers: { "Content-Type": "application/json" }, ...options });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || data.code !== 200) throw new Error(data?.detail?.message || data?.detail || data?.message || "请求失败");
       return data.data;
+    }
+
+    function switchPlatform(platform) {
+      currentPlatform = platform;
+      localStorage.setItem('monitor_platform', platform);
+      document.querySelectorAll('.platform-tab').forEach(btn => {
+        const isActive = btn.dataset.platform === platform;
+        btn.classList.toggle('active', isActive);
+        btn.style.background = isActive ? 'var(--primary)' : 'var(--bg-sidebar-hover)';
+        btn.style.color = isActive ? 'var(--text-inverse)' : 'var(--text-lighter)';
+      });
+      const cfg = PLATFORM_CONFIG[platform];
+      document.querySelector('.sidebar-header').lastChild.textContent = ` ${cfg.label} 监控台`;
+      // 隐藏/显示抖音专属功能（历史回填、调度模式）
+      const isDouyin = platform === 'douyin';
+      document.querySelectorAll('.douyin-only').forEach(el => el.style.display = isDouyin ? '' : 'none');
+      refreshAll();
     }
 
     function onModeChanged() {
@@ -763,7 +789,7 @@
       const mode = status.mode || "interval";
       const dot = document.getElementById("runStateDot");
       const text = document.getElementById("runStateText");
-      
+
       if (status.is_running) {
         dot.classList.add("running"); text.textContent = "运行中";
         document.getElementById("btnStart").style.display = "none"; document.getElementById("btnStop").style.display = "inline-flex";
@@ -776,16 +802,20 @@
         document.getElementById("metric-health").style.color = "var(--text-muted)";
       }
 
-      document.getElementById("metric-mode-name").textContent = mode === "coverage" ? "Coverage" : "Interval";
-      document.getElementById("metric-mode-desc").textContent = mode === "coverage" ? `${Number(status.coverage_hours || 0)}h/覆盖` : `${Number(status.interval_hours || 0)}h/间隔`;
-      
+      document.getElementById("metric-mode-name").textContent = currentPlatform === 'instagram' ? "Interval" : (mode === "coverage" ? "Coverage" : "Interval");
+      document.getElementById("metric-mode-desc").textContent = currentPlatform === 'instagram'
+        ? `${Number(status.interval_hours || 6)}h/间隔`
+        : (mode === "coverage" ? `${Number(status.coverage_hours || 0)}h/覆盖` : `${Number(status.interval_hours || 0)}h/间隔`);
+
       document.getElementById("metric-users").textContent = String(usersCount);
       document.getElementById("metric-downloads").textContent = String((status.last_run_result || {}).downloaded_items || 0);
 
-      if (status.mode) document.getElementById("monitorMode").value = status.mode;
-      if (status.interval_hours != null) document.getElementById("intervalHours").value = String(status.interval_hours);
-      if (status.coverage_hours != null) document.getElementById("coverageHours").value = String(status.coverage_hours);
-      onModeChanged();
+      if (currentPlatform !== 'instagram') {
+        if (status.mode) document.getElementById("monitorMode").value = status.mode;
+        if (status.interval_hours != null) document.getElementById("intervalHours").value = String(status.interval_hours);
+        if (status.coverage_hours != null) document.getElementById("coverageHours").value = String(status.coverage_hours);
+        onModeChanged();
+      }
     }
 
     function getHistorySync(user) {
@@ -853,7 +883,7 @@
       root.innerHTML = displayUsers.map(user => {
         const paused = !user.enabled;
         const historySync = getHistorySync(user);
-        const historyAction = (() => {
+        const historyAction = currentPlatform === 'douyin' ? (() => {
           if (String(historySync.status || "") === "paused") {
             return `<button class="btn btn-secondary btn-sm" onclick="resumeHistoryBackfill('${user.id}')" title="继续历史回填">继续回填</button>`;
           }
@@ -862,11 +892,18 @@
           }
           const label = String(historySync.status || "") === "completed" ? "重扫历史" : "补历史";
           return `<button class="btn btn-secondary btn-sm" onclick="startHistoryBackfill('${user.id}')" title="启动历史回填">${label}</button>`;
-        })();
-        const displayName = escapeHtml(user.nickname || user.sec_user_id || "-");
+        })() : '';
+        const isIg = currentPlatform === 'instagram';
+        const displayName = isIg
+          ? escapeHtml(user.username || "-")
+          : escapeHtml(user.nickname || user.sec_user_id || "-");
+        const subInfo = isIg
+          ? (user.full_name ? `<span style="color:var(--text-muted); font-size:12px;">${escapeHtml(user.full_name)}</span>` : '')
+          : '';
         const avatarHtml = renderUserAvatar(user);
         const errorHtml = user.last_error ? `<div style="color: var(--danger); font-size: 12px; margin-top: 4px;">异常: ${escapeHtml(user.last_error)}</div>` : "";
-        
+        const igMeta = isIg ? `<span class="user-meta-item">粉丝: <strong>${(user.follower_count || 0).toLocaleString()}</strong></span><span class="user-meta-item">帖子: <strong>${user.post_count || 0}</strong></span>` : '';
+
         return `
           <div class="user-row">
             <div class="user-info">
@@ -875,20 +912,22 @@
                 <div class="user-name">
                   <div class="status-dot ${paused ? '' : 'running'}" style="background: ${paused ? 'var(--text-lighter)' : 'var(--success)'}; box-shadow: none;"></div>
                   ${displayName}
+                  ${subInfo}
                 </div>
                 <div class="user-meta">
                   <span class="user-meta-item">已下载: <strong>${user.downloaded_count || 0}</strong></span>
                   <span class="user-meta-item">上次检查: ${formatTime(user.last_checked_at, '未检查')}</span>
-                  <span class="user-meta-item">${escapeHtml(formatHistorySync(historySync))}</span>
+                  ${igMeta}
+                  ${currentPlatform === 'douyin' ? `<span class="user-meta-item">${escapeHtml(formatHistorySync(historySync))}</span>` : ''}
                 </div>
                 ${errorHtml}
               </div>
             </div>
-            
+
             <div class="user-actions">
               <button class="btn btn-secondary btn-sm" onclick="runUserOnce('${user.id}')" title="单独检查">${Icons.bolt} 检查</button>
               ${historyAction}
-              <button class="btn btn-secondary btn-sm" onclick="copyUserProfile('${escapeHtml(user.profile_url || '')}', '${escapeHtml(user.nickname || user.sec_user_id || '')}')" title="复制主页链接">${Icons.clipboard} 复制</button>
+              ${!isIg ? `<button class="btn btn-secondary btn-sm" onclick="copyUserProfile('${escapeHtml(user.profile_url || '')}', '${escapeHtml(user.nickname || user.sec_user_id || '')}')" title="复制主页链接">${Icons.clipboard} 复制</button>` : ''}
               <button class="btn btn-secondary btn-sm" onclick="toggleUser('${user.id}', ${paused})" title="${paused ? '启用' : '暂停'}">
                 ${paused ? Icons.play + ' 启用' : Icons.pause + ' 暂停'}
               </button>
@@ -903,9 +942,10 @@
 
     function renderGlobalRecords(users) {
       const allRecords = [];
+      const isIg = currentPlatform === 'instagram';
       for (const user of users) {
         for (const record of (Array.isArray(user.download_records) ? user.download_records : [])) {
-          allRecords.push({ ...record, user_nickname: user.nickname || user.sec_user_id || "-" });
+          allRecords.push({ ...record, user_nickname: isIg ? (user.username || "-") : (user.nickname || user.sec_user_id || "-") });
         }
       }
       allRecords.sort((a, b) => parseTimeToMillis(b.downloaded_at) - parseTimeToMillis(a.downloaded_at));
@@ -990,7 +1030,10 @@
 
     async function startMonitor() {
       try {
-        await api("/start", { method: "POST", body: JSON.stringify({ mode: document.getElementById("monitorMode").value, interval_hours: Number(document.getElementById("intervalHours").value || "0.05"), coverage_hours: Number(document.getElementById("coverageHours").value || "24") }) });
+        const body = currentPlatform === 'instagram'
+          ? { interval_hours: Number(document.getElementById("intervalHours").value || "6") }
+          : { mode: document.getElementById("monitorMode").value, interval_hours: Number(document.getElementById("intervalHours").value || "0.05"), coverage_hours: Number(document.getElementById("coverageHours").value || "24") };
+        await api("/start", { method: "POST", body: JSON.stringify(body) });
         showToast("调度已更新 / 已启动"); await refreshAll();
       } catch (err) { showToast(err.message, 'error'); }
     }
@@ -1004,7 +1047,10 @@
       try { showToast("开始全局检查..."); const res = await api("/run_once", { method: "POST" }); showToast(`检查 ${res.checked_users || 0} 人, 下载 ${res.downloaded_items || 0} 个作品`); await refreshAll(); } catch (err) { showToast(err.message, 'error'); }
     }
 
-    onModeChanged(); refreshAll(); setInterval(refreshAll, 15000);
+    // 初始化平台选择
+    switchPlatform(currentPlatform);
+    onModeChanged();
+    setInterval(refreshAll, 15000);
   </script>
 </body>
 </html>

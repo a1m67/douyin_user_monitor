@@ -1,0 +1,11 @@
+[Unit]
+Description=Run Douyin User Monitor OpenList mover every minute
+
+[Timer]
+Unit=douyin-user-monitor-mover.service
+OnCalendar=*-*-* *:*:00
+AccuracySec=1s
+Persistent=true
+
+[Install]
+WantedBy=timers.target

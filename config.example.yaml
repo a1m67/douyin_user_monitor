@@ -22,3 +22,19 @@ notifications:
     api_base: "https://api.telegram.org"
     # 请求超时（秒）
     timeout_seconds: 10
+
+instagram:
+  # 是否启用 Instagram 监控
+  enabled: false
+  # Instagram 登录用户名（专用小号）
+  login_user: ""
+  # Session 文件路径
+  session_file: "data/ig_session"
+  # 监控状态文件
+  state_path: "data/ig_monitor_users.json"
+  # 下载目录
+  download_root: "download/instagram"
+  # 检查间隔（小时）
+  check_interval_hours: 6
+  # 请求间隔（秒），防限流
+  request_delay_seconds: 8
