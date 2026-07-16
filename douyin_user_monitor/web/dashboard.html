@@ -395,11 +395,10 @@
       <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
         <path stroke-linecap="round" stroke-linejoin="round" d="M14.25 9.75 16.5 12l-2.25 2.25m-4.5 0L7.5 12l2.25-2.25M6 20.25h12A2.25 2.25 0 0 0 20.25 18V6A2.25 2.25 0 0 0 18 3.75H6A2.25 2.25 0 0 0 3.75 6v12A2.25 2.25 0 0 0 6 20.25Z" />
       </svg>
-      用户监控台
+      <span id="sidebarTitle">用户监控台</span>
     </div>
-    <div class="platform-tabs" style="display: flex; gap: 4px; padding: 12px 16px 0;">
-      <button class="platform-tab active" data-platform="douyin" onclick="switchPlatform('douyin')" style="flex:1; padding: 8px 12px; border: none; border-radius: var(--radius-sm); cursor: pointer; font-size: 13px; font-weight: 600; background: var(--primary); color: var(--text-inverse); transition: all 0.2s;">抖音</button>
-      <button class="platform-tab" data-platform="instagram" onclick="switchPlatform('instagram')" style="flex:1; padding: 8px 12px; border: none; border-radius: var(--radius-sm); cursor: pointer; font-size: 13px; font-weight: 600; background: var(--bg-sidebar-hover); color: var(--text-lighter); transition: all 0.2s;">Instagram</button>
+    <div class="platform-tabs" style="display: flex; gap: 4px; padding: 12px 16px 0; position: relative; z-index: 2; flex-shrink: 0;">
+      <button type="button" class="platform-tab active" data-platform="douyin" onclick="switchPlatform('douyin')" style="flex:1; padding: 8px 12px; border: none; border-radius: var(--radius-sm); cursor: pointer; font-size: 13px; font-weight: 600; background: var(--primary); color: var(--text-inverse); transition: all 0.2s;">抖音</button>
     </div>
     <nav class="sidebar-nav">
       <div class="nav-label">Menu</div>
@@ -656,7 +655,7 @@
     function filterUsers(users) {
       const keyword = getUserSearchKeyword();
       if (!keyword) return users;
-      return users.filter(user => [user.nickname, user.sec_user_id, user.id, user.profile_url, user.username, user.full_name]
+      return users.filter(user => [user.nickname, user.sec_user_id, user.id, user.profile_url]
         .some(value => String(value || "").toLowerCase().includes(keyword)));
     }
 
@@ -728,7 +727,7 @@
     }
 
     function renderUserAvatar(user) {
-      const initial = escapeHtml((user.nickname || user.sec_user_id || user.username || "?").charAt(0).toUpperCase());
+      const initial = escapeHtml((user.nickname || user.sec_user_id || "?").charAt(0).toUpperCase());
       const avatarUrl = String(user.avatar_url || "").trim();
       if (!avatarUrl) return `<div class="user-avatar">${initial}</div>`;
       const userId = encodeURIComponent(String(user.id || "").trim());
@@ -738,12 +737,13 @@
       return `<div class="user-avatar"><img src="${safeUrl}" alt="${initial}" loading="lazy" onerror="this.remove();this.parentElement.textContent=this.alt;" /></div>`;
     }
 
-    let currentPlatform = localStorage.getItem('monitor_platform') || "douyin";
+    let currentPlatform = "douyin";
+    localStorage.setItem('monitor_platform', 'douyin');
+    let refreshSeq = 0;
     const PLATFORM_CONFIG = {
       douyin: { api: "/api/monitor", label: "抖音" },
-      instagram: { api: "/api/instagram", label: "Instagram" },
     };
-    const API_BASE = () => PLATFORM_CONFIG[currentPlatform].api;
+    const API_BASE = () => (PLATFORM_CONFIG[currentPlatform] || PLATFORM_CONFIG.douyin).api;
 
     function showToast(message, type = 'success') {
       const container = document.getElementById("toast-container");
@@ -756,26 +756,48 @@
     }
 
     async function api(path, options = {}) {
-      const res = await fetch(`${API_BASE()}${path}`, { headers: { "Content-Type": "application/json" }, ...options });
+      const base = API_BASE();
+      const res = await fetch(`${base}${path}`, { headers: { "Content-Type": "application/json" }, ...options });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || data.code !== 200) throw new Error(data?.detail?.message || data?.detail || data?.message || "请求失败");
       return data.data;
     }
 
-    function switchPlatform(platform) {
-      currentPlatform = platform;
-      localStorage.setItem('monitor_platform', platform);
+    function updatePlatformTabs(platform) {
       document.querySelectorAll('.platform-tab').forEach(btn => {
         const isActive = btn.dataset.platform === platform;
         btn.classList.toggle('active', isActive);
         btn.style.background = isActive ? 'var(--primary)' : 'var(--bg-sidebar-hover)';
         btn.style.color = isActive ? 'var(--text-inverse)' : 'var(--text-lighter)';
+        btn.setAttribute('aria-pressed', isActive ? 'true' : 'false');
       });
+    }
+
+    function showPlatformLoading() {
+      const users = document.getElementById("users");
+      const records = document.getElementById("globalRecords");
+      if (users) users.innerHTML = '<div style="padding: 40px; text-align: center; color: var(--text-muted);">加载中...</div>';
+      if (records) records.innerHTML = '<div style="padding: 40px; text-align: center; color: var(--text-muted);">加载中...</div>';
+      const userCount = document.getElementById("userCountText");
+      if (userCount) userCount.textContent = '';
+      const recordsTotal = document.getElementById("recordsTotal");
+      if (recordsTotal) recordsTotal.textContent = '-';
+      cachedUsers = [];
+    }
+
+    function switchPlatform(platform) {
+      if (!PLATFORM_CONFIG[platform]) return;
+      const changed = currentPlatform !== platform;
+      currentPlatform = platform;
+      localStorage.setItem('monitor_platform', platform);
+      updatePlatformTabs(platform);
       const cfg = PLATFORM_CONFIG[platform];
-      document.querySelector('.sidebar-header').lastChild.textContent = ` ${cfg.label} 监控台`;
+      const titleEl = document.getElementById("sidebarTitle");
+      if (titleEl) titleEl.textContent = `${cfg.label} 监控台`;
       // 隐藏/显示抖音专属功能（历史回填、调度模式）
       const isDouyin = platform === 'douyin';
       document.querySelectorAll('.douyin-only').forEach(el => el.style.display = isDouyin ? '' : 'none');
+      if (changed) showPlatformLoading();
       refreshAll();
     }
 
@@ -802,20 +824,16 @@
         document.getElementById("metric-health").style.color = "var(--text-muted)";
       }
 
-      document.getElementById("metric-mode-name").textContent = currentPlatform === 'instagram' ? "Interval" : (mode === "coverage" ? "Coverage" : "Interval");
-      document.getElementById("metric-mode-desc").textContent = currentPlatform === 'instagram'
-        ? `${Number(status.interval_hours || 6)}h/间隔`
-        : (mode === "coverage" ? `${Number(status.coverage_hours || 0)}h/覆盖` : `${Number(status.interval_hours || 0)}h/间隔`);
+      document.getElementById("metric-mode-name").textContent = mode === "coverage" ? "Coverage" : "Interval";
+      document.getElementById("metric-mode-desc").textContent = (mode === "coverage" ? `${Number(status.coverage_hours || 0)}h/覆盖` : `${Number(status.interval_hours || 0)}h/间隔`);
 
       document.getElementById("metric-users").textContent = String(usersCount);
       document.getElementById("metric-downloads").textContent = String((status.last_run_result || {}).downloaded_items || 0);
 
-      if (currentPlatform !== 'instagram') {
-        if (status.mode) document.getElementById("monitorMode").value = status.mode;
-        if (status.interval_hours != null) document.getElementById("intervalHours").value = String(status.interval_hours);
-        if (status.coverage_hours != null) document.getElementById("coverageHours").value = String(status.coverage_hours);
-        onModeChanged();
-      }
+      if (status.mode) document.getElementById("monitorMode").value = status.mode;
+      if (status.interval_hours != null) document.getElementById("intervalHours").value = String(status.interval_hours);
+      if (status.coverage_hours != null) document.getElementById("coverageHours").value = String(status.coverage_hours);
+      onModeChanged();
     }
 
     function getHistorySync(user) {
@@ -883,7 +901,7 @@
       root.innerHTML = displayUsers.map(user => {
         const paused = !user.enabled;
         const historySync = getHistorySync(user);
-        const historyAction = currentPlatform === 'douyin' ? (() => {
+        const historyAction = (() => {
           if (String(historySync.status || "") === "paused") {
             return `<button class="btn btn-secondary btn-sm" onclick="resumeHistoryBackfill('${user.id}')" title="继续历史回填">继续回填</button>`;
           }
@@ -892,18 +910,11 @@
           }
           const label = String(historySync.status || "") === "completed" ? "重扫历史" : "补历史";
           return `<button class="btn btn-secondary btn-sm" onclick="startHistoryBackfill('${user.id}')" title="启动历史回填">${label}</button>`;
-        })() : '';
-        const isIg = currentPlatform === 'instagram';
-        const displayName = isIg
-          ? escapeHtml(user.username || "-")
-          : escapeHtml(user.nickname || user.sec_user_id || "-");
-        const subInfo = isIg
-          ? (user.full_name ? `<span style="color:var(--text-muted); font-size:12px;">${escapeHtml(user.full_name)}</span>` : '')
-          : '';
+        })();
+        const displayName = escapeHtml(user.nickname || user.sec_user_id || "-");
+        const subInfo = '';
         const avatarHtml = renderUserAvatar(user);
         const errorHtml = user.last_error ? `<div style="color: var(--danger); font-size: 12px; margin-top: 4px;">异常: ${escapeHtml(user.last_error)}</div>` : "";
-        const igMeta = isIg ? `<span class="user-meta-item">粉丝: <strong>${(user.follower_count || 0).toLocaleString()}</strong></span><span class="user-meta-item">帖子: <strong>${user.post_count || 0}</strong></span>` : '';
-
         return `
           <div class="user-row">
             <div class="user-info">
@@ -917,8 +928,8 @@
                 <div class="user-meta">
                   <span class="user-meta-item">已下载: <strong>${user.downloaded_count || 0}</strong></span>
                   <span class="user-meta-item">上次检查: ${formatTime(user.last_checked_at, '未检查')}</span>
-                  ${igMeta}
-                  ${currentPlatform === 'douyin' ? `<span class="user-meta-item">${escapeHtml(formatHistorySync(historySync))}</span>` : ''}
+                  
+                  <span class="user-meta-item">${escapeHtml(formatHistorySync(historySync))}</span>
                 </div>
                 ${errorHtml}
               </div>
@@ -927,7 +938,7 @@
             <div class="user-actions">
               <button class="btn btn-secondary btn-sm" onclick="runUserOnce('${user.id}')" title="单独检查">${Icons.bolt} 检查</button>
               ${historyAction}
-              ${!isIg ? `<button class="btn btn-secondary btn-sm" onclick="copyUserProfile('${escapeHtml(user.profile_url || '')}', '${escapeHtml(user.nickname || user.sec_user_id || '')}')" title="复制主页链接">${Icons.clipboard} 复制</button>` : ''}
+              <button class="btn btn-secondary btn-sm" onclick="copyUserProfile('${escapeHtml(user.profile_url || '')}', '${escapeHtml(user.nickname || user.sec_user_id || '')}')" title="复制主页链接">${Icons.clipboard} 复制</button>
               <button class="btn btn-secondary btn-sm" onclick="toggleUser('${user.id}', ${paused})" title="${paused ? '启用' : '暂停'}">
                 ${paused ? Icons.play + ' 启用' : Icons.pause + ' 暂停'}
               </button>
@@ -942,10 +953,9 @@
 
     function renderGlobalRecords(users) {
       const allRecords = [];
-      const isIg = currentPlatform === 'instagram';
       for (const user of users) {
         for (const record of (Array.isArray(user.download_records) ? user.download_records : [])) {
-          allRecords.push({ ...record, user_nickname: isIg ? (user.username || "-") : (user.nickname || user.sec_user_id || "-") });
+          allRecords.push({ ...record, user_nickname: (user.nickname || user.sec_user_id || "-") });
         }
       }
       allRecords.sort((a, b) => parseTimeToMillis(b.downloaded_at) - parseTimeToMillis(a.downloaded_at));
@@ -973,12 +983,19 @@
     }
 
     async function refreshAll() {
+      const seq = ++refreshSeq;
+      const platform = currentPlatform;
       try {
         const [status, usersResp] = await Promise.all([api("/status"), api("/users")]);
+        // 丢弃过期请求，避免快速切换平台时旧数据回写覆盖当前视图
+        if (seq !== refreshSeq || platform !== currentPlatform) return;
         renderStatus(status, (usersResp.users || []).length);
         renderGlobalRecords(usersResp.users || []);
         renderUsers(usersResp.users || []);
-      } catch (err) { showToast(err.message, 'error'); }
+      } catch (err) {
+        if (seq !== refreshSeq || platform !== currentPlatform) return;
+        showToast(err.message, 'error');
+      }
     }
 
     async function toggleUser(userId, enabled) {
@@ -1030,9 +1047,7 @@
 
     async function startMonitor() {
       try {
-        const body = currentPlatform === 'instagram'
-          ? { interval_hours: Number(document.getElementById("intervalHours").value || "6") }
-          : { mode: document.getElementById("monitorMode").value, interval_hours: Number(document.getElementById("intervalHours").value || "0.05"), coverage_hours: Number(document.getElementById("coverageHours").value || "24") };
+        const body = { mode: document.getElementById("monitorMode").value, interval_hours: Number(document.getElementById("intervalHours").value || "0.05"), coverage_hours: Number(document.getElementById("coverageHours").value || "24") };
         await api("/start", { method: "POST", body: JSON.stringify(body) });
         showToast("调度已更新 / 已启动"); await refreshAll();
       } catch (err) { showToast(err.message, 'error'); }

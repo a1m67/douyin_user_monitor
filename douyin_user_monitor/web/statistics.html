@@ -755,13 +755,12 @@
       <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
         <path stroke-linecap="round" stroke-linejoin="round" d="M14.25 9.75 16.5 12l-2.25 2.25m-4.5 0L7.5 12l2.25-2.25M6 20.25h12A2.25 2.25 0 0 0 20.25 18V6A2.25 2.25 0 0 0 18 3.75H6A2.25 2.25 0 0 0 3.75 6v12A2.25 2.25 0 0 0 6 20.25Z" />
       </svg>
-      Douyin Monitor
+      <span id="sidebarTitle">Douyin Monitor</span>
     </div>
     <nav class="sidebar-nav">
       <div class="nav-label">平台</div>
-      <div style="display:flex; gap:4px; padding:0 8px; margin-bottom:8px;">
-        <button class="platform-tab" data-platform="douyin" onclick="switchPlatform('douyin')" style="flex:1; padding: 8px 12px; border: none; border-radius: var(--radius-sm); cursor: pointer; font-size: 13px; font-weight: 600; background: var(--primary); color: var(--text-inverse); transition: all 0.2s;">抖音</button>
-        <button class="platform-tab" data-platform="instagram" onclick="switchPlatform('instagram')" style="flex:1; padding: 8px 12px; border: none; border-radius: var(--radius-sm); cursor: pointer; font-size: 13px; font-weight: 600; background: var(--bg-sidebar-hover); color: var(--text-lighter); transition: all 0.2s;">Instagram</button>
+      <div class="platform-tabs" style="display:flex; gap:4px; padding:0 8px; margin-bottom:8px; position: relative; z-index: 2; flex-shrink: 0;">
+        <button type="button" class="platform-tab" data-platform="douyin" onclick="switchPlatform('douyin')" style="flex:1; padding: 8px 12px; border: none; border-radius: var(--radius-sm); cursor: pointer; font-size: 13px; font-weight: 600; background: var(--primary); color: var(--text-inverse); transition: all 0.2s;">抖音</button>
       </div>
       <div class="nav-label">Menu</div>
       <a class="nav-item" href="/api/monitor/dashboard" onclick="return navigateToPage('/api/monitor/dashboard')">
@@ -1069,24 +1068,44 @@
       clipboard: `<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M15.666 3.888A2.25 2.25 0 0 0 13.5 2.25h-3c-1.03 0-1.9.693-2.166 1.638m7.332 0c.055.194.084.4.084.612v0a.75.75 0 0 1-.75.75H9.75a.75.75 0 0 1-.75-.75v0c0-.212.03-.418.084-.612m7.332 0c.646.049 1.288.11 1.927.184 1.1.128 1.907 1.077 1.907 2.185V19.5a2.25 2.25 0 0 1-2.25 2.25H6.75A2.25 2.25 0 0 1 4.5 19.5V6.257c0-1.108.806-2.057 1.907-2.185a48.208 48.208 0 0 1 1.927-.184" /></svg>`
     };
 
-    let currentPlatform = localStorage.getItem('monitor_platform') || "douyin";
+    let currentPlatform = "douyin";
+    localStorage.setItem('monitor_platform', 'douyin');
+    let refreshSeq = 0;
     const PLATFORM_CONFIG = {
       douyin: { api: "/api/monitor", label: "抖音" },
-      instagram: { api: "/api/instagram", label: "Instagram" },
     };
-    const API_BASE = () => PLATFORM_CONFIG[currentPlatform].api;
+    const API_BASE = () => (PLATFORM_CONFIG[currentPlatform] || PLATFORM_CONFIG.douyin).api;
 
-    function switchPlatform(platform) {
-      currentPlatform = platform;
-      localStorage.setItem('monitor_platform', platform);
+    function updatePlatformTabs(platform) {
       document.querySelectorAll('.platform-tab').forEach(btn => {
         const isActive = btn.dataset.platform === platform;
         btn.classList.toggle('active', isActive);
         btn.style.background = isActive ? 'var(--primary)' : 'var(--bg-sidebar-hover)';
         btn.style.color = isActive ? 'var(--text-inverse)' : 'var(--text-lighter)';
+        btn.setAttribute('aria-pressed', isActive ? 'true' : 'false');
       });
+    }
+
+    function showPlatformLoading() {
+      const loading = '<div style="padding: 24px; text-align: center; color: var(--text-muted);">加载中...</div>';
+      ["silentUsers7d", "silentUsers30d", "deactivatedUsers", "unknownUsers", "topUsers"].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.innerHTML = loading;
+      });
+      const headline = document.getElementById("heroHeadline");
+      if (headline) headline.textContent = "正在切换平台...";
+    }
+
+    function switchPlatform(platform) {
+      if (!PLATFORM_CONFIG[platform]) return;
+      const changed = currentPlatform !== platform;
+      currentPlatform = platform;
+      localStorage.setItem('monitor_platform', platform);
+      updatePlatformTabs(platform);
       const cfg = PLATFORM_CONFIG[platform];
-      document.querySelector('.sidebar-header').lastChild.textContent = ` ${cfg.label} Monitor`;
+      const titleEl = document.getElementById("sidebarTitle");
+      if (titleEl) titleEl.textContent = `${cfg.label} Monitor`;
+      if (changed) showPlatformLoading();
       refreshAll();
     }
 
@@ -1208,8 +1227,7 @@
     }
 
     function renderUserAvatar(user) {
-      const isIg = currentPlatform === 'instagram';
-      const initial = escapeHtml(isIg ? (user.username || "?").charAt(0).toUpperCase() : (user.nickname || user.sec_user_id || "?").charAt(0).toUpperCase());
+      const initial = escapeHtml((user.nickname || user.sec_user_id || "?").charAt(0).toUpperCase());
       const avatarUrl = String(user.avatar_url || "").trim();
       if (!avatarUrl) return `<div class="user-avatar">${initial}</div>`;
       const userId = encodeURIComponent(String(user.id || "").trim());
@@ -1253,8 +1271,6 @@
     }
 
     function renderCopyUserButton(user) {
-      const isIg = currentPlatform === 'instagram';
-      if (isIg) return ''; // Instagram 不显示复制按钮
       const profileUrl = (user.profile_url || '').replace(/'/g, "\\'");
       const nickname = (user.nickname || user.sec_user_id || '').replace(/'/g, "\\'");
       return `<button class="btn btn-secondary btn-sm" onclick="copyUserProfile('${profileUrl}', '${nickname}')" title="复制主页链接">${Icons.clipboard} 复制</button>`;
@@ -1280,7 +1296,8 @@
     }
 
     async function api(path, options = {}) {
-      const response = await fetch(`${API_BASE()}${path}`, {
+      const base = API_BASE();
+      const response = await fetch(`${base}${path}`, {
         headers: { "Content-Type": "application/json" },
         ...options,
       });
@@ -1311,14 +1328,10 @@
       }
 
       document.getElementById("coverageBadge").textContent = formatPercent(summary.structured_coverage_percent);
-      if (currentPlatform !== 'instagram') {
-        if (status.mode) document.getElementById("monitorMode").value = status.mode;
-        if (status.interval_hours != null) document.getElementById("intervalHours").value = String(status.interval_hours);
-        if (status.coverage_hours != null) document.getElementById("coverageHours").value = String(status.coverage_hours);
-        onModeChanged();
-      } else {
-        if (status.interval_hours != null) document.getElementById("intervalHours").value = String(status.interval_hours);
-      }
+      if (status.mode) document.getElementById("monitorMode").value = status.mode;
+      if (status.interval_hours != null) document.getElementById("intervalHours").value = String(status.interval_hours);
+      if (status.coverage_hours != null) document.getElementById("coverageHours").value = String(status.coverage_hours);
+      onModeChanged();
     }
 
     function renderSummary(data) {
@@ -1376,14 +1389,13 @@
         return;
       }
 
-      const isIg = currentPlatform === 'instagram';
       root.innerHTML = users.map((user, index) => `
         <div class="rank-row">
           <div class="rank-badge">#${index + 1}</div>
           <div class="user-identity">
             ${renderUserAvatar(user)}
             <div style="min-width:0;">
-              <div class="user-name">${escapeHtml(isIg ? (user.username || "-") : (user.nickname || "-"))}</div>
+              <div class="user-name">${escapeHtml(user.nickname || "-")}</div>
               <div class="user-meta">
                 <span>${user.enabled ? "监控中" : "已暂停"}</span>
                 <span>最近检查 ${escapeHtml(formatTime(user.last_checked_at))}</span>
@@ -1397,7 +1409,7 @@
           <div class="metric-stack actions">
             <strong>${escapeHtml(formatTime(user.last_publish_at))}</strong>
             <span>${user.activity_known ? `最近发布 ${escapeHtml(formatDays(user.days_since_last_publish))}` : "暂无发布时间记录"}</span>
-            ${!isIg ? renderCopyUserButton(user) : ''}
+            ${renderCopyUserButton(user)}
             ${renderToggleUserButton(user)}
           </div>
         </div>
@@ -1411,13 +1423,12 @@
         return;
       }
 
-      const isIg = currentPlatform === 'instagram';
       root.innerHTML = users.slice(0, 10).map(user => `
         <div class="user-list-item">
           <div class="user-list-main">
             ${renderUserAvatar(user)}
             <div class="user-list-content">
-              <div class="user-list-title">${escapeHtml(isIg ? (user.username || "-") : (user.nickname || "-"))}</div>
+              <div class="user-list-title">${escapeHtml(user.nickname || "-")}</div>
               <div class="user-list-meta">
                 <span>下载 ${formatNumber(user.total_downloaded_works)} 个作品</span>
                 <span>最近发布 ${escapeHtml(formatTime(user.last_publish_at))}</span>
@@ -1427,7 +1438,7 @@
           </div>
           <div class="user-list-side">
             <div class="pill ${pillClass}">${pillFormatter(user)}</div>
-            ${!isIg ? renderCopyUserButton(user) : ''}
+            ${renderCopyUserButton(user)}
             ${renderToggleUserButton(user)}
           </div>
         </div>
@@ -1441,13 +1452,12 @@
         return;
       }
 
-      const isIg = currentPlatform === 'instagram';
       root.innerHTML = users.slice(0, 10).map(user => `
         <div class="user-list-item">
           <div class="user-list-main">
             ${renderUserAvatar(user)}
             <div class="user-list-content">
-              <div class="user-list-title">${escapeHtml(isIg ? (user.username || "-") : (user.nickname || "-"))}</div>
+              <div class="user-list-title">${escapeHtml(user.nickname || "-")}</div>
               <div class="user-list-meta">
                 <span>下载 ${formatNumber(user.total_downloaded_works)} 个作品</span>
                 <span>最近下载 ${escapeHtml(formatTime(user.last_download_at))}</span>
@@ -1457,7 +1467,7 @@
           </div>
           <div class="user-list-side">
             <div class="pill warning">待补发布时间</div>
-            ${!isIg ? renderCopyUserButton(user) : ''}
+            ${renderCopyUserButton(user)}
             ${renderToggleUserButton(user)}
           </div>
         </div>
@@ -1471,13 +1481,12 @@
         return;
       }
 
-      const isIg = currentPlatform === 'instagram';
       root.innerHTML = users.slice(0, 10).map(user => `
         <div class="user-list-item">
           <div class="user-list-main">
             ${renderUserAvatar(user)}
             <div class="user-list-content">
-              <div class="user-list-title">${escapeHtml(isIg ? (user.username || "-") : (user.nickname || "-"))}</div>
+              <div class="user-list-title">${escapeHtml(user.nickname || "-")}</div>
               <div class="user-list-meta">
                 <span>状态更新时间 ${escapeHtml(formatTime(user.account_status_updated_at))}</span>
                 <span>最近检查 ${escapeHtml(formatTime(user.last_checked_at))}</span>
@@ -1488,7 +1497,7 @@
           </div>
           <div class="user-list-side">
             <div class="pill ${getAccountStatusPillClass(user)}">${getAccountStatusLabel(user)}</div>
-            ${!isIg ? renderCopyUserButton(user) : ''}
+            ${renderCopyUserButton(user)}
             ${renderToggleUserButton(user)}
           </div>
         </div>
@@ -1496,11 +1505,15 @@
     }
 
     async function refreshAll() {
+      const seq = ++refreshSeq;
+      const platform = currentPlatform;
       try {
         const [status, statistics] = await Promise.all([
           api("/status"),
           api("/statistics"),
         ]);
+        // 丢弃过期请求，避免快速切换平台时旧数据回写覆盖当前视图
+        if (seq !== refreshSeq || platform !== currentPlatform) return;
         renderStatus(status, statistics.summary || {});
         renderSummary(statistics);
         renderCoverage(statistics.summary || {});
@@ -1522,6 +1535,7 @@
         renderDeactivatedUsers(statistics.lists?.deactivated_users || []);
         renderUnknownUsers(statistics.lists?.unknown_publish_users || []);
       } catch (error) {
+        if (seq !== refreshSeq || platform !== currentPlatform) return;
         showToast(error.message, "error");
       }
     }
@@ -1541,9 +1555,7 @@
 
     async function startMonitor() {
       try {
-        const body = currentPlatform === 'instagram'
-          ? { interval_hours: Number(document.getElementById("intervalHours").value || "6") }
-          : { mode: document.getElementById("monitorMode").value, interval_hours: Number(document.getElementById("intervalHours").value || "0.05"), coverage_hours: Number(document.getElementById("coverageHours").value || "24") };
+        const body = { mode: document.getElementById("monitorMode").value, interval_hours: Number(document.getElementById("intervalHours").value || "0.05"), coverage_hours: Number(document.getElementById("coverageHours").value || "24") };
         await api("/start", { method: "POST", body: JSON.stringify(body) });
         showToast("调度已更新 / 已启动");
         await refreshAll();

@@ -29,6 +29,28 @@ class DashboardUiTests(unittest.TestCase):
         self.assertIn("formatTime(user.last_checked_at, '未检查')", html)
         self.assertIn("parseTimeToMillis(b.downloaded_at)", html)
 
+    def test_dashboard_platform_switch_is_race_safe(self):
+        response = self.client.get('/api/monitor/dashboard')
+
+        self.assertEqual(response.status_code, 200)
+        html = response.text
+        self.assertIn('id="sidebarTitle"', html)
+        self.assertIn('let refreshSeq = 0;', html)
+        self.assertIn('if (seq !== refreshSeq || platform !== currentPlatform) return;', html)
+        self.assertIn("function switchPlatform(platform)", html)
+        self.assertIn("function updatePlatformTabs(platform)", html)
+        self.assertIn('type="button" class="platform-tab', html)
+
+    def test_statistics_platform_switch_is_race_safe(self):
+        response = self.client.get('/api/monitor/statistics/dashboard')
+
+        self.assertEqual(response.status_code, 200)
+        html = response.text
+        self.assertIn('id="sidebarTitle"', html)
+        self.assertIn('let refreshSeq = 0;', html)
+        self.assertIn('if (seq !== refreshSeq || platform !== currentPlatform) return;', html)
+        self.assertIn("function switchPlatform(platform)", html)
+
     def test_statistics_dashboard_uses_shanghai_timezone_formatter(self):
         response = self.client.get('/api/monitor/statistics/dashboard')
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 import yaml
 
@@ -18,14 +18,6 @@ TG_CHAT_ID_ENV = "DYMON_TG_CHAT_ID"
 TG_API_BASE_ENV = "DYMON_TG_API_BASE"
 TG_TIMEOUT_ENV = "DYMON_TG_TIMEOUT"
 
-IG_ENABLED_ENV = "DYMON_IG_ENABLED"
-IG_LOGIN_USER_ENV = "DYMON_IG_LOGIN_USER"
-IG_SESSION_FILE_ENV = "DYMON_IG_SESSION_FILE"
-IG_STATE_PATH_ENV = "DYMON_IG_STATE_PATH"
-IG_DOWNLOAD_ROOT_ENV = "DYMON_IG_DOWNLOAD_ROOT"
-IG_CHECK_INTERVAL_ENV = "DYMON_IG_CHECK_INTERVAL"
-IG_REQUEST_DELAY_ENV = "DYMON_IG_REQUEST_DELAY"
-
 DEFAULT_UPSTREAM_BASE_URL = "http://127.0.0.1:8899"
 DEFAULT_UPSTREAM_TIMEOUT_SECONDS = 30.0
 DEFAULT_STATE_PATH = "data/monitor_users.json"
@@ -33,13 +25,6 @@ DEFAULT_DOWNLOAD_ROOT = "download"
 DEFAULT_TG_ENABLED = False
 DEFAULT_TG_API_BASE = "https://api.telegram.org"
 DEFAULT_TG_TIMEOUT_SECONDS = 10.0
-
-DEFAULT_IG_ENABLED = False
-DEFAULT_IG_SESSION_FILE = "data/ig_session"
-DEFAULT_IG_STATE_PATH = "data/ig_monitor_users.json"
-DEFAULT_IG_DOWNLOAD_ROOT = "download/instagram"
-DEFAULT_IG_CHECK_INTERVAL_HOURS = 6.0
-DEFAULT_IG_REQUEST_DELAY_SECONDS = 8.0
 
 
 @dataclass(frozen=True)
@@ -69,24 +54,11 @@ class NotificationSettings:
 
 
 @dataclass(frozen=True)
-class InstagramSettings:
-    enabled: bool
-    login_user: str
-    session_file: Path
-    state_path: Path
-    download_root: Path
-    check_interval_hours: float
-    request_delay_seconds: float
-    proxy: Optional[str] = None
-
-
-@dataclass(frozen=True)
 class Settings:
     project_root: Path
     upstream: UpstreamSettings
     monitor: MonitorSettings
     notifications: NotificationSettings
-    instagram: InstagramSettings
 
 
 def load_settings() -> Settings:
@@ -148,36 +120,6 @@ def load_settings() -> Settings:
     if tg_timeout_seconds <= 0:
         raise ValueError("notifications.telegram.timeout_seconds 必须大于 0")
 
-    instagram_raw = _ensure_dict(raw.get("instagram", {}), "instagram")
-    ig_enabled_raw = os.getenv(IG_ENABLED_ENV, "") or instagram_raw.get("enabled", DEFAULT_IG_ENABLED)
-    ig_login_user = os.getenv(IG_LOGIN_USER_ENV, "") or str(instagram_raw.get("login_user", "")).strip()
-    ig_session_file_raw = os.getenv(IG_SESSION_FILE_ENV, "") or str(
-        instagram_raw.get("session_file", DEFAULT_IG_SESSION_FILE)
-    ).strip()
-    ig_state_path_raw = os.getenv(IG_STATE_PATH_ENV, "") or str(
-        instagram_raw.get("state_path", DEFAULT_IG_STATE_PATH)
-    ).strip()
-    ig_download_root_raw = os.getenv(IG_DOWNLOAD_ROOT_ENV, "") or str(
-        instagram_raw.get("download_root", DEFAULT_IG_DOWNLOAD_ROOT)
-    ).strip()
-    ig_check_interval_raw = os.getenv(IG_CHECK_INTERVAL_ENV, "") or str(
-        instagram_raw.get("check_interval_hours", DEFAULT_IG_CHECK_INTERVAL_HOURS)
-    ).strip()
-    ig_request_delay_raw = os.getenv(IG_REQUEST_DELAY_ENV, "") or str(
-        instagram_raw.get("request_delay_seconds", DEFAULT_IG_REQUEST_DELAY_SECONDS)
-    ).strip()
-    ig_proxy = instagram_raw.get("proxy", None)
-
-    ig_enabled = _parse_bool(ig_enabled_raw)
-    try:
-        ig_check_interval = float(ig_check_interval_raw)
-    except ValueError as exc:
-        raise ValueError("instagram.check_interval_hours 必须是数字") from exc
-    try:
-        ig_request_delay = float(ig_request_delay_raw)
-    except ValueError as exc:
-        raise ValueError("instagram.request_delay_seconds 必须是数字") from exc
-
     return Settings(
         project_root=project_root,
         upstream=UpstreamSettings(base_url=base_url, timeout_seconds=timeout_seconds),
@@ -193,16 +135,6 @@ def load_settings() -> Settings:
                 api_base=tg_api_base,
                 timeout_seconds=tg_timeout_seconds,
             )
-        ),
-        instagram=InstagramSettings(
-            enabled=ig_enabled,
-            login_user=ig_login_user,
-            session_file=_resolve_path(project_root, ig_session_file_raw),
-            state_path=_resolve_path(project_root, ig_state_path_raw),
-            download_root=_resolve_path(project_root, ig_download_root_raw),
-            check_interval_hours=ig_check_interval,
-            request_delay_seconds=ig_request_delay,
-            proxy=ig_proxy,
         ),
     )
 
