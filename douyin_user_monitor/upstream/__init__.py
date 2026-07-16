@@ -1,3 +1,5 @@
-from douyin_user_monitor.upstream.douyin_client import UpstreamDouyinClient
+from douyin_user_monitor.crawler.inprocess_client import DEFAULT_HEADERS, InProcessDouyinClient
 
-__all__ = ["UpstreamDouyinClient"]
+UpstreamDouyinClient = InProcessDouyinClient
+
+__all__ = ["DEFAULT_HEADERS", "InProcessDouyinClient", "UpstreamDouyinClient"]

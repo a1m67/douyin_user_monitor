@@ -1,0 +1,22 @@
+TokenManager:
+  douyin:
+    headers:
+      Accept-Language: zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2
+      Cookie: PASTE_YOUR_DOUYIN_COOKIE_HERE
+      Referer: https://www.douyin.com/
+      User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML,
+        like Gecko) Chrome/90.0.4430.212 Safari/537.36
+    msToken:
+      User-Agent: 5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like
+        Gecko) Chrome/117.0.0.0 Safari/537.36 Edg/117.0.2045.47
+      dataType: 8
+      magic: 538969122
+      strData: PASTE_FROM_UPSTREAM_OR_BROWSER
+      url: https://mssdk.bytedance.com/web/report
+      version: 1
+    proxies:
+      http: null
+      https: null
+    ttwid:
+      data: '{"region":"cn","aid":1768,"needFid":false,"service":"www.ixigua.com","migrate_info":{"ticket":"","source":"node"},"cbUrlProtocol":"https","union":true}'
+      url: https://ttwid.bytedance.com/ttwid/union/register/

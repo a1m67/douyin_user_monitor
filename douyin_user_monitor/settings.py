@@ -8,8 +8,7 @@ from typing import Any, Dict
 import yaml
 
 CONFIG_ENV = "DYMON_CONFIG"
-UPSTREAM_ENV = "DYMON_UPSTREAM"
-UPSTREAM_TIMEOUT_ENV = "DYMON_UPSTREAM_TIMEOUT"
+CRAWLER_CONFIG_ENV = "DYMON_CRAWLER_CONFIG"
 STATE_PATH_ENV = "DYMON_STATE_PATH"
 DOWNLOAD_ROOT_ENV = "DYMON_DOWNLOAD_ROOT"
 TG_ENABLED_ENV = "DYMON_TG_ENABLED"
@@ -18,8 +17,8 @@ TG_CHAT_ID_ENV = "DYMON_TG_CHAT_ID"
 TG_API_BASE_ENV = "DYMON_TG_API_BASE"
 TG_TIMEOUT_ENV = "DYMON_TG_TIMEOUT"
 
-DEFAULT_UPSTREAM_BASE_URL = "http://127.0.0.1:8899"
-DEFAULT_UPSTREAM_TIMEOUT_SECONDS = 30.0
+DEFAULT_CRAWLER_CONFIG_PATH = "config/douyin_web.yaml"
+DEFAULT_AVATAR_TIMEOUT_SECONDS = 30.0
 DEFAULT_STATE_PATH = "data/monitor_users.json"
 DEFAULT_DOWNLOAD_ROOT = "download"
 DEFAULT_TG_ENABLED = False
@@ -28,8 +27,8 @@ DEFAULT_TG_TIMEOUT_SECONDS = 10.0
 
 
 @dataclass(frozen=True)
-class UpstreamSettings:
-    base_url: str
+class CrawlerSettings:
+    config_path: Path
     timeout_seconds: float
 
 
@@ -78,7 +77,7 @@ class CookieLivenessSettings:
 @dataclass(frozen=True)
 class Settings:
     project_root: Path
-    upstream: UpstreamSettings
+    crawler: CrawlerSettings
     monitor: MonitorSettings
     notifications: NotificationSettings
     cookie_liveness: CookieLivenessSettings
@@ -102,18 +101,18 @@ DEFAULT_HERMES_WEIXIN_TIMEOUT_SECONDS = 60.0
 def load_settings() -> Settings:
     project_root = Path(__file__).resolve().parents[1]
     raw = _load_yaml(_resolve_config_path(project_root))
-    upstream_raw = _ensure_dict(raw.get("upstream", {}), "upstream")
+    crawler_raw = _ensure_dict(raw.get("crawler", {}), "crawler")
     monitor_raw = _ensure_dict(raw.get("monitor", {}), "monitor")
     notification_raw = _ensure_dict(raw.get("notifications", {}), "notifications")
     telegram_raw = _ensure_dict(notification_raw.get("telegram", {}), "notifications.telegram")
     hermes_raw = _ensure_dict(notification_raw.get("hermes_weixin", {}), "notifications.hermes_weixin")
     cookie_raw = _ensure_dict(raw.get("cookie_liveness", {}), "cookie_liveness")
 
-    base_url = os.getenv(UPSTREAM_ENV, "") or str(
-        upstream_raw.get("base_url", DEFAULT_UPSTREAM_BASE_URL)
+    crawler_config_raw = os.getenv(CRAWLER_CONFIG_ENV, "") or str(
+        crawler_raw.get("config_path", DEFAULT_CRAWLER_CONFIG_PATH)
     ).strip()
-    timeout_raw = os.getenv(UPSTREAM_TIMEOUT_ENV, "") or str(
-        upstream_raw.get("timeout_seconds", DEFAULT_UPSTREAM_TIMEOUT_SECONDS)
+    timeout_raw = str(
+        crawler_raw.get("timeout_seconds", DEFAULT_AVATAR_TIMEOUT_SECONDS)
     ).strip()
 
     state_path_raw = os.getenv(STATE_PATH_ENV, "") or str(
@@ -132,15 +131,24 @@ def load_settings() -> Settings:
         telegram_raw.get("timeout_seconds", DEFAULT_TG_TIMEOUT_SECONDS)
     ).strip()
 
-    if not base_url:
-        raise ValueError(f"缺少上游服务地址：请设置 {UPSTREAM_ENV} 或 config.yaml 的 upstream.base_url")
+    if not crawler_config_raw:
+        raise ValueError(
+            f"缺少爬虫配置路径：请设置 {CRAWLER_CONFIG_ENV} 或 config.yaml 的 crawler.config_path"
+        )
 
     try:
         timeout_seconds = float(timeout_raw)
     except ValueError as exc:
-        raise ValueError("upstream.timeout_seconds 必须是数字") from exc
+        raise ValueError("crawler.timeout_seconds 必须是数字") from exc
     if timeout_seconds <= 0:
-        raise ValueError("upstream.timeout_seconds 必须大于 0")
+        raise ValueError("crawler.timeout_seconds 必须大于 0")
+
+    crawler_config_path = _resolve_path(project_root, crawler_config_raw)
+    if not crawler_config_path.is_file():
+        raise ValueError(
+            f"爬虫配置文件不存在: {crawler_config_path}。"
+            "请从 config/douyin_web.example.yaml 复制并填入 Cookie。"
+        )
 
     if not state_path_raw:
         raise ValueError(f"缺少状态文件路径：请设置 {STATE_PATH_ENV} 或 config.yaml 的 monitor.state_path")
@@ -211,7 +219,7 @@ def load_settings() -> Settings:
 
     return Settings(
         project_root=project_root,
-        upstream=UpstreamSettings(base_url=base_url, timeout_seconds=timeout_seconds),
+        crawler=CrawlerSettings(config_path=crawler_config_path, timeout_seconds=timeout_seconds),
         monitor=MonitorSettings(
             state_path=_resolve_path(project_root, state_path_raw),
             download_root=_resolve_path(project_root, download_root_raw),

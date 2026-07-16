@@ -1,7 +1,7 @@
-upstream:
-  # Douyin_TikTok_Download_API 地址
-  base_url: "http://127.0.0.1:8899"
-  # 上游请求超时（秒）
+crawler:
+  # 独立抖音 Web 爬虫配置（Cookie/headers），见 config/douyin_web.example.yaml
+  config_path: "config/douyin_web.yaml"
+  # 头像等直链下载超时（秒）
   timeout_seconds: 30
 
 monitor:

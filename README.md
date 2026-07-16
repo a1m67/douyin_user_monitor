@@ -1,9 +1,9 @@
 # douyin_user_monitor
 
-抖音用户作品监控服务（本地监控 + 上游爬虫）。
+抖音用户作品监控服务（监控调度 + 进程内抖音 Web 爬虫）。
 
 - 本项目负责：监控用户管理、轮询调度、下载落盘、监控面板
-- 上游服务负责：抖音接口解析与爬虫能力（`Douyin_TikTok_Download_API`）
+- 抖音接口解析：进程内 vendored `crawlers/`（源自 `Douyin_TikTok_Download_API` 精简子集），不再依赖独立 8899 上游进程
 
 ## 启动
 
@@ -24,10 +24,18 @@ pip install -r requirements.txt
 cp config.example.yaml config.yaml
 ```
 
-- `upstream.base_url`: 上游 `Douyin_TikTok_Download_API` 地址（如 `http://127.0.0.1:8899`）
+- `crawler.config_path`: 独立抖音爬虫配置（Cookie/headers），默认 `config/douyin_web.yaml`
+- `crawler.timeout_seconds`: 头像等直链下载超时
 - `monitor.state_path`: 本地监控状态文件
 - `monitor.download_root`: 本地下载目录
 - `notifications.telegram`: 新作品 Telegram 通知（支持发现新作品 + 下载完成两条消息）
+
+Cookie 配置：
+
+```bash
+cp config/douyin_web.example.yaml config/douyin_web.yaml
+# 编辑 config/douyin_web.yaml，填入浏览器获取的抖音 Cookie
+```
 
 4. 启动
 ```bash

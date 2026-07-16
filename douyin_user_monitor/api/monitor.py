@@ -24,7 +24,7 @@ from douyin_user_monitor.monitor.user_lookup import find_user_by_id
 from douyin_user_monitor.monitor.storage import MonitorStorage
 from douyin_user_monitor.monitor.statistics import build_user_statistics
 from douyin_user_monitor.settings import load_settings
-from douyin_user_monitor.upstream.douyin_client import DEFAULT_HEADERS, UpstreamDouyinClient
+from douyin_user_monitor.crawler.inprocess_client import DEFAULT_HEADERS, InProcessDouyinClient
 
 router = APIRouter()
 AVATAR_CACHE_SECONDS = 3600
@@ -37,7 +37,7 @@ SETTINGS = load_settings()
 DASHBOARD_PATH = SETTINGS.project_root / "douyin_user_monitor" / "web" / "dashboard.html"
 STATISTICS_DASHBOARD_PATH = SETTINGS.project_root / "douyin_user_monitor" / "web" / "statistics.html"
 
-UPSTREAM_CLIENT = UpstreamDouyinClient(SETTINGS.upstream.base_url, SETTINGS.upstream.timeout_seconds)
+CRAWLER_CLIENT = InProcessDouyinClient(SETTINGS.crawler.config_path)
 MONITOR_STORAGE = MonitorStorage(SETTINGS.monitor.state_path)
 TG_SETTINGS = SETTINGS.notifications.telegram
 MONITOR_NOTIFIER = (
@@ -70,7 +70,7 @@ HERMES_SENDER = (
 
 COOKIE_SETTINGS = SETTINGS.cookie_liveness
 COOKIE_LIVENESS_SERVICE = CookieLivenessService(
-    crawler=UPSTREAM_CLIENT,
+    crawler=CRAWLER_CLIENT,
     config=CookieLivenessConfig(
         enabled=COOKIE_SETTINGS.enabled,
         interval_hours=COOKIE_SETTINGS.interval_hours,
@@ -83,7 +83,7 @@ COOKIE_LIVENESS_SERVICE = CookieLivenessService(
 )
 
 monitor_service = MonitorService(
-    crawler=UPSTREAM_CLIENT,
+    crawler=CRAWLER_CLIENT,
     storage=MONITOR_STORAGE,
     download_root=SETTINGS.monitor.download_root,
     notifier=MONITOR_NOTIFIER,
@@ -137,7 +137,7 @@ def _validate_avatar_url(raw_url: Any) -> str:
 async def _download_avatar(avatar_url: str) -> httpx.Response:
     async with httpx.AsyncClient(
         follow_redirects=True,
-        timeout=SETTINGS.upstream.timeout_seconds,
+        timeout=SETTINGS.crawler.timeout_seconds,
     ) as client:
         try:
             response = await client.get(avatar_url, headers=DEFAULT_HEADERS)
