@@ -26,10 +26,10 @@ notifications:
   hermes_weixin:
     # 是否开启 Hermes 微信失效告警（SSH 到 ubuntu 执行 hermes send）
     enabled: false
-    ssh_host: "hermes.example.test"
+    ssh_host: ""  # e.g. your-hermes-host
     ssh_user: "root"
-    hermes_home: "/opt/hermes"
-    hermes_bin: "/opt/hermes/bin/hermes"
+    hermes_home: ""  # e.g. /path/to/.hermes
+    hermes_bin: ""  # e.g. /path/to/hermes
     target: "weixin"
     timeout_seconds: 60
 
