@@ -37,6 +37,42 @@ def build_default_state() -> Dict[str, Any]:
     return {"users": [], "monitoring": monitoring}
 
 
+def normalize_root_state(state: Dict[str, Any]) -> None:
+    if "users" not in state or not isinstance(state["users"], list):
+        state["users"] = []
+    if "monitoring" not in state or not isinstance(state["monitoring"], dict):
+        state["monitoring"] = build_default_state()["monitoring"]
+
+    monitoring = state["monitoring"]
+    defaults = build_default_state()["monitoring"]
+    for key, value in defaults.items():
+        monitoring.setdefault(key, value)
+
+    if "interval_hours" not in monitoring:
+        legacy_seconds = monitoring.get("interval_seconds")
+        if isinstance(legacy_seconds, (int, float)):
+            monitoring["interval_hours"] = float(legacy_seconds) / 3600.0
+        else:
+            monitoring["interval_hours"] = DEFAULT_INTERVAL_HOURS
+
+
+def normalize_user_entry(user: Dict[str, Any]) -> None:
+    avatar_url = str(user.get("avatar_url") or "").strip()
+    user["avatar_url"] = avatar_url or None
+    account_status = build_account_status_fields(
+        str(user.get("account_status") or ""),
+        user.get("account_status_reason"),
+    )
+    user.update(account_status)
+    account_status_updated_at = str(user.get("account_status_updated_at") or "").strip()
+    user["account_status_updated_at"] = account_status_updated_at or None
+    if not isinstance(user.get("downloaded_aweme_ids"), list):
+        user["downloaded_aweme_ids"] = []
+    if not isinstance(user.get("download_records"), list):
+        user["download_records"] = []
+    normalize_history_sync_state(user)
+
+
 class MonitorStorage:
     def __init__(self, state_file: Path):
         self.state_file = state_file
@@ -65,37 +101,8 @@ class MonitorStorage:
         temp_file.replace(self.state_file)
 
     def _normalize_state(self, state: Dict[str, Any]) -> None:
-        if "users" not in state or not isinstance(state["users"], list):
-            state["users"] = []
-        if "monitoring" not in state or not isinstance(state["monitoring"], dict):
-            state["monitoring"] = build_default_state()["monitoring"]
-
-        monitoring = state["monitoring"]
-        defaults = build_default_state()["monitoring"]
-        for key, value in defaults.items():
-            monitoring.setdefault(key, value)
-
-        if "interval_hours" not in monitoring:
-            legacy_seconds = monitoring.get("interval_seconds")
-            if isinstance(legacy_seconds, (int, float)):
-                monitoring["interval_hours"] = float(legacy_seconds) / 3600.0
-            else:
-                monitoring["interval_hours"] = DEFAULT_INTERVAL_HOURS
-
+        normalize_root_state(state)
         for user in state["users"]:
             if not isinstance(user, dict):
                 continue
-            avatar_url = str(user.get("avatar_url") or "").strip()
-            user["avatar_url"] = avatar_url or None
-            account_status = build_account_status_fields(
-                str(user.get("account_status") or ""),
-                user.get("account_status_reason"),
-            )
-            user.update(account_status)
-            account_status_updated_at = str(user.get("account_status_updated_at") or "").strip()
-            user["account_status_updated_at"] = account_status_updated_at or None
-            if not isinstance(user.get("downloaded_aweme_ids"), list):
-                user["downloaded_aweme_ids"] = []
-            if not isinstance(user.get("download_records"), list):
-                user["download_records"] = []
-            normalize_history_sync_state(user)
+            normalize_user_entry(user)

@@ -333,4 +333,7 @@ class UserSyncService:
             video_info = aweme_detail.get("video", {})
             duration = video_info.get("duration") if isinstance(video_info, dict) else 0
             record["video_duration_ms"] = safe_int(duration)
+            video_source = asset_result.get("video_source")
+            if isinstance(video_source, dict):
+                record["video_source"] = dict(video_source)
         return record

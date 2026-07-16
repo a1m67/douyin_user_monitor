@@ -6,12 +6,21 @@ from typing import Any, Dict, List, Optional
 import aiofiles
 import httpx
 
+from douyin_user_monitor.monitor.media_urls import extract_image_urls
+from douyin_user_monitor.monitor.video_source import (
+    VideoSource,
+    extract_video_source,
+    select_clearest_video_source,
+    select_highest_bit_rate_source,
+)
+
 DOWNLOAD_TIMEOUT_SECONDS = 30
 MAX_DESC_LENGTH = 48
 MAX_USER_FOLDER_LENGTH = 64
 IMAGE_ROOT_FOLDER = "图片"
 MEDIA_TYPE_VIDEO = "video"
 MEDIA_TYPE_IMAGE = "image"
+
 INVALID_FILENAME_CHARS = re.compile(r'[\\/:*?"<>|\r\n\t]+')
 
 
@@ -50,15 +59,16 @@ class AwemeAssetDownloader:
                 existing_file_count=image_result["existing_file_count"],
                 image_count=len(image_urls),
             )
-        video_url = self._extract_video_url(aweme_detail)
-        if video_url:
+        video_source = self._extract_video_source(aweme_detail)
+        if video_source:
             video_file = user_folder / f"{filename}.mp4"
-            is_downloaded = await self._download_video(video_url, headers, video_file)
+            is_downloaded = await self._download_video(video_source.url, headers, video_file)
             return self._build_download_result(
                 media_type=MEDIA_TYPE_VIDEO,
                 files=[video_file],
                 downloaded_file_count=1 if is_downloaded else 0,
                 existing_file_count=0 if is_downloaded else 1,
+                video_source=video_source,
             )
         raise ValueError(f"作品 {aweme_id} 未找到可下载的视频或图片链接")
 
@@ -108,66 +118,25 @@ class AwemeAssetDownloader:
         return user_folder
 
     def _build_user_folder_name(self, *, sec_user_id: str, user_nickname: str) -> str:
-        _ = sec_user_id
+        if not user_nickname:
+            return sanitize_text(sec_user_id, "unknown_user", max_length=MAX_USER_FOLDER_LENGTH)
         return sanitize_text(user_nickname, "unknown_user", max_length=MAX_USER_FOLDER_LENGTH)
 
     def _extract_video_url(self, aweme_detail: Dict[str, Any]) -> Optional[str]:
-        video_data = aweme_detail.get("video", {})
-        if not isinstance(video_data, dict):
-            return None
-        bit_rates = video_data.get("bit_rate", [])
-        if not isinstance(bit_rates, list):
-            bit_rates = []
-        for item in bit_rates:
-            if not isinstance(item, dict):
-                continue
-            url_list = item.get("play_addr", {}).get("url_list", [])
-            if not isinstance(url_list, list):
-                continue
-            if url_list:
-                return url_list[0]
-        for key in ["play_addr", "play_addr_h264", "download_addr"]:
-            play_addr_data = video_data.get(key, {})
-            if not isinstance(play_addr_data, dict):
-                continue
-            url_list = play_addr_data.get("url_list", [])
-            if not isinstance(url_list, list):
-                continue
-            if url_list:
-                return url_list[0]
-        return None
+        video_source = self._extract_video_source(aweme_detail)
+        return video_source.url if video_source else None
+
+    def _extract_video_source(self, aweme_detail: Dict[str, Any]) -> Optional[VideoSource]:
+        return extract_video_source(aweme_detail)
+
+    def _select_clearest_video_source(self, video_data: Dict[str, Any]) -> Optional[VideoSource]:
+        return select_clearest_video_source(video_data)
+
+    def _select_highest_bit_rate_source(self, video_data: Dict[str, Any]) -> Optional[VideoSource]:
+        return select_highest_bit_rate_source(video_data)
 
     def _extract_image_urls(self, aweme_detail: Dict[str, Any]) -> List[str]:
-        urls: List[str] = []
-        image_items = aweme_detail.get("images", [])
-        if not isinstance(image_items, list):
-            image_items = []
-        for image_item in image_items:
-            if not isinstance(image_item, dict):
-                continue
-            url_list = image_item.get("url_list", [])
-            if not isinstance(url_list, list):
-                continue
-            if url_list:
-                urls.append(url_list[0])
-        image_post_info = aweme_detail.get("image_post_info", {})
-        if not isinstance(image_post_info, dict):
-            image_post_info = {}
-        image_post_items = image_post_info.get("images", [])
-        if not isinstance(image_post_items, list):
-            image_post_items = []
-        for image_item in image_post_items:
-            if not isinstance(image_item, dict):
-                continue
-            display_image = image_item.get("display_image", {})
-            if not isinstance(display_image, dict):
-                continue
-            url_list = display_image.get("url_list", [])
-            if not isinstance(url_list, list):
-                continue
-            if url_list:
-                urls.append(url_list[0])
-        return urls
+        return extract_image_urls(aweme_detail)
 
     def _build_aweme_filename(self, aweme_detail: Dict[str, Any]) -> str:
         create_time = int(aweme_detail.get("create_time", 0))
@@ -186,8 +155,9 @@ class AwemeAssetDownloader:
         downloaded_file_count: int,
         existing_file_count: int,
         image_count: int = 0,
+        video_source: Optional[VideoSource] = None,
     ) -> Dict[str, Any]:
-        return {
+        result = {
             "media_type": media_type,
             "files": [self._relative_record_path(path) for path in files],
             "downloaded_file_count": downloaded_file_count,
@@ -195,6 +165,9 @@ class AwemeAssetDownloader:
             "image_count": image_count,
             "total_size_bytes": self._calculate_total_size(files),
         }
+        if video_source:
+            result["video_source"] = video_source.to_record()
+        return result
 
     def _relative_record_path(self, file_path: Path) -> str:
         try:

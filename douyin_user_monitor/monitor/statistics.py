@@ -46,23 +46,33 @@ def build_user_statistics(
 
 def _build_summary(user_rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     total_users = len(user_rows)
-    enabled_users = sum(1 for user in user_rows if user["enabled"])
-    paused_users = total_users - enabled_users
     total_downloaded_works = sum(user["total_downloaded_works"] for user in user_rows)
     structured_work_count = sum(user["structured_work_count"] for user in user_rows)
     coverage_ratio = _ratio(structured_work_count, total_downloaded_works)
+    summary = _count_user_flags(user_rows)
+    summary.update(
+        {
+            "total_users": total_users,
+            "paused_users": total_users - summary["enabled_users"],
+            "total_downloaded_works": total_downloaded_works,
+            "structured_work_count": structured_work_count,
+            "known_video_posts": sum(user["known_video_posts"] for user in user_rows),
+            "known_image_posts": sum(user["known_image_posts"] for user in user_rows),
+            "known_image_assets": sum(user["known_image_assets"] for user in user_rows),
+            "structured_total_size_bytes": sum(user["structured_total_size_bytes"] for user in user_rows),
+            "structured_coverage_ratio": coverage_ratio,
+            "structured_coverage_percent": round(coverage_ratio * 100, 1),
+            "avg_downloaded_works_per_user": (
+                round(total_downloaded_works / total_users, 1) if total_users else 0.0
+            ),
+        }
+    )
+    return summary
+
+
+def _count_user_flags(user_rows: List[Dict[str, Any]]) -> Dict[str, int]:
     return {
-        "total_users": total_users,
-        "enabled_users": enabled_users,
-        "paused_users": paused_users,
-        "total_downloaded_works": total_downloaded_works,
-        "structured_work_count": structured_work_count,
-        "known_video_posts": sum(user["known_video_posts"] for user in user_rows),
-        "known_image_posts": sum(user["known_image_posts"] for user in user_rows),
-        "known_image_assets": sum(user["known_image_assets"] for user in user_rows),
-        "structured_total_size_bytes": sum(user["structured_total_size_bytes"] for user in user_rows),
-        "structured_coverage_ratio": coverage_ratio,
-        "structured_coverage_percent": round(coverage_ratio * 100, 1),
+        "enabled_users": sum(1 for user in user_rows if user["enabled"]),
         "active_users_7d": sum(1 for user in user_rows if user["has_publish_in_7d"]),
         "active_users_30d": sum(1 for user in user_rows if user["has_publish_in_30d"]),
         "silent_users_7d": sum(1 for user in user_rows if user["is_silent_7d"]),
@@ -71,40 +81,77 @@ def _build_summary(user_rows: List[Dict[str, Any]]) -> Dict[str, Any]:
         "abnormal_users": sum(1 for user in user_rows if user["is_abnormal_account"]),
         "deleted_users": sum(1 for user in user_rows if user["account_status"] == "deleted"),
         "banned_users": sum(1 for user in user_rows if user["account_status"] == "banned"),
-        "avg_downloaded_works_per_user": round(total_downloaded_works / total_users, 1) if total_users else 0.0,
     }
 
 
 def _build_user_row(user: Dict[str, Any], now: datetime) -> Dict[str, Any]:
     records = _normalize_records(user.get("download_records"))
-    publish_times = _extract_times(records, "publish_time")
-    download_times = _extract_times(records, "downloaded_at")
-    last_publish_at = max(publish_times) if publish_times else None
-    last_download_at = _parse_datetime(user.get("last_download_at")) or _last_or_none(download_times)
+    activity = _build_user_activity(user, records, now)
+    content = _build_user_content_metrics(user, records)
+    identity = _build_user_identity(user)
+    identity.update(content)
+    identity.update(activity)
+    return identity
+
+
+
+def _as_stripped_str(value: Any) -> str:
+    if value is None:
+        return ""
+    return str(value).strip()
+
+
+def _optional_text(value: Any) -> str | None:
+    text = _as_stripped_str(value)
+    return text or None
+
+
+def _build_user_identity(user: Dict[str, Any]) -> Dict[str, Any]:
+    account_status = _as_stripped_str(user.get("account_status")) or ACCOUNT_STATUS_NORMAL
+    nickname = _as_stripped_str(user.get("nickname")) or _as_stripped_str(user.get("sec_user_id")) or "-"
+    return {
+        "id": _as_stripped_str(user.get("id")),
+        "nickname": nickname,
+        "sec_user_id": _as_stripped_str(user.get("sec_user_id")),
+        "profile_url": _optional_text(user.get("profile_url")),
+        "avatar_url": _optional_text(user.get("avatar_url")),
+        "enabled": bool(user.get("enabled", True)),
+        "account_status": account_status,
+        "account_status_label": _as_stripped_str(user.get("account_status_label")) or "正常",
+        "account_status_reason": _optional_text(user.get("account_status_reason")),
+        "account_status_updated_at": _optional_text(user.get("account_status_updated_at")),
+        "last_checked_at": _optional_text(user.get("last_checked_at")),
+        "last_error": _optional_text(user.get("last_error")),
+        "is_abnormal_account": account_status != ACCOUNT_STATUS_NORMAL,
+    }
+
+
+def _build_user_content_metrics(user: Dict[str, Any], records: List[Dict[str, Any]]) -> Dict[str, Any]:
     total_downloaded_works = max(
         _safe_int(user.get("downloaded_count")),
         _unique_non_empty_count(user.get("downloaded_aweme_ids")),
         len(records),
     )
     return {
-        "id": str(user.get("id") or "").strip(),
-        "nickname": str(user.get("nickname") or user.get("sec_user_id") or "-").strip(),
-        "sec_user_id": str(user.get("sec_user_id") or "").strip(),
-        "profile_url": str(user.get("profile_url") or "").strip() or None,
-        "avatar_url": str(user.get("avatar_url") or "").strip() or None,
-        "enabled": bool(user.get("enabled", True)),
-        "account_status": str(user.get("account_status") or ACCOUNT_STATUS_NORMAL).strip() or ACCOUNT_STATUS_NORMAL,
-        "account_status_label": str(user.get("account_status_label") or "正常").strip() or "正常",
-        "account_status_reason": str(user.get("account_status_reason") or "").strip() or None,
-        "account_status_updated_at": str(user.get("account_status_updated_at") or "").strip() or None,
-        "last_checked_at": str(user.get("last_checked_at") or "").strip() or None,
-        "last_error": str(user.get("last_error") or "").strip() or None,
         "total_downloaded_works": total_downloaded_works,
         "structured_work_count": len(records),
         "known_video_posts": sum(1 for record in records if record.get("media_type") == "video"),
         "known_image_posts": sum(1 for record in records if record.get("media_type") == "image"),
         "known_image_assets": sum(_safe_int(record.get("image_count")) for record in records),
         "structured_total_size_bytes": sum(_safe_int(record.get("total_size_bytes")) for record in records),
+    }
+
+
+def _build_user_activity(
+    user: Dict[str, Any],
+    records: List[Dict[str, Any]],
+    now: datetime,
+) -> Dict[str, Any]:
+    publish_times = _extract_times(records, "publish_time")
+    download_times = _extract_times(records, "downloaded_at")
+    last_publish_at = max(publish_times) if publish_times else None
+    last_download_at = _parse_datetime(user.get("last_download_at")) or _last_or_none(download_times)
+    return {
         "last_publish_at": _format_datetime(last_publish_at),
         "last_download_at": _format_datetime(last_download_at),
         "days_since_last_publish": _days_since(now, last_publish_at),
@@ -114,58 +161,43 @@ def _build_user_row(user: Dict[str, Any], now: datetime) -> Dict[str, Any]:
         "has_publish_in_30d": _is_recent(last_publish_at, now, SILENT_30D_DAYS),
         "is_silent_7d": _is_silent(last_publish_at, now, SILENT_7D_DAYS),
         "is_silent_30d": _is_silent(last_publish_at, now, SILENT_30D_DAYS),
-        "is_abnormal_account": str(user.get("account_status") or ACCOUNT_STATUS_NORMAL).strip() != ACCOUNT_STATUS_NORMAL,
     }
 
 
 def _build_silent_users(user_rows: List[Dict[str, Any]], days: int) -> List[Dict[str, Any]]:
-    flag = f"is_silent_{days}d"
-    silent_users = [user for user in user_rows if user.get(flag)]
-    return sorted(
-        silent_users,
-        key=lambda user: (
-            -(user.get("days_since_last_publish") or 0),
-            -user["total_downloaded_works"],
-            user["nickname"],
-        ),
-    )
+    key = "is_silent_7d" if days == SILENT_7D_DAYS else "is_silent_30d"
+    silent_users = [user for user in user_rows if user[key]]
+    silent_users.sort(key=lambda user: _timestamp_or_zero(user.get("last_publish_at")))
+    return silent_users
 
 
 def _build_unknown_publish_users(user_rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     unknown_users = [user for user in user_rows if not user["activity_known"]]
-    return sorted(
-        unknown_users,
-        key=lambda user: (
-            -user["total_downloaded_works"],
-            user["nickname"],
-        ),
-    )
+    unknown_users.sort(key=lambda user: str(user.get("nickname") or ""))
+    return unknown_users
 
 
 def _build_deactivated_users(user_rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    abnormal_users = [user for user in user_rows if user["is_abnormal_account"]]
-    return sorted(
-        abnormal_users,
+    deactivated = [user for user in user_rows if user["is_abnormal_account"]]
+    deactivated.sort(
         key=lambda user: (
-            user["account_status"] != "deleted",
-            -_timestamp_or_zero(user.get("account_status_updated_at")),
-            -_timestamp_or_zero(user.get("last_checked_at")),
-            user["nickname"],
-        ),
+            0 if user["account_status"] == "deleted" else 1,
+            str(user.get("nickname") or ""),
+        )
     )
+    return deactivated
 
 
 def _top_downloaded_users(user_rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    ranked_users = sorted(
+    ranked = sorted(
         user_rows,
         key=lambda user: (
             -user["total_downloaded_works"],
-            -user["structured_work_count"],
-            user.get("days_since_last_publish") if user.get("days_since_last_publish") is not None else 10**9,
-            user["nickname"],
+            -_timestamp_or_zero(user.get("last_download_at")),
+            str(user.get("nickname") or ""),
         ),
     )
-    return ranked_users[:TOP_DOWNLOADED_USERS_LIMIT]
+    return ranked[:TOP_DOWNLOADED_USERS_LIMIT]
 
 
 def _normalize_records(raw_records: Any) -> List[Dict[str, Any]]:
@@ -184,11 +216,13 @@ def _extract_times(records: List[Dict[str, Any]], key: str) -> List[datetime]:
 
 
 def _parse_datetime(raw_value: Any) -> datetime | None:
-    text = str(raw_value or "").strip()
+    if raw_value is None:
+        return None
+    text = str(raw_value).strip()
     if not text:
         return None
     try:
-        parsed = datetime.fromisoformat(text)
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
     except ValueError:
         return None
     if parsed.tzinfo is None:
