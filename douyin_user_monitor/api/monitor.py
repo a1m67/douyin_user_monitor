@@ -10,6 +10,8 @@ from fastapi.responses import HTMLResponse, Response
 from pydantic import BaseModel, Field
 
 from douyin_user_monitor.api.models import ErrorResponseModel, ResponseModel
+from douyin_user_monitor.monitor.cookie_liveness import CookieLivenessConfig, CookieLivenessService
+from douyin_user_monitor.monitor.hermes_weixin_sender import HermesWeixinConfig, HermesWeixinSender
 from douyin_user_monitor.monitor.notifier import NoopMonitorNotifier
 from douyin_user_monitor.monitor.service import (
     MIN_INTERVAL_HOURS,
@@ -49,11 +51,43 @@ MONITOR_NOTIFIER = (
     else NoopMonitorNotifier()
 )
 
+HERMES_SETTINGS = SETTINGS.notifications.hermes_weixin
+HERMES_SENDER = (
+    HermesWeixinSender(
+        HermesWeixinConfig(
+            enabled=HERMES_SETTINGS.enabled,
+            ssh_host=HERMES_SETTINGS.ssh_host,
+            ssh_user=HERMES_SETTINGS.ssh_user,
+            hermes_home=HERMES_SETTINGS.hermes_home,
+            hermes_bin=HERMES_SETTINGS.hermes_bin,
+            target=HERMES_SETTINGS.target,
+            timeout_seconds=HERMES_SETTINGS.timeout_seconds,
+        )
+    )
+    if HERMES_SETTINGS.enabled
+    else None
+)
+
+COOKIE_SETTINGS = SETTINGS.cookie_liveness
+COOKIE_LIVENESS_SERVICE = CookieLivenessService(
+    crawler=UPSTREAM_CLIENT,
+    config=CookieLivenessConfig(
+        enabled=COOKIE_SETTINGS.enabled,
+        interval_hours=COOKIE_SETTINGS.interval_hours,
+        stale_days=COOKIE_SETTINGS.stale_days,
+        sample_user_count=COOKIE_SETTINGS.sample_user_count,
+        min_samples=COOKIE_SETTINGS.min_samples,
+        alert_cooldown_hours=COOKIE_SETTINGS.alert_cooldown_hours,
+    ),
+    alerter=HERMES_SENDER,
+)
+
 monitor_service = MonitorService(
     crawler=UPSTREAM_CLIENT,
     storage=MONITOR_STORAGE,
     download_root=SETTINGS.monitor.download_root,
     notifier=MONITOR_NOTIFIER,
+    cookie_liveness_service=COOKIE_LIVENESS_SERVICE,
 )
 
 

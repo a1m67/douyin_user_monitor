@@ -15,6 +15,7 @@ from douyin_user_monitor.monitor.history_sync import (
     build_history_sync_state,
     normalize_history_sync_state,
 )
+from douyin_user_monitor.monitor.cookie_liveness import CookieLivenessService
 from douyin_user_monitor.monitor.notifier import MonitorNotifierProtocol, NoopMonitorNotifier
 from douyin_user_monitor.monitor.profile_parser import ACCOUNT_STATUS_NORMAL
 from douyin_user_monitor.monitor.schedule import (
@@ -53,11 +54,13 @@ class MonitorService:
         storage: MonitorStorage,
         download_root: Path,
         notifier: Optional[MonitorNotifierProtocol] = None,
+        cookie_liveness_service: Optional[CookieLivenessService] = None,
     ):
         self._crawler = crawler
         self._storage = storage
         self._downloader = AwemeAssetDownloader(download_root)
         self._notifier = notifier or NoopMonitorNotifier()
+        self._cookie_liveness_service = cookie_liveness_service
         self._sync_service = UserSyncService(
             crawler=self._crawler,
             downloader=self._downloader,
@@ -428,6 +431,7 @@ class MonitorService:
             users = self._enabled_users(state)
             summary = await self._sync_service.sync_users(users, build_interval_gaps(len(users)))
             self._save_summary(state, summary)
+            await self._maybe_run_cookie_liveness(state)
 
     async def _run_coverage_cycle(self) -> float:
         async with self._run_lock:
@@ -461,6 +465,7 @@ class MonitorService:
                         await asyncio.sleep(delay)
 
                 self._save_summary(state, summary)
+                await self._maybe_run_cookie_liveness(state)
                 elapsed = monotonic() - cycle_start
                 return max(0.0, cycle_seconds - elapsed)
             finally:
@@ -525,6 +530,21 @@ class MonitorService:
             *priority_users,
             *[user for user in pending_users if user.get("id") not in priority_ids],
         ]
+
+    async def _maybe_run_cookie_liveness(self, state: Dict[str, Any]) -> None:
+        service = self._cookie_liveness_service
+        if service is None:
+            return
+        try:
+            await service.maybe_run(state)
+            self._storage.save_state(state)
+        except Exception as exc:  # noqa: BLE001
+            monitoring = state.setdefault("monitoring", {})
+            record = monitoring.setdefault("cookie_liveness", {})
+            record["last_error"] = str(exc)
+            record["updated_at"] = utc_now()
+            monitoring["updated_at"] = utc_now()
+            self._storage.save_state(state)
 
     def _save_summary(self, state: Dict[str, Any], summary: Dict[str, Any]) -> None:
         monitoring = state["monitoring"]

@@ -49,8 +49,30 @@ class TelegramSettings:
 
 
 @dataclass(frozen=True)
+class HermesWeixinSettings:
+    enabled: bool
+    ssh_host: str
+    ssh_user: str
+    hermes_home: str
+    hermes_bin: str
+    target: str
+    timeout_seconds: float
+
+
+@dataclass(frozen=True)
 class NotificationSettings:
     telegram: TelegramSettings
+    hermes_weixin: HermesWeixinSettings
+
+
+@dataclass(frozen=True)
+class CookieLivenessSettings:
+    enabled: bool
+    interval_hours: float
+    stale_days: float
+    sample_user_count: int
+    min_samples: int
+    alert_cooldown_hours: float
 
 
 @dataclass(frozen=True)
@@ -59,6 +81,22 @@ class Settings:
     upstream: UpstreamSettings
     monitor: MonitorSettings
     notifications: NotificationSettings
+    cookie_liveness: CookieLivenessSettings
+
+
+DEFAULT_COOKIE_LIVENESS_ENABLED = True
+DEFAULT_COOKIE_LIVENESS_INTERVAL_HOURS = 6.0
+DEFAULT_COOKIE_LIVENESS_STALE_DAYS = 7.0
+DEFAULT_COOKIE_LIVENESS_SAMPLE_USER_COUNT = 5
+DEFAULT_COOKIE_LIVENESS_MIN_SAMPLES = 3
+DEFAULT_COOKIE_LIVENESS_ALERT_COOLDOWN_HOURS = 12.0
+DEFAULT_HERMES_WEIXIN_ENABLED = False
+DEFAULT_HERMES_WEIXIN_SSH_HOST = "hermes.example.test"
+DEFAULT_HERMES_WEIXIN_SSH_USER = "root"
+DEFAULT_HERMES_WEIXIN_HOME = "/opt/hermes"
+DEFAULT_HERMES_WEIXIN_BIN = "/opt/hermes/bin/hermes"
+DEFAULT_HERMES_WEIXIN_TARGET = "weixin"
+DEFAULT_HERMES_WEIXIN_TIMEOUT_SECONDS = 60.0
 
 
 def load_settings() -> Settings:
@@ -68,6 +106,8 @@ def load_settings() -> Settings:
     monitor_raw = _ensure_dict(raw.get("monitor", {}), "monitor")
     notification_raw = _ensure_dict(raw.get("notifications", {}), "notifications")
     telegram_raw = _ensure_dict(notification_raw.get("telegram", {}), "notifications.telegram")
+    hermes_raw = _ensure_dict(notification_raw.get("hermes_weixin", {}), "notifications.hermes_weixin")
+    cookie_raw = _ensure_dict(raw.get("cookie_liveness", {}), "cookie_liveness")
 
     base_url = os.getenv(UPSTREAM_ENV, "") or str(
         upstream_raw.get("base_url", DEFAULT_UPSTREAM_BASE_URL)
@@ -120,6 +160,55 @@ def load_settings() -> Settings:
     if tg_timeout_seconds <= 0:
         raise ValueError("notifications.telegram.timeout_seconds 必须大于 0")
 
+    hermes_enabled = _parse_bool(
+        hermes_raw.get("enabled", DEFAULT_HERMES_WEIXIN_ENABLED)
+    )
+    hermes_host = str(hermes_raw.get("ssh_host", DEFAULT_HERMES_WEIXIN_SSH_HOST)).strip()
+    hermes_user = str(hermes_raw.get("ssh_user", DEFAULT_HERMES_WEIXIN_SSH_USER)).strip() or "root"
+    hermes_home = str(hermes_raw.get("hermes_home", DEFAULT_HERMES_WEIXIN_HOME)).strip()
+    hermes_bin = str(hermes_raw.get("hermes_bin", DEFAULT_HERMES_WEIXIN_BIN)).strip()
+    hermes_target = str(hermes_raw.get("target", DEFAULT_HERMES_WEIXIN_TARGET)).strip() or "weixin"
+    hermes_timeout_raw = str(
+        hermes_raw.get("timeout_seconds", DEFAULT_HERMES_WEIXIN_TIMEOUT_SECONDS)
+    ).strip()
+    try:
+        hermes_timeout_seconds = float(hermes_timeout_raw)
+    except ValueError as exc:
+        raise ValueError("notifications.hermes_weixin.timeout_seconds 必须是数字") from exc
+    if hermes_enabled:
+        if not hermes_host:
+            raise ValueError("启用 hermes 微信通知时必须设置 notifications.hermes_weixin.ssh_host")
+        if not hermes_home:
+            raise ValueError("启用 hermes 微信通知时必须设置 notifications.hermes_weixin.hermes_home")
+        if not hermes_bin:
+            raise ValueError("启用 hermes 微信通知时必须设置 notifications.hermes_weixin.hermes_bin")
+        if hermes_timeout_seconds <= 0:
+            raise ValueError("notifications.hermes_weixin.timeout_seconds 必须大于 0")
+
+    cookie_enabled = _parse_bool(cookie_raw.get("enabled", DEFAULT_COOKIE_LIVENESS_ENABLED))
+    cookie_interval = _parse_positive_float(
+        cookie_raw.get("interval_hours", DEFAULT_COOKIE_LIVENESS_INTERVAL_HOURS),
+        "cookie_liveness.interval_hours",
+    )
+    cookie_stale_days = _parse_positive_float(
+        cookie_raw.get("stale_days", DEFAULT_COOKIE_LIVENESS_STALE_DAYS),
+        "cookie_liveness.stale_days",
+    )
+    cookie_sample_count = _parse_positive_int(
+        cookie_raw.get("sample_user_count", DEFAULT_COOKIE_LIVENESS_SAMPLE_USER_COUNT),
+        "cookie_liveness.sample_user_count",
+    )
+    cookie_min_samples = _parse_positive_int(
+        cookie_raw.get("min_samples", DEFAULT_COOKIE_LIVENESS_MIN_SAMPLES),
+        "cookie_liveness.min_samples",
+    )
+    cookie_cooldown = _parse_positive_float(
+        cookie_raw.get("alert_cooldown_hours", DEFAULT_COOKIE_LIVENESS_ALERT_COOLDOWN_HOURS),
+        "cookie_liveness.alert_cooldown_hours",
+    )
+    if cookie_min_samples > cookie_sample_count:
+        raise ValueError("cookie_liveness.min_samples 不能大于 sample_user_count")
+
     return Settings(
         project_root=project_root,
         upstream=UpstreamSettings(base_url=base_url, timeout_seconds=timeout_seconds),
@@ -134,7 +223,24 @@ def load_settings() -> Settings:
                 chat_id=tg_chat_id,
                 api_base=tg_api_base,
                 timeout_seconds=tg_timeout_seconds,
-            )
+            ),
+            hermes_weixin=HermesWeixinSettings(
+                enabled=hermes_enabled,
+                ssh_host=hermes_host,
+                ssh_user=hermes_user,
+                hermes_home=hermes_home,
+                hermes_bin=hermes_bin,
+                target=hermes_target,
+                timeout_seconds=hermes_timeout_seconds,
+            ),
+        ),
+        cookie_liveness=CookieLivenessSettings(
+            enabled=cookie_enabled,
+            interval_hours=cookie_interval,
+            stale_days=cookie_stale_days,
+            sample_user_count=cookie_sample_count,
+            min_samples=cookie_min_samples,
+            alert_cooldown_hours=cookie_cooldown,
         ),
     )
 
@@ -177,3 +283,23 @@ def _parse_bool(value: Any) -> bool:
     if text in {"0", "false", "no", "off", ""}:
         return False
     raise ValueError(f"布尔配置值无效: {value}")
+
+
+def _parse_positive_float(value: Any, name: str) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{name} 必须是数字") from exc
+    if number <= 0:
+        raise ValueError(f"{name} 必须大于 0")
+    return number
+
+
+def _parse_positive_int(value: Any, name: str) -> int:
+    try:
+        number = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{name} 必须是整数") from exc
+    if number <= 0:
+        raise ValueError(f"{name} 必须大于 0")
+    return number

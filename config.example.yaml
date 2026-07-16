@@ -23,3 +23,27 @@ notifications:
     # 请求超时（秒）
     timeout_seconds: 10
 
+  hermes_weixin:
+    # 是否开启 Hermes 微信失效告警（SSH 到 ubuntu 执行 hermes send）
+    enabled: false
+    ssh_host: "hermes.example.test"
+    ssh_user: "root"
+    hermes_home: "/opt/hermes"
+    hermes_bin: "/opt/hermes/bin/hermes"
+    target: "weixin"
+    timeout_seconds: 60
+
+cookie_liveness:
+  # 是否开启 Cookie 定时测活
+  enabled: true
+  # 测活间隔（小时）
+  interval_hours: 6
+  # 最新作品早于该天数视为过期信号
+  stale_days: 7
+  # 抽样用户数
+  sample_user_count: 5
+  # 最少成功样本数（不足则判定 unknown，不告警）
+  min_samples: 3
+  # 失效告警冷却（小时）
+  alert_cooldown_hours: 12
+
