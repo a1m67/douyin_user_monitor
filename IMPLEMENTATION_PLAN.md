@@ -24,9 +24,9 @@
 
 ## Phase 2 - Video / Show / Episode 数据模型
 
-- [ ] 引入 SQLite 数据库和可重复执行的 schema migration。
-- [ ] 实现 Account、Video、Show、Episode、EpisodeSource、Notification 数据访问层。
-- [ ] 迁移已有 JSON 账号及旧 `downloaded_aweme_ids` 基线，保证 `aweme_id` 唯一。
+- [x] 引入 SQLite 数据库和可重复执行的 schema migration。
+- [x] 实现 Account、Video、Show、Episode、EpisodeSource、Notification 数据访问层。
+- [x] 迁移已有 JSON 账号及旧 `downloaded_aweme_ids` 基线，保证 `aweme_id` 唯一。
 
 验证：数据库唯一约束、同剧同集来源去重和迁移测试。
 
