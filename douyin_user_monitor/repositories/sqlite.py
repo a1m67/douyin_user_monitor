@@ -877,6 +877,11 @@ class ShortDramaRepository:
         for episode in episodes:
             episode["sources"] = self.get_episode_sources(int(episode["id"]))
         show["episodes"] = episodes
+        latest_episode = int(show["latest_episode"] or 0)
+        known_numbers = {int(episode["episode_number"]) for episode in episodes}
+        show["missing_episode_numbers"] = [
+            number for number in range(1, latest_episode + 1) if number not in known_numbers
+        ]
         return show
 
     def list_show_candidates(self) -> list[dict[str, Any]]:

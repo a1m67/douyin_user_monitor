@@ -19,6 +19,8 @@
 - 规则解析器支持书名号、`第 27 集`、`27集`、`EP27`、`EP.27`、`Episode 27`、`27/100`、`27-100` 和中文数字。
 - 三态分类：明确短剧名和集数为 `matched`；没有短剧 / 剧集信号的普通视频为 `ignored`；仅有短剧或集数线索但无法可靠归档的作品才进入 `/review`。
 - 首次添加账号同步最近作品作为历史基线，默认不通知；后续新剧集才通知。
+- 历史补全使用独立 cursor 状态，每次只执行一页，支持暂停、继续、失败恢复和重复页幂等；历史补全不发送旧集通知。
+- 账号页展示历史扫描状态、页数、扫描作品数和新增作品数；短剧详情根据已入库集数提示数据库缺集，不推断作者是否发布过缺失集。
 - Telegram 和飞书 Webhook 通知；每个渠道的成功或失败都会记录，失败不会回滚 Video / Episode。
 - 按账号的 `next_check_at` 错峰巡检，有限并发和指数退避避免单个账号错误影响其他账号。
 - Dashboard：`/shows`、`/shows/{id}`、`/accounts`、`/videos`、`/review`、`/status`，以及 JSON 健康检查 `/health`。
@@ -83,9 +85,10 @@ PowerShell 下可将 `.venv/Scripts/python` 替换为 `.venv\Scripts\python.exe`
 
 1. 打开 `/accounts`，添加抖音作者主页并设置检查间隔。
 2. 首次“立即检查”会保存最近 `INITIAL_SYNC_LIMIT` 个作品作为历史基线，默认不发送通知。
-3. 后续巡检发现新作品时，系统根据规则识别短剧和集数。
-4. 无法可靠识别的作品在 `/review` 中选择已有短剧或新建短剧，再确认集数。
-5. 在 `/shows` 查看最近更新；点击短剧可查看每一集及全部来源账号。
+3. 如果需要补全更早作品，在账号行点击“开始补全历史”，再按页点击“执行下一页”；可随时暂停或继续。
+4. 后续巡检只抓取最新一页作品，系统根据规则识别短剧和集数。
+5. 无法可靠识别的作品在 `/review` 中选择已有短剧或新建短剧，再确认集数。
+6. 在 `/shows` 查看最近更新；点击短剧可查看每一集、全部来源账号和数据库缺集提示。
 
 ## 配置
 
@@ -96,6 +99,8 @@ PowerShell 下可将 `.venv/Scripts/python` 替换为 `.venv\Scripts\python.exe`
 | `MAX_CONCURRENT_CHECKS` | `3` | 同时请求的账号上限。 |
 | `MAX_BACKOFF_MINUTES` | `60` | 连续失败时的退避上限。 |
 | `INITIAL_SYNC_LIMIT` | `20` | 首次同步最近作品数。 |
+| `INCREMENTAL_FETCH_LIMIT` | `30` | 首次同步之后每次日常巡检抓取的最新作品数。 |
+| `HISTORY_BACKFILL_PAGE_SIZE` | `50` | 手动历史补全每页扫描作品数。 |
 | `NOTIFY_ON_INITIAL_SYNC` | `false` | 是否为历史基线发送通知。 |
 | `AUTO_ACCEPT_CONFIDENCE` | `0.8` | 自动归档最低解析置信度。 |
 | `DOUYIN_COOKIE_FILE` | `data/cookies.json` | Cookie 文件路径。 |
@@ -112,16 +117,17 @@ Episode 1 --- * Notification
 ```
 
 - `Account` 是抖音作者，保存启用状态、单账号检查间隔、最近检查、错误和退避状态。
+- `Account` 还保存历史补全状态、cursor、扫描页数、扫描数量、新增数量及失败恢复时间点。
 - `Video` 以 `aweme_id` 唯一保存原始作品和解析结果。
 - `Show` 表示一部短剧，`normalized_title` 和 aliases 用于匹配。
 - `Episode` 是某一部剧的某一集；`EpisodeSource` 记录不同账号的同集来源。
 - `Notification` 记录每次渠道发送的结果。
 
-已有 `data/monitor_users.json` 会在新 SQLite 数据库首次创建时自动迁移账号及已下载 aweme ID 基线，避免升级后重复解析和通知旧作品。
+已有 `data/monitor_users.json` 会在新 SQLite 数据库首次创建时自动迁移账号及已下载 aweme ID 基线，避免升级后重复解析和通知旧作品。历史补全状态通过 SQLite v3 增量字段迁移，不需要删除数据库；旧账号默认处于 `idle`，由用户主动开始补全。
 
 ## Provider 和解析器
 
-`BuiltinDouyinProvider` 包装现有进程内 crawler。以后可新增 `PlaywrightDouyinProvider`、`ApiDouyinProvider` 或第三方 Provider，而不用更改短剧业务服务。
+`BuiltinDouyinProvider` 包装现有进程内 crawler。现有 `get_latest_videos()` 仍负责日常最新一页；新增 `get_video_page()` 只为用户主动历史补全提供 cursor 分页。以后可新增 `PlaywrightDouyinProvider`、`ApiDouyinProvider` 或第三方 Provider，而不用更改短剧业务服务。
 
 `EpisodeParser` 当前只启用 `RegexParser`，并预留 `EpisodeParserBackend` 接口给未来的 LLM、OCR 或 ASR 后端。当前不会下载视频、抽帧、OCR、Whisper 或绕过验证码。
 

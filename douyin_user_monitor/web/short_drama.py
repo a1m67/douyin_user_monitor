@@ -10,7 +10,11 @@ from pydantic import BaseModel, Field
 
 from douyin_user_monitor.notifiers.dispatcher import NotificationDispatcher
 from douyin_user_monitor.repositories.sqlite import ShortDramaRepository
-from douyin_user_monitor.services.episode_pipeline import ShortDramaPipeline, SyncResult
+from douyin_user_monitor.services.episode_pipeline import (
+    HistoryBackfillResult,
+    ShortDramaPipeline,
+    SyncResult,
+)
 
 
 class SchedulerStatus(Protocol):
@@ -176,6 +180,38 @@ def create_short_drama_router(
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"result": _sync_result(result)}
 
+    @api.post("/accounts/{account_id}/history/start")
+    async def start_history_backfill(account_id: str) -> dict[str, Any]:
+        try:
+            account = pipeline.start_history_backfill(account_id)
+        except (ValueError, KeyError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"account": account}
+
+    @api.post("/accounts/{account_id}/history/pause")
+    async def pause_history_backfill(account_id: str) -> dict[str, Any]:
+        try:
+            account = pipeline.pause_history_backfill(account_id)
+        except (ValueError, KeyError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"account": account}
+
+    @api.post("/accounts/{account_id}/history/resume")
+    async def resume_history_backfill(account_id: str) -> dict[str, Any]:
+        try:
+            account = pipeline.resume_history_backfill(account_id)
+        except (ValueError, KeyError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"account": account}
+
+    @api.post("/accounts/{account_id}/history/next-page")
+    async def run_history_backfill_page(account_id: str) -> dict[str, Any]:
+        try:
+            result = await pipeline.run_history_backfill_page(account_id)
+        except (ValueError, KeyError, RuntimeError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"result": _history_backfill_result(result)}
+
     @api.get("/videos")
     async def list_videos(
         needs_review: bool | None = None,
@@ -248,4 +284,16 @@ def _sync_result(result: SyncResult) -> dict[str, Any]:
         "review_videos": result.review_videos,
         "ignored_videos": result.ignored_videos,
         "new_episode_count": len(result.new_episode_updates),
+    }
+
+
+def _history_backfill_result(result: HistoryBackfillResult) -> dict[str, Any]:
+    return {
+        "account_id": result.account["id"],
+        "history_sync": result.account["history_sync"],
+        "fetched_videos": result.fetched_videos,
+        "new_videos": result.new_videos,
+        "duplicate_videos": result.duplicate_videos,
+        "review_videos": result.review_videos,
+        "ignored_videos": result.ignored_videos,
     }

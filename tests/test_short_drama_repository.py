@@ -231,6 +231,23 @@ class ShortDramaRepositoryTests(unittest.TestCase):
         self.assertEqual(resumed["history_sync_status"], "running")
         self.assertEqual(resumed["history_sync"]["scanned_items"], 50)
 
+    def test_show_detail_reports_database_episode_gaps(self):
+        account = self.create_account("gap-sec")
+        show = self.repository.create_show(title="缺集短剧", normalized_title="缺集短剧")
+        for number in (1, 2, 3, 5, 6, 8):
+            video = self.create_video(account["id"], f"gap-{number}")
+            self.repository.record_episode_source(
+                show_id=show["id"],
+                episode_number=number,
+                video_id=video["id"],
+                account_id=account["id"],
+                published_at=video["publish_time"],
+            )
+
+        detail = self.repository.get_show_detail(show["id"])
+
+        self.assertEqual(detail["missing_episode_numbers"], [4, 7])
+
     def test_batch_ignore_only_changes_review_videos(self):
         account = self.create_account()
         review_video = self.create_video(account["id"], "review-1")

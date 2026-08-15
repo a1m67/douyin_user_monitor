@@ -7,7 +7,12 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from douyin_user_monitor.providers.base import ProviderAccount, ProviderProfile, ProviderVideo
+from douyin_user_monitor.providers.base import (
+    ProviderAccount,
+    ProviderProfile,
+    ProviderVideo,
+    ProviderVideoPage,
+)
 from douyin_user_monitor.providers.fake import FakeDouyinProvider
 from douyin_user_monitor.repositories.sqlite import ShortDramaRepository
 from douyin_user_monitor.services.episode_pipeline import ShortDramaPipeline
@@ -43,6 +48,8 @@ class ShortDramaWebTests(unittest.IsolatedAsyncioTestCase):
         app.include_router(create_short_drama_router(repository=repository, pipeline=pipeline))
         self.client = TestClient(app)
         self.repository = repository
+        self.provider = provider
+        self.pipeline = pipeline
 
     async def asyncTearDown(self) -> None:
         self.temp_dir.cleanup()
@@ -54,11 +61,14 @@ class ShortDramaWebTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("人工审核", response.text)
         self.assertIn("startEditAccount", response.text)
         self.assertIn("batchIgnoreReviews", response.text)
+        self.assertIn("startHistoryBackfill", response.text)
+        self.assertIn("缺失集数", response.text)
 
         payload = self.client.get("/api/short-drama/shows").json()
         self.assertEqual(payload["shows"][0]["title"], "末日重生")
         detail = self.client.get(f"/api/short-drama/shows/{payload['shows'][0]['id']}").json()
         self.assertEqual(detail["show"]["episodes"][0]["episode_number"], 12)
+        self.assertIn(1, detail["show"]["missing_episode_numbers"])
 
     async def test_account_endpoint_updates_editable_fields(self):
         account = self.repository.list_accounts()[0]
@@ -151,6 +161,40 @@ class ShortDramaWebTests(unittest.IsolatedAsyncioTestCase):
             self.client.get("/api/short-drama/videos?classification_status=review").json()["videos"],
             [],
         )
+
+    async def test_history_backfill_endpoints_control_one_page_at_a_time(self):
+        account = self.repository.list_accounts()[0]
+        self.provider.video_pages_by_sec_uid["sec-1"] = {
+            0: ProviderVideoPage(
+                videos=(
+                    ProviderVideo(
+                        aweme_id="history-1002",
+                        description="《末日重生》第13集",
+                        hashtags=("末日重生",),
+                        publish_time="2026-08-15T12:32:00+00:00",
+                        video_url="https://www.douyin.com/video/history-1002",
+                        cover_url=None,
+                        raw={"aweme_id": "history-1002"},
+                    ),
+                ),
+                next_cursor=50,
+                has_more=False,
+            )
+        }
+
+        started = self.client.post(f"/api/short-drama/accounts/{account['id']}/history/start")
+        paused = self.client.post(f"/api/short-drama/accounts/{account['id']}/history/pause")
+        resumed = self.client.post(f"/api/short-drama/accounts/{account['id']}/history/resume")
+        page = self.client.post(f"/api/short-drama/accounts/{account['id']}/history/next-page")
+
+        self.assertEqual(started.status_code, 200)
+        self.assertEqual(started.json()["account"]["history_sync_status"], "pending")
+        self.assertEqual(paused.status_code, 200)
+        self.assertEqual(paused.json()["account"]["history_sync_status"], "paused")
+        self.assertEqual(resumed.status_code, 200)
+        self.assertEqual(page.status_code, 200)
+        self.assertEqual(page.json()["result"]["new_videos"], 1)
+        self.assertEqual(page.json()["result"]["history_sync"]["status"], "completed")
 
 
 if __name__ == "__main__":

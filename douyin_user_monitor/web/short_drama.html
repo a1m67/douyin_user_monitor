@@ -67,7 +67,7 @@
     .show-episode { color: var(--accent); font-weight: 700; font-size: 22px; }
     .show-meta { display: flex; justify-content: space-between; color: var(--muted); font-size: 12px; gap: 10px; }
     .table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
-    table { width: 100%; border-collapse: collapse; min-width: 760px; }
+    table { width: 100%; border-collapse: collapse; min-width: 1080px; }
     th { background: #f1f4f6; color: #44515d; text-align: left; font-weight: 600; white-space: nowrap; }
     th, td { padding: 11px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
     tr:last-child td { border-bottom: 0; }
@@ -77,6 +77,8 @@
     .badge { display: inline-block; padding: 3px 7px; border-radius: 3px; background: var(--accent-soft); color: #075b57; font-size: 12px; font-weight: 600; }
     .badge.paused { background: var(--yellow-soft); color: var(--yellow); }
     .badge.completed { background: var(--blue-soft); color: var(--blue); }
+    .badge.pending, .badge.running { background: var(--accent-soft); color: #075b57; }
+    .badge.failed { background: var(--red-soft); color: var(--red); }
     .badge.review { background: var(--yellow-soft); color: var(--yellow); }
     .badge.ignored { background: #eef1f3; color: #5b6670; }
     .empty { padding: 48px 20px; border: 1px dashed #bcc6cd; text-align: center; color: var(--muted); background: #fbfcfd; }
@@ -86,6 +88,7 @@
     .episode-row:last-child { border-bottom: 0; }
     .episode-row h3 { margin: 0 0 6px; font-size: 16px; }
     .source-list { margin: 8px 0 0; padding: 0; list-style: none; display: grid; gap: 6px; color: var(--muted); font-size: 13px; }
+    .missing-episodes { margin: 12px 0 0; padding: 10px 12px; border-left: 3px solid var(--yellow); background: #fffaf0; color: #76520f; font-size: 13px; }
     .review { display: grid; grid-template-columns: 70px minmax(0, 1fr) 300px; gap: 16px; padding: 16px; border: 1px solid var(--line); background: var(--surface); border-radius: var(--radius); margin-bottom: 12px; }
     .cover { width: 70px; height: 94px; background: #e8ecef; object-fit: cover; border-radius: 3px; }
     .review h2 { font-size: 16px; margin: 0 0 6px; }
@@ -176,6 +179,7 @@
     function empty(text) { return `<div class="empty">${escapeHtml(text)}</div>`; }
     function statusBadge(status) { return `<span class="badge ${escapeHtml(status)}">${escapeHtml({updating:"追更中", completed:"已完结", paused:"已暂停"}[status] || status)}</span>`; }
     function classificationBadge(status) { return `<span class="badge ${escapeHtml(status)}">${escapeHtml({matched:"已匹配", ignored:"已忽略", review:"待审核"}[status] || status)}</span>`; }
+    function historyStatusBadge(status) { return `<span class="badge ${escapeHtml(status)}">${escapeHtml({idle:"未开始", pending:"等待执行", running:"补全中", paused:"已暂停", completed:"历史扫描完成", failed:"补全失败"}[status] || status)}</span>`; }
 
     async function renderShows() {
       nav("shows", "最近更新短剧");
@@ -186,7 +190,9 @@
       nav("shows", "短剧详情");
       const data = await request(`/shows/${id}`);
       const show = data.show;
-      app.innerHTML = `<div class="page-head"><div><h1>${escapeHtml(show.title)}</h1><p class="subtitle">${show.aliases.length ? `别名：${escapeHtml(show.aliases.join("、"))}` : "暂无别名"}</p></div><a href="/shows"><button class="secondary">返回列表</button></a></div><div class="detail"><section class="detail-main"><div class="show-meta"><span>${statusBadge(show.status)}</span><span>最新：${show.latest_episode ? `第 ${show.latest_episode} 集` : "-"}</span><span>${formatTime(show.latest_update_at, "未更新")}</span></div><div>${show.episodes.length ? show.episodes.map(episode => `<article class="episode-row"><h3>第 ${episode.episode_number} 集</h3><div class="muted">首次发布：${formatTime(episode.published_at)}</div><ul class="source-list">${episode.sources.map(source => `<li>${escapeHtml(source.account_nickname)} · ${formatTime(source.published_at)} · <a href="${escapeHtml(source.video_url)}" target="_blank" rel="noreferrer">查看抖音</a></li>`).join("")}</ul></article>`).join("") : empty("还没有剧集")}</div></section><aside class="detail-side"><h2>短剧设置</h2><label class="field">状态<select id="showStatus"><option value="updating">追更中</option><option value="completed">已完结</option><option value="paused">已暂停</option></select></label><label class="field" style="margin-top:10px">别名（逗号分隔）<input id="showAliases" value="${escapeHtml(show.aliases.join(", "))}" /></label><button style="margin-top:12px" onclick="saveShow(${show.id})">保存</button></aside></div>`;
+      const missingEpisodes = show.missing_episode_numbers || [];
+      const missingText = missingEpisodes.length ? missingEpisodes.join("、") : "无";
+      app.innerHTML = `<div class="page-head"><div><h1>${escapeHtml(show.title)}</h1><p class="subtitle">${show.aliases.length ? `别名：${escapeHtml(show.aliases.join("、"))}` : "暂无别名"}</p></div><a href="/shows"><button class="secondary">返回列表</button></a></div><div class="detail"><section class="detail-main"><div class="show-meta"><span>${statusBadge(show.status)}</span><span>最新：${show.latest_episode ? `第 ${show.latest_episode} 集` : "-"}</span><span>${formatTime(show.latest_update_at, "未更新")}</span></div><div class="missing-episodes">缺失集数：${escapeHtml(missingText)}</div><div>${show.episodes.length ? show.episodes.map(episode => `<article class="episode-row"><h3>第 ${episode.episode_number} 集</h3><div class="muted">首次发布：${formatTime(episode.published_at)}</div><ul class="source-list">${episode.sources.map(source => `<li>${escapeHtml(source.account_nickname)} · ${formatTime(source.published_at)} · <a href="${escapeHtml(source.video_url)}" target="_blank" rel="noreferrer">查看抖音</a></li>`).join("")}</ul></article>`).join("") : empty("还没有剧集")}</div></section><aside class="detail-side"><h2>短剧设置</h2><label class="field">状态<select id="showStatus"><option value="updating">追更中</option><option value="completed">已完结</option><option value="paused">已暂停</option></select></label><label class="field" style="margin-top:10px">别名（逗号分隔）<input id="showAliases" value="${escapeHtml(show.aliases.join(", "))}" /></label><button style="margin-top:12px" onclick="saveShow(${show.id})">保存</button></aside></div>`;
       document.getElementById("showStatus").value = show.status;
     }
     async function saveShow(id) {
@@ -194,17 +200,31 @@
     }
     function accountEditor(account) {
       if (editingAccountId !== account.id) return "";
-      return `<tr class="account-editor"><td colspan="8"><div class="account-edit-fields"><label class="field">昵称<input id="editAccountNickname-${account.id}" value="${escapeHtml(account.nickname)}" /></label><label class="field">抖音作者主页<input id="editAccountUrl-${account.id}" value="${escapeHtml(account.homepage_url)}" /></label><label class="field">检查间隔（分钟）<input id="editAccountInterval-${account.id}" type="number" min="1" max="1440" value="${account.check_interval_minutes}" /></label><div class="table-actions"><button class="small" onclick="saveAccount('${account.id}')">保存</button><button class="secondary small" onclick="cancelAccountEdit()">取消</button></div></div></td></tr>`;
+      return `<tr class="account-editor"><td colspan="11"><div class="account-edit-fields"><label class="field">昵称<input id="editAccountNickname-${account.id}" value="${escapeHtml(account.nickname)}" /></label><label class="field">抖音作者主页<input id="editAccountUrl-${account.id}" value="${escapeHtml(account.homepage_url)}" /></label><label class="field">检查间隔（分钟）<input id="editAccountInterval-${account.id}" type="number" min="1" max="1440" value="${account.check_interval_minutes}" /></label><div class="table-actions"><button class="small" onclick="saveAccount('${account.id}')">保存</button><button class="secondary small" onclick="cancelAccountEdit()">取消</button></div></div></td></tr>`;
+    }
+    function historyActions(account) {
+      const history = account.history_sync || {status:"idle"};
+      if (history.status === "idle") return `<button class="secondary small" onclick="startHistoryBackfill('${account.id}')">开始补全历史</button>`;
+      if (history.status === "completed") return `<button class="secondary small" onclick="startHistoryBackfill('${account.id}')">重新开始</button>`;
+      if (history.status === "paused" || history.status === "failed") return `<button class="secondary small" onclick="resumeHistoryBackfill('${account.id}')">继续</button>`;
+      return `<button class="secondary small" onclick="runHistoryBackfillPage('${account.id}')">执行下一页</button><button class="secondary small" onclick="pauseHistoryBackfill('${account.id}')">暂停</button>`;
     }
     async function renderAccounts() {
       nav("accounts", "作者账号");
       const data = await request("/accounts");
       if (editingAccountId && !data.accounts.some(account => account.id === editingAccountId)) editingAccountId = null;
-      const accountRows = data.accounts.map(account => `<tr><td><strong>${escapeHtml(account.nickname)}</strong><br><span class="muted">${escapeHtml(account.sec_uid)}</span></td><td>${account.enabled ? "启用" : "停用"}</td><td>${account.check_interval_minutes} 分钟</td><td>${formatTime(account.last_checked_at, "未检查")}</td><td>${formatTime(account.next_check_at, "等待调度")}</td><td>${account.consecutive_failures}</td><td>${escapeHtml(account.last_error || "-")}</td><td><div class="table-actions"><button class="secondary small" onclick="checkAccount('${account.id}')">立即检查</button><button class="secondary small" onclick="startEditAccount('${account.id}')">编辑</button><button class="secondary small" onclick="toggleAccount('${account.id}', ${!account.enabled})">${account.enabled ? "停用" : "启用"}</button><button class="danger small" onclick="deleteAccount('${account.id}')">删除</button></div></td></tr>${accountEditor(account)}`).join("");
-      app.innerHTML = `<div class="page-head"><div><h1>作者账号</h1><p class="subtitle">每个账号可设置自己的检查频率，也可手动检查。</p></div></div><div class="toolbar"><label class="field">抖音作者主页<input id="newAccountUrl" placeholder="https://www.douyin.com/user/..." /></label><label class="field">检查间隔（分钟）<input id="newAccountInterval" type="number" min="1" value="{{DEFAULT_CHECK_INTERVAL_MINUTES}}" /></label><button onclick="addAccount()">添加作者</button></div>${data.accounts.length ? `<div class="table-wrap"><table><thead><tr><th>作者</th><th>启用</th><th>检查间隔</th><th>最后检查</th><th>下次检查</th><th>连续失败</th><th>最后错误</th><th>操作</th></tr></thead><tbody>${accountRows}</tbody></table></div>` : empty("尚未添加作者")}`;
+      const accountRows = data.accounts.map(account => {
+        const history = account.history_sync || {status:"idle", processed_pages:0, scanned_items:0, new_videos:0, last_error:null};
+        return `<tr><td><strong>${escapeHtml(account.nickname)}</strong><br><span class="muted">${escapeHtml(account.sec_uid)}</span></td><td>${account.enabled ? "启用" : "停用"}</td><td>${account.check_interval_minutes} 分钟</td><td>${formatTime(account.last_checked_at, "未检查")}</td><td>${formatTime(account.next_check_at, "等待调度")}</td><td>${historyStatusBadge(history.status)}${history.last_error ? `<br><span class="muted">${escapeHtml(history.last_error)}</span>` : ""}</td><td>${history.processed_pages || 0} 页<br><span class="muted">${history.scanned_items || 0} 条</span></td><td>${history.new_videos || 0} 条</td><td>${account.consecutive_failures}</td><td>${escapeHtml(account.last_error || "-")}</td><td><div class="table-actions"><button class="secondary small" onclick="checkAccount('${account.id}')">立即检查</button>${historyActions(account)}<button class="secondary small" onclick="startEditAccount('${account.id}')">编辑</button><button class="secondary small" onclick="toggleAccount('${account.id}', ${!account.enabled})">${account.enabled ? "停用" : "启用"}</button><button class="danger small" onclick="deleteAccount('${account.id}')">删除</button></div></td></tr>${accountEditor(account)}`;
+      }).join("");
+      app.innerHTML = `<div class="page-head"><div><h1>作者账号</h1><p class="subtitle">每个账号可设置自己的检查频率，也可手动检查。</p></div></div><div class="toolbar"><label class="field">抖音作者主页<input id="newAccountUrl" placeholder="https://www.douyin.com/user/..." /></label><label class="field">检查间隔（分钟）<input id="newAccountInterval" type="number" min="1" value="{{DEFAULT_CHECK_INTERVAL_MINUTES}}" /></label><button onclick="addAccount()">添加作者</button></div>${data.accounts.length ? `<div class="table-wrap"><table><thead><tr><th>作者</th><th>启用</th><th>检查间隔</th><th>最后检查</th><th>下次检查</th><th>历史状态</th><th>扫描进度</th><th>新增作品</th><th>连续失败</th><th>最后错误</th><th>操作</th></tr></thead><tbody>${accountRows}</tbody></table></div>` : empty("尚未添加作者")}`;
     }
     async function addAccount() { try { const url=document.getElementById("newAccountUrl").value.trim(); const interval=Number(document.getElementById("newAccountInterval").value); await request("/accounts", {method:"POST", body:JSON.stringify({homepage_url:url, check_interval_minutes:interval})}); message("作者已添加，首次检查会建立历史基线"); await renderAccounts(); await refreshStatus(); } catch(error) { message(error.message, true); } }
     async function checkAccount(id) { try { const data=await request(`/accounts/${id}/run-once`, {method:"POST"}); message(data.result.initial_sync ? "首次同步已完成，未发送历史通知" : `检查完成，发现 ${data.result.new_videos} 个新作品`); await renderAccounts(); await refreshStatus(); } catch(error) { message(error.message, true); } }
+    async function startHistoryBackfill(id) { try { await request(`/accounts/${id}/history/start`, {method:"POST"}); message("历史补全已开始"); await renderAccounts(); } catch(error) { message(error.message, true); } }
+    async function pauseHistoryBackfill(id) { try { await request(`/accounts/${id}/history/pause`, {method:"POST"}); message("历史补全已暂停"); await renderAccounts(); } catch(error) { message(error.message, true); } }
+    async function resumeHistoryBackfill(id) { try { await request(`/accounts/${id}/history/resume`, {method:"POST"}); message("历史补全已继续"); await renderAccounts(); } catch(error) { message(error.message, true); } }
+    async function runHistoryBackfillPage(id) { try { const data=await request(`/accounts/${id}/history/next-page`, {method:"POST"}); message(`本页已扫描 ${data.result.fetched_videos} 条，新增 ${data.result.new_videos} 条`); await renderAccounts(); await refreshStatus(); } catch(error) { message(error.message, true); } }
     async function startEditAccount(id) { editingAccountId = id; await renderAccounts(); }
     async function cancelAccountEdit() { editingAccountId = null; await renderAccounts(); }
     async function saveAccount(id) { try { const nickname=document.getElementById(`editAccountNickname-${id}`).value.trim(); const homepageUrl=document.getElementById(`editAccountUrl-${id}`).value.trim(); const interval=Number(document.getElementById(`editAccountInterval-${id}`).value); await request(`/accounts/${id}`, {method:"PATCH", body:JSON.stringify({nickname, homepage_url:homepageUrl, check_interval_minutes:interval})}); editingAccountId = null; message("作者设置已保存"); await renderAccounts(); await refreshStatus(); } catch(error) { message(error.message, true); } }
