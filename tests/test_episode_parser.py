@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import unittest
 
+from douyin_user_monitor.parsers.base import IGNORED, MATCHED, REVIEW
 from douyin_user_monitor.parsers.episode_parser import EpisodeParser
 from douyin_user_monitor.parsers.regex import chinese_number_to_int, normalize_title
 
@@ -20,6 +21,7 @@ class EpisodeParserTests(unittest.TestCase):
 
     def assert_episode(self, description: str, title: str, number: int) -> None:
         result = self.parse(description)
+        self.assertEqual(result.status, MATCHED, result)
         self.assertTrue(result.is_episode, result)
         self.assertEqual(result.show_title, title)
         self.assertEqual(result.episode_number, number)
@@ -65,6 +67,7 @@ class EpisodeParserTests(unittest.TestCase):
 
     def test_episode_without_title_is_not_auto_accepted(self):
         result = self.parse("第十二集")
+        self.assertEqual(result.status, REVIEW)
         self.assertTrue(result.is_episode)
         self.assertEqual(result.episode_number, 12)
         self.assertIsNone(result.show_title)
@@ -72,7 +75,26 @@ class EpisodeParserTests(unittest.TestCase):
 
     def test_video_without_explicit_episode_number_is_not_episode(self):
         result = self.parse("这一集真的哭死我了", hashtags=["末日重生"])
+        self.assertEqual(result.status, IGNORED)
         self.assertFalse(result.is_episode)
+        self.assertIsNone(result.episode_number)
+        self.assertEqual(result.reason, "no_short_drama_or_episode_signal")
+
+    def test_known_show_without_episode_requires_review(self):
+        result = self.parse(
+            "这一集真的哭死我了",
+            hashtags=["末日重生"],
+            shows=[{"id": 3, "title": "末日重生", "aliases": ["末日"]}],
+        )
+        self.assertEqual(result.status, REVIEW)
+        self.assertEqual(result.show_title, "末日重生")
+        self.assertIsNone(result.episode_number)
+        self.assertEqual(result.reason, "known_show_without_episode")
+
+    def test_bracketed_short_drama_context_without_episode_requires_review(self):
+        result = self.parse("短剧《重生后我成了首富》持续更新")
+        self.assertEqual(result.status, REVIEW)
+        self.assertEqual(result.show_title, "重生后我成了首富")
         self.assertIsNone(result.episode_number)
 
     def test_normalization_and_chinese_numbers(self):

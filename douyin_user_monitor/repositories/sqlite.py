@@ -12,8 +12,10 @@ from pathlib import Path
 from typing import Any, Iterator, Mapping, Sequence
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 SHOW_STATUSES = frozenset({"updating", "completed", "paused"})
+VIDEO_CLASSIFICATIONS = frozenset({"matched", "ignored", "review"})
+_PLACEHOLDER_NICKNAMES = frozenset({"", "nan", "none", "null", "undefined", "n/a"})
 
 
 def utc_now() -> str:
@@ -49,9 +51,13 @@ class ShortDramaRepository:
     def initialize(self) -> None:
         with self._transaction() as connection:
             self._create_schema(connection)
+            previous_schema_version = _schema_version(self._get_meta(connection, "schema_version"))
+            self._migrate_schema(connection, previous_schema_version)
+            self._repair_placeholder_account_nicknames(connection)
             self._set_meta(connection, "schema_version", str(SCHEMA_VERSION))
             if self._get_meta(connection, "legacy_state_imported") is None:
                 self._import_legacy_state(connection)
+                self._repair_placeholder_account_nicknames(connection)
                 self._set_meta(connection, "legacy_state_imported", utc_now())
 
     @contextmanager
@@ -108,10 +114,13 @@ class ShortDramaRepository:
                 raw_json TEXT NOT NULL DEFAULT '{}',
                 is_processed INTEGER NOT NULL DEFAULT 0,
                 needs_review INTEGER NOT NULL DEFAULT 0,
+                classification_status TEXT NOT NULL DEFAULT 'ignored'
+                    CHECK (classification_status IN ('matched', 'ignored', 'review')),
                 parser_confidence REAL,
                 parsed_show_title TEXT,
                 parsed_episode_number INTEGER,
                 parser_method TEXT,
+                parser_reason TEXT,
                 created_at TEXT NOT NULL,
                 processed_at TEXT
             );
@@ -174,6 +183,46 @@ class ShortDramaRepository:
             """
         )
 
+    def _migrate_schema(self, connection: sqlite3.Connection, previous_version: int) -> None:
+        """Apply additive migrations without requiring users to recreate SQLite data."""
+        if not _table_has_column(connection, "videos", "classification_status"):
+            connection.execute(
+                "ALTER TABLE videos ADD COLUMN classification_status TEXT NOT NULL DEFAULT 'ignored'"
+            )
+        if not _table_has_column(connection, "videos", "parser_reason"):
+            connection.execute("ALTER TABLE videos ADD COLUMN parser_reason TEXT")
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_videos_classification "
+            "ON videos(classification_status, created_at DESC)"
+        )
+        if previous_version >= SCHEMA_VERSION:
+            return
+        connection.execute(
+            """
+            UPDATE videos
+            SET classification_status = CASE
+                    WHEN needs_review = 1 THEN 'review'
+                    WHEN parsed_show_title IS NOT NULL AND parsed_episode_number IS NOT NULL THEN 'matched'
+                    ELSE 'ignored'
+                END,
+                parser_reason = CASE
+                    WHEN needs_review = 1 THEN 'legacy_review'
+                    WHEN parsed_show_title IS NOT NULL AND parsed_episode_number IS NOT NULL THEN 'legacy_matched'
+                    ELSE 'legacy_ignored'
+                END
+            """
+        )
+
+    def _repair_placeholder_account_nicknames(self, connection: sqlite3.Connection) -> None:
+        rows = connection.execute("SELECT id, nickname, sec_uid FROM accounts").fetchall()
+        for row in rows:
+            if not _is_placeholder_nickname(row["nickname"]):
+                continue
+            connection.execute(
+                "UPDATE accounts SET nickname = ?, updated_at = ? WHERE id = ?",
+                (_fallback_account_nickname(str(row["sec_uid"])), utc_now(), str(row["id"])),
+            )
+
     def _get_meta(self, connection: sqlite3.Connection, key: str) -> str | None:
         row = connection.execute("SELECT value FROM app_meta WHERE key = ?", (key,)).fetchone()
         return str(row["value"]) if row else None
@@ -208,7 +257,7 @@ class ShortDramaRepository:
             return
         account_id = str(raw_user.get("id") or uuid.uuid4())
         now = utc_now()
-        nickname = str(raw_user.get("nickname") or sec_uid[:12]).strip() or sec_uid[:12]
+        nickname = _safe_account_nickname(raw_user.get("nickname"), sec_uid)
         homepage_url = str(raw_user.get("profile_url") or raw_user.get("homepage_url") or "").strip()
         created_at = str(raw_user.get("created_at") or now)
         updated_at = str(raw_user.get("updated_at") or now)
@@ -282,7 +331,7 @@ class ShortDramaRepository:
         safe_sec_uid = sec_uid.strip()
         if not safe_sec_uid:
             raise ValueError("sec_uid 不能为空")
-        safe_nickname = nickname.strip() or safe_sec_uid[:12]
+        safe_nickname = _safe_account_nickname(nickname, safe_sec_uid)
         now = utc_now()
         account_id = str(uuid.uuid4())
         with self._transaction() as connection:
@@ -514,23 +563,38 @@ class ShortDramaRepository:
         parsed_show_title: str | None = None,
         parsed_episode_number: int | None = None,
         parser_method: str | None = None,
+        classification_status: str | None = None,
+        parser_reason: str | None = None,
     ) -> dict[str, Any]:
+        resolved_status = classification_status or _classification_from_legacy_fields(
+            needs_review=needs_review,
+            parsed_show_title=parsed_show_title,
+            parsed_episode_number=parsed_episode_number,
+        )
+        _validate_video_classification(resolved_status)
+        if bool(needs_review) != (resolved_status == "review"):
+            raise ValueError("needs_review 必须与分类状态一致")
+        if bool(is_processed) == (resolved_status == "review"):
+            raise ValueError("review 视频不能标记为已处理，其他状态必须标记为已处理")
         with self._transaction() as connection:
             cursor = connection.execute(
                 """
                 UPDATE videos SET
-                    is_processed = ?, needs_review = ?, parser_confidence = ?,
+                    is_processed = ?, needs_review = ?, classification_status = ?, parser_confidence = ?,
                     parsed_show_title = ?, parsed_episode_number = ?, parser_method = ?,
+                    parser_reason = ?,
                     processed_at = ?
                 WHERE id = ?
                 """,
                 (
                     int(is_processed),
                     int(needs_review),
+                    resolved_status,
                     parser_confidence,
                     _optional_text(parsed_show_title),
                     parsed_episode_number,
                     _optional_text(parser_method),
+                    _optional_text(parser_reason),
                     utc_now() if is_processed else None,
                     video_id,
                 ),
@@ -544,21 +608,52 @@ class ShortDramaRepository:
         self,
         *,
         needs_review: bool | None = None,
+        classification_status: str | None = None,
         limit: int = 100,
     ) -> list[dict[str, Any]]:
+        if classification_status is not None:
+            _validate_video_classification(classification_status)
         safe_limit = max(1, min(int(limit), 500))
         query = """
             SELECT videos.*, accounts.nickname AS account_nickname, accounts.sec_uid AS account_sec_uid
             FROM videos JOIN accounts ON accounts.id = videos.account_id
         """
         params: list[Any] = []
+        clauses: list[str] = []
         if needs_review is not None:
-            query += " WHERE videos.needs_review = ?"
+            clauses.append("videos.needs_review = ?")
             params.append(int(needs_review))
+        if classification_status is not None:
+            clauses.append("videos.classification_status = ?")
+            params.append(classification_status)
+        if clauses:
+            query += " WHERE " + " AND ".join(clauses)
         query += " ORDER BY COALESCE(videos.publish_time, videos.created_at) DESC LIMIT ?"
         params.append(safe_limit)
         with self._transaction() as connection:
             return [_video_row(row) for row in connection.execute(query, params).fetchall()]
+
+    def ignore_review_videos(self, video_ids: Sequence[int]) -> int:
+        safe_ids = _video_ids(video_ids)
+        if not safe_ids:
+            return 0
+        placeholders = ", ".join("?" for _ in safe_ids)
+        with self._transaction() as connection:
+            cursor = connection.execute(
+                f"""
+                UPDATE videos
+                SET is_processed = 1,
+                    needs_review = 0,
+                    classification_status = 'ignored',
+                    parser_method = 'manual_ignore',
+                    parser_reason = 'manual_ignore',
+                    processed_at = ?
+                WHERE id IN ({placeholders})
+                  AND classification_status = 'review'
+                """,
+                (utc_now(), *safe_ids),
+            )
+            return int(cursor.rowcount)
 
     def create_show(
         self,
@@ -883,7 +978,7 @@ class ShortDramaRepository:
                 "enabled_accounts": _count(connection, "accounts WHERE enabled = 1"),
                 "shows": _count(connection, "shows"),
                 "videos": _count(connection, "videos"),
-                "pending_review": _count(connection, "videos WHERE needs_review = 1"),
+                "pending_review": _count(connection, "videos WHERE classification_status = 'review'"),
             }
 
     def system_status(self) -> dict[str, Any]:
@@ -893,7 +988,7 @@ class ShortDramaRepository:
                 "enabled_accounts": _count(connection, "accounts WHERE enabled = 1"),
                 "shows": _count(connection, "shows"),
                 "videos": _count(connection, "videos"),
-                "pending_review": _count(connection, "videos WHERE needs_review = 1"),
+                "pending_review": _count(connection, "videos WHERE classification_status = 'review'"),
             }
             last_checked = connection.execute("SELECT MAX(last_checked_at) FROM accounts").fetchone()[0]
             errors = connection.execute(
@@ -920,6 +1015,60 @@ class ShortDramaRepository:
 
 def _count(connection: sqlite3.Connection, table_or_clause: str) -> int:
     return int(connection.execute(f"SELECT COUNT(*) FROM {table_or_clause}").fetchone()[0])
+
+
+def _schema_version(value: str | None) -> int:
+    try:
+        return int(value or 0)
+    except ValueError:
+        return 0
+
+
+def _table_has_column(connection: sqlite3.Connection, table: str, column: str) -> bool:
+    return any(str(row["name"]) == column for row in connection.execute(f"PRAGMA table_info({table})"))
+
+
+def _safe_account_nickname(value: Any, sec_uid: str) -> str:
+    text = str(value or "").strip()
+    return _fallback_account_nickname(sec_uid) if _is_placeholder_nickname(text) else text
+
+
+def _is_placeholder_nickname(value: Any) -> bool:
+    return str(value or "").strip().casefold() in _PLACEHOLDER_NICKNAMES
+
+
+def _fallback_account_nickname(sec_uid: str) -> str:
+    return f"作者 {str(sec_uid or '').strip()[:12]}"
+
+
+def _validate_video_classification(value: str) -> None:
+    if value not in VIDEO_CLASSIFICATIONS:
+        raise ValueError("视频分类状态无效")
+
+
+def _classification_from_legacy_fields(
+    *,
+    needs_review: bool,
+    parsed_show_title: str | None,
+    parsed_episode_number: int | None,
+) -> str:
+    if needs_review:
+        return "review"
+    if parsed_show_title and parsed_episode_number is not None:
+        return "matched"
+    return "ignored"
+
+
+def _video_ids(values: Sequence[int]) -> tuple[int, ...]:
+    result: list[int] = []
+    for value in values:
+        try:
+            video_id = int(value)
+        except (TypeError, ValueError):
+            continue
+        if video_id > 0 and video_id not in result:
+            result.append(video_id)
+    return tuple(result)
 
 
 def _legacy_download_records(value: Any) -> dict[str, Mapping[str, Any]]:

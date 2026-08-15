@@ -53,6 +53,7 @@ class ShortDramaWebTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("最近更新短剧", response.text)
         self.assertIn("人工审核", response.text)
         self.assertIn("startEditAccount", response.text)
+        self.assertIn("batchIgnoreReviews", response.text)
 
         payload = self.client.get("/api/short-drama/shows").json()
         self.assertEqual(payload["shows"][0]["title"], "末日重生")
@@ -104,6 +105,52 @@ class ShortDramaWebTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.json()["new_episode"])
         self.assertFalse(self.repository.get_video(video["id"])["needs_review"])
+        self.assertEqual(self.repository.get_video(video["id"])["classification_status"], "matched")
+
+    async def test_review_ignore_endpoints_only_return_real_review_videos(self):
+        account = self.repository.list_accounts()[0]
+        review_videos = []
+        for aweme_id in ("review-ignore-1", "review-ignore-2"):
+            video, _ = self.repository.create_video(
+                aweme_id=aweme_id,
+                account_id=account["id"],
+                description="第13集",
+                hashtags=[],
+                publish_time=None,
+                video_url=f"https://www.douyin.com/video/{aweme_id}",
+                cover_url=None,
+                raw={},
+            )
+            self.repository.update_video_processing(
+                video["id"],
+                is_processed=False,
+                needs_review=True,
+                parser_confidence=0.4,
+                parsed_episode_number=13,
+                parser_method="regex:episode_without_title",
+                parser_reason="episode_signal_without_reliable_title",
+                classification_status="review",
+            )
+            review_videos.append(video)
+
+        visible = self.client.get("/api/short-drama/videos?classification_status=review")
+        self.assertEqual(visible.status_code, 200)
+        self.assertEqual({video["id"] for video in visible.json()["videos"]}, {video["id"] for video in review_videos})
+
+        ignored = self.client.post(f"/api/short-drama/reviews/{review_videos[0]['id']}/ignore")
+        self.assertEqual(ignored.status_code, 200)
+        self.assertEqual(ignored.json()["video"]["classification_status"], "ignored")
+
+        batch = self.client.post(
+            "/api/short-drama/reviews/batch-ignore",
+            json={"video_ids": [review_videos[1]["id"]]},
+        )
+        self.assertEqual(batch.status_code, 200)
+        self.assertEqual(batch.json()["ignored_count"], 1)
+        self.assertEqual(
+            self.client.get("/api/short-drama/videos?classification_status=review").json()["videos"],
+            [],
+        )
 
 
 if __name__ == "__main__":

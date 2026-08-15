@@ -107,7 +107,7 @@ class ShortDramaPipelineTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(updated_result.new_episode_updates[0].episode["episode_number"], 17)
         self.assertEqual(self.repository.get_show(show["id"])["latest_episode"], 17)
 
-    async def test_uncertain_video_is_saved_once_and_sent_to_review(self):
+    async def test_plain_video_is_saved_once_and_ignored_on_initial_sync(self):
         account, _ = await self.pipeline.add_account(self.account_one_provider.homepage_url)
         self.provider.videos_by_sec_uid["sec-one"] = [
             ProviderVideo(
@@ -123,12 +123,51 @@ class ShortDramaPipelineTests(unittest.IsolatedAsyncioTestCase):
 
         first_result = await self.pipeline.sync_account(account["id"])
         duplicate_result = await self.pipeline.sync_account(account["id"])
-        videos = self.repository.list_videos(needs_review=True)
-        self.assertEqual(first_result.review_videos, 1)
+        videos = self.repository.list_videos(classification_status="ignored")
+        self.assertEqual(first_result.review_videos, 0)
+        self.assertEqual(first_result.ignored_videos, 1)
         self.assertEqual(duplicate_result.new_videos, 0)
         self.assertEqual(len(videos), 1)
         self.assertEqual(videos[0]["aweme_id"], "3001")
-        self.assertTrue(videos[0]["needs_review"])
+        self.assertEqual(videos[0]["classification_status"], "ignored")
+        self.assertTrue(videos[0]["is_processed"])
+        self.assertFalse(videos[0]["needs_review"])
+
+    async def test_known_show_without_episode_is_sent_to_review(self):
+        account, _ = await self.pipeline.add_account(self.account_one_provider.homepage_url)
+        self.repository.create_show(title="末日重生", normalized_title="末日重生")
+        self.provider.videos_by_sec_uid["sec-one"] = [
+            ProviderVideo(
+                aweme_id="3002",
+                description="这一集真的哭死我了😭",
+                hashtags=("末日重生",),
+                publish_time="2026-08-15T13:02:00+00:00",
+                video_url="https://www.douyin.com/video/3002",
+                cover_url=None,
+                raw={"aweme_id": "3002"},
+            )
+        ]
+
+        result = await self.pipeline.sync_account(account["id"])
+        review_video = self.repository.list_videos(classification_status="review")[0]
+
+        self.assertEqual(result.review_videos, 1)
+        self.assertEqual(result.ignored_videos, 0)
+        self.assertEqual(review_video["aweme_id"], "3002")
+        self.assertTrue(review_video["needs_review"])
+
+    async def test_manual_ignore_marks_review_video_as_ignored(self):
+        account, _ = await self.pipeline.add_account(self.account_one_provider.homepage_url)
+        self.provider.videos_by_sec_uid["sec-one"] = [make_video("4002", "第十二集", 11)]
+        await self.pipeline.sync_account(account["id"])
+        review_video = self.repository.list_videos(classification_status="review")[0]
+
+        ignored = self.pipeline.ignore_review(review_video["id"])
+
+        self.assertEqual(ignored["classification_status"], "ignored")
+        self.assertTrue(ignored["is_processed"])
+        self.assertFalse(ignored["needs_review"])
+        self.assertEqual(self.repository.counts()["pending_review"], 0)
 
     async def test_manual_review_creates_episode_and_marks_video_processed(self):
         account, _ = await self.pipeline.add_account(self.account_one_provider.homepage_url)

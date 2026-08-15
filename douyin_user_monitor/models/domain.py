@@ -34,7 +34,9 @@ class Video:
     raw_json: str
     is_processed: bool
     needs_review: bool
+    classification_status: str
     parser_confidence: float | None
+    parser_reason: str | None
     created_at: str
     processed_at: str | None
 

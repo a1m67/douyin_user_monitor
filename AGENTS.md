@@ -33,5 +33,5 @@ Managed by Trellis. Edits outside this block are preserved; edits inside may be 
 - Short-drama business services depend only on `DouyinProvider`; they must not import a crawler or issue crawler HTTP requests directly.
 - `Video.aweme_id` is the final de-duplication key and has a database `UNIQUE` constraint. A duplicate aweme must not be parsed or notified again.
 - `Episode(show_id, episode_number)` is unique. A matching post from another account creates an `EpisodeSource`, not another Episode or update notification.
-- Parser uncertainty goes to review. Do not auto-create an Episode below `AUTO_ACCEPT_CONFIDENCE` or when title / episode number is incomplete.
+- Parser has three outcomes: `matched`, `ignored`, and `review`. Only real short-drama or episode signals that cannot be resolved go to review; ordinary videos are ignored. Do not auto-create an Episode below `AUTO_ACCEPT_CONFIDENCE` or when title / episode number is incomplete.
 - Never commit or log cookies, access tokens, bot tokens, or webhook URLs. Runtime files belong under ignored `data/` or `.env`.

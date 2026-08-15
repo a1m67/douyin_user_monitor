@@ -17,7 +17,7 @@
 - SQLite 数据模型：`Account`、`Video`、`Show`、`Episode`、`EpisodeSource`、`Notification`。
 - 数据库级 `UNIQUE(aweme_id)`；同一短剧同一集只创建一个 Episode，多账号发布保存为多个 EpisodeSource。
 - 规则解析器支持书名号、`第 27 集`、`27集`、`EP27`、`EP.27`、`Episode 27`、`27/100`、`27-100` 和中文数字。
-- 低置信度或缺少剧名 / 集数的作品进入 `/review`，不会自动猜测。
+- 三态分类：明确短剧名和集数为 `matched`；没有短剧 / 剧集信号的普通视频为 `ignored`；仅有短剧或集数线索但无法可靠归档的作品才进入 `/review`。
 - 首次添加账号同步最近作品作为历史基线，默认不通知；后续新剧集才通知。
 - Telegram 和飞书 Webhook 通知；每个渠道的成功或失败都会记录，失败不会回滚 Video / Episode。
 - 按账号的 `next_check_at` 错峰巡检，有限并发和指数退避避免单个账号错误影响其他账号。

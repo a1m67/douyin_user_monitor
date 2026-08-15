@@ -45,6 +45,10 @@ class ReviewPayload(BaseModel):
     episode_number: int = Field(ge=1, le=100000)
 
 
+class BatchIgnoreReviewPayload(BaseModel):
+    video_ids: list[int] = Field(min_length=1, max_length=500)
+
+
 def create_short_drama_router(
     *,
     repository: ShortDramaRepository,
@@ -175,9 +179,29 @@ def create_short_drama_router(
     @api.get("/videos")
     async def list_videos(
         needs_review: bool | None = None,
+        classification_status: str | None = Query(default=None, pattern="^(matched|ignored|review)$"),
         limit: int = Query(default=100, ge=1, le=500),
     ) -> dict[str, Any]:
-        return {"videos": repository.list_videos(needs_review=needs_review, limit=limit)}
+        return {
+            "videos": repository.list_videos(
+                needs_review=needs_review,
+                classification_status=classification_status,
+                limit=limit,
+            )
+        }
+
+    @api.post("/reviews/batch-ignore")
+    async def batch_ignore_reviews(payload: BatchIgnoreReviewPayload) -> dict[str, Any]:
+        ignored_count = pipeline.ignore_reviews(payload.video_ids)
+        return {"ignored_count": ignored_count}
+
+    @api.post("/reviews/{video_id}/ignore")
+    async def ignore_review(video_id: int) -> dict[str, Any]:
+        try:
+            video = pipeline.ignore_review(video_id)
+        except (ValueError, KeyError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"video": video}
 
     @api.post("/reviews/{video_id}")
     async def confirm_review(video_id: int, payload: ReviewPayload) -> dict[str, Any]:
@@ -222,5 +246,6 @@ def _sync_result(result: SyncResult) -> dict[str, Any]:
         "new_videos": result.new_videos,
         "duplicate_videos": result.duplicate_videos,
         "review_videos": result.review_videos,
+        "ignored_videos": result.ignored_videos,
         "new_episode_count": len(result.new_episode_updates),
     }

@@ -5,6 +5,7 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+from douyin_user_monitor.parsers.base import IGNORED, MATCHED, REVIEW
 from douyin_user_monitor.parsers.episode_parser import EpisodeParser
 from douyin_user_monitor.parsers.regex import normalize_title
 from douyin_user_monitor.providers.base import DouyinProvider, ProviderAccount, ProviderVideo
@@ -31,6 +32,7 @@ class SyncResult:
     new_videos: int
     duplicate_videos: int
     review_videos: int
+    ignored_videos: int
     new_episode_updates: tuple[EpisodeUpdate, ...]
 
 
@@ -39,6 +41,12 @@ class ManualReviewResult:
     video: dict[str, Any]
     show: dict[str, Any]
     episode: dict[str, Any]
+    update: EpisodeUpdate | None
+
+
+@dataclass(frozen=True)
+class _VideoProcessingOutcome:
+    status: str
     update: EpisodeUpdate | None
 
 
@@ -90,7 +98,7 @@ class ShortDramaPipeline:
         profile = await self._provider.get_user_profile(provider_account)
         account = self._repository.create_account(
             sec_uid=provider_account.sec_uid,
-            nickname=profile.nickname,
+            nickname=_usable_nickname(profile.nickname, provider_account.sec_uid),
             homepage_url=provider_account.homepage_url or homepage_url,
             check_interval_minutes=check_interval_minutes or self._default_check_interval_minutes,
         )
@@ -99,7 +107,10 @@ class ShortDramaPipeline:
     async def refresh_account_profile(self, account_id: str) -> dict[str, Any]:
         account = self._require_account(account_id)
         profile = await self._provider.get_user_profile(_provider_account(account))
-        return self._repository.update_account(account_id, nickname=profile.nickname)
+        return self._repository.update_account(
+            account_id,
+            nickname=_usable_nickname(profile.nickname, str(account["sec_uid"])),
+        )
 
     async def sync_account(self, account_id: str, *, limit: int | None = None) -> SyncResult:
         account = self._require_account(account_id)
@@ -112,6 +123,7 @@ class ShortDramaPipeline:
         new_videos = 0
         duplicate_videos = 0
         review_videos = 0
+        ignored_videos = 0
 
         # Process oldest first: when a first sync contains episodes 14-16 the
         # database receives a natural progression and later notifications stay ordered.
@@ -130,18 +142,22 @@ class ShortDramaPipeline:
                 duplicate_videos += 1
                 continue
             new_videos += 1
-            update = self._process_new_video(account=account, video=video, provider_video=provider_video)
-            if update is None:
+            outcome = self._process_new_video(account=account, video=video, provider_video=provider_video)
+            if outcome.status == REVIEW:
                 review_videos += 1
+            elif outcome.status == IGNORED:
+                ignored_videos += 1
+            if outcome.update is None:
                 continue
             if not initial_sync or self._notify_on_initial_sync:
-                updates.append(update)
+                updates.append(outcome.update)
         logger.info(
-            "[dedupe] account_id=%s new_videos=%s duplicate_videos=%s review_videos=%s",
+            "[dedupe] account_id=%s new_videos=%s duplicate_videos=%s review_videos=%s ignored_videos=%s",
             account_id,
             new_videos,
             duplicate_videos,
             review_videos,
+            ignored_videos,
         )
 
         if initial_sync:
@@ -159,6 +175,7 @@ class ShortDramaPipeline:
             new_videos=new_videos,
             duplicate_videos=duplicate_videos,
             review_videos=review_videos,
+            ignored_videos=ignored_videos,
             new_episode_updates=tuple(updates),
         )
 
@@ -211,6 +228,8 @@ class ShortDramaPipeline:
             parsed_show_title=str(show["title"]),
             parsed_episode_number=episode_number,
             parser_method="manual_review",
+            classification_status=MATCHED,
+            parser_reason="manual_review",
         )
         update = _episode_update_if_new(show, write, processed_video, account)
         return ManualReviewResult(
@@ -220,28 +239,67 @@ class ShortDramaPipeline:
             update=update,
         )
 
+    def ignore_review(self, video_id: int) -> dict[str, Any]:
+        video = self._repository.get_video(video_id)
+        if video is None:
+            raise KeyError("视频不存在")
+        if video["classification_status"] != REVIEW:
+            raise ValueError("视频不在人工审核队列")
+        self._repository.ignore_review_videos([video_id])
+        ignored = self._repository.get_video(video_id)
+        if ignored is None:
+            raise RuntimeError("忽略视频后无法读取记录")
+        return ignored
+
+    def ignore_reviews(self, video_ids: list[int]) -> int:
+        return self._repository.ignore_review_videos(video_ids)
+
     def _process_new_video(
         self,
         *,
         account: dict[str, Any],
         video: dict[str, Any],
         provider_video: ProviderVideo,
-    ) -> EpisodeUpdate | None:
+    ) -> _VideoProcessingOutcome:
         parsed = self._parser.parse(
             description=provider_video.description,
             hashtags=provider_video.hashtags,
             account_nickname=str(account["nickname"]),
             known_shows=self._repository.list_show_candidates(),
         )
+        if parsed.status == IGNORED:
+            logger.info(
+                "[parse] ignored aweme_id=%s reason=%s method=%s",
+                video["aweme_id"],
+                parsed.reason,
+                parsed.method,
+            )
+            self._repository.update_video_processing(
+                int(video["id"]),
+                is_processed=True,
+                needs_review=False,
+                parser_confidence=parsed.confidence,
+                parsed_show_title=parsed.show_title,
+                parsed_episode_number=parsed.episode_number,
+                parser_method=parsed.method,
+                classification_status=IGNORED,
+                parser_reason=parsed.reason,
+            )
+            return _VideoProcessingOutcome(status=IGNORED, update=None)
+
         if (
-            not parsed.is_episode
+            parsed.status == REVIEW
             or parsed.show_title is None
             or parsed.episode_number is None
             or parsed.confidence < self._auto_accept_confidence
         ):
+            reason = parsed.reason
+            if parsed.status == MATCHED and parsed.confidence < self._auto_accept_confidence:
+                reason = "matched_below_auto_accept_confidence"
             logger.info(
-                "[parse] needs_review aweme_id=%s method=%s confidence=%.2f",
+                "[parse] needs_review aweme_id=%s reason=%s method=%s confidence=%.2f",
                 video["aweme_id"],
+                reason,
                 parsed.method,
                 parsed.confidence,
             )
@@ -253,8 +311,10 @@ class ShortDramaPipeline:
                 parsed_show_title=parsed.show_title,
                 parsed_episode_number=parsed.episode_number,
                 parser_method=parsed.method,
+                classification_status=REVIEW,
+                parser_reason=reason,
             )
-            return None
+            return _VideoProcessingOutcome(status=REVIEW, update=None)
 
         logger.info(
             "[parse] accepted aweme_id=%s title=%s episode=%s method=%s confidence=%.2f",
@@ -280,8 +340,13 @@ class ShortDramaPipeline:
             parsed_show_title=str(show["title"]),
             parsed_episode_number=parsed.episode_number,
             parser_method=parsed.method,
+            classification_status=MATCHED,
+            parser_reason=parsed.reason,
         )
-        return _episode_update_if_new(show, write, processed_video, account)
+        return _VideoProcessingOutcome(
+            status=MATCHED,
+            update=_episode_update_if_new(show, write, processed_video, account),
+        )
 
     def _find_or_create_show(self, title: str, matched_show_id: int | None) -> dict[str, Any]:
         if matched_show_id is not None:
@@ -310,6 +375,13 @@ def _provider_account(account: dict[str, Any]) -> ProviderAccount:
         sec_uid=str(account["sec_uid"]),
         homepage_url=str(account.get("homepage_url") or ""),
     )
+
+
+def _usable_nickname(value: str, sec_uid: str) -> str:
+    nickname = str(value or "").strip()
+    if nickname.casefold() in {"", "nan", "none", "null", "undefined", "n/a"}:
+        return f"作者 {sec_uid[:12]}"
+    return nickname
 
 
 def _episode_update_if_new(

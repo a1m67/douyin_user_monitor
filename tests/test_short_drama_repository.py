@@ -172,6 +172,63 @@ class ShortDramaRepositoryTests(unittest.TestCase):
         self.assertIsNotNone(video)
         self.assertTrue(video["is_processed"])
         self.assertFalse(video["needs_review"])
+        self.assertEqual(video["classification_status"], "ignored")
+
+    def test_schema_upgrade_maps_legacy_review_and_repairs_placeholder_nickname(self):
+        account = self.create_account("legacy-sec")
+        video = self.create_video(account["id"], "legacy-review")
+        self.repository.update_video_processing(
+            video["id"],
+            is_processed=False,
+            needs_review=True,
+            parser_confidence=0.4,
+            parsed_episode_number=12,
+            parser_method="regex:episode_without_title",
+        )
+        with self.repository._transaction() as connection:
+            connection.execute("UPDATE accounts SET nickname = 'nan' WHERE id = ?", (account["id"],))
+            connection.execute(
+                "UPDATE videos SET classification_status = 'ignored', parser_reason = NULL WHERE id = ?",
+                (video["id"],),
+            )
+            connection.execute(
+                "UPDATE app_meta SET value = '1' WHERE key = 'schema_version'",
+            )
+
+        upgraded = ShortDramaRepository(self.root / "app.db")
+        upgraded_video = upgraded.get_video(video["id"])
+        upgraded_account = upgraded.get_account(account["id"])
+
+        self.assertEqual(upgraded_video["classification_status"], "review")
+        self.assertEqual(upgraded_video["parser_reason"], "legacy_review")
+        self.assertTrue(upgraded_video["needs_review"])
+        self.assertEqual(upgraded_account["nickname"], "作者 legacy-sec")
+
+    def test_batch_ignore_only_changes_review_videos(self):
+        account = self.create_account()
+        review_video = self.create_video(account["id"], "review-1")
+        ignored_video = self.create_video(account["id"], "ignored-1")
+        self.repository.update_video_processing(
+            review_video["id"],
+            is_processed=False,
+            needs_review=True,
+            parser_confidence=0.4,
+            parsed_episode_number=12,
+            parser_method="regex:episode_without_title",
+        )
+        self.repository.update_video_processing(
+            ignored_video["id"],
+            is_processed=True,
+            needs_review=False,
+            parser_confidence=0.0,
+            parser_method="regex:no_short_drama_signal",
+        )
+
+        ignored_count = self.repository.ignore_review_videos([review_video["id"], ignored_video["id"]])
+
+        self.assertEqual(ignored_count, 1)
+        self.assertEqual(self.repository.get_video(review_video["id"])["classification_status"], "ignored")
+        self.assertEqual(self.repository.get_video(ignored_video["id"])["classification_status"], "ignored")
 
 
 if __name__ == "__main__":
