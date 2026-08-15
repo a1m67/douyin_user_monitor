@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Protocol
 
 from douyin_user_monitor.parsers.episode_parser import EpisodeParser
 from douyin_user_monitor.parsers.regex import normalize_title
@@ -39,6 +39,11 @@ class ManualReviewResult:
     update: EpisodeUpdate | None
 
 
+class EpisodeUpdateDispatcher(Protocol):
+    async def dispatch(self, update: EpisodeUpdate) -> Any:
+        ...
+
+
 class ShortDramaPipeline:
     """Run short-drama business rules solely through :class:`DouyinProvider`."""
 
@@ -51,6 +56,7 @@ class ShortDramaPipeline:
         auto_accept_confidence: float = 0.8,
         initial_sync_limit: int = 20,
         notify_on_initial_sync: bool = False,
+        dispatcher: EpisodeUpdateDispatcher | None = None,
     ) -> None:
         if not 0.0 <= auto_accept_confidence <= 1.0:
             raise ValueError("AUTO_ACCEPT_CONFIDENCE 必须在 0 到 1 之间")
@@ -62,6 +68,7 @@ class ShortDramaPipeline:
         self._auto_accept_confidence = auto_accept_confidence
         self._initial_sync_limit = initial_sync_limit
         self._notify_on_initial_sync = notify_on_initial_sync
+        self._dispatcher = dispatcher
 
     async def add_account(
         self,
@@ -125,6 +132,9 @@ class ShortDramaPipeline:
             account = self._repository.complete_initial_sync(account_id)
         else:
             account = self._require_account(account_id)
+        if self._dispatcher is not None:
+            for update in updates:
+                await self._dispatcher.dispatch(update)
         return SyncResult(
             account=account,
             initial_sync=initial_sync,

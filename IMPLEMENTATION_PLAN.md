@@ -49,9 +49,9 @@
 
 ## Phase 5 - 通知系统
 
-- [ ] 定义统一 `Notifier.send_episode_update` 接口。
-- [ ] 实现 Telegram 和飞书 Webhook 通知，未配置时自动禁用。
-- [ ] 持久化每个通知成功或失败结果，通知错误不回滚业务数据。
+- [x] 定义统一 `Notifier.send_episode_update` 接口。
+- [x] 实现 Telegram 和飞书 Webhook 通知，未配置时自动禁用。
+- [x] 持久化每个通知成功或失败结果，通知错误不回滚业务数据。
 
 验证：通知格式、失败记录及单次新集通知测试。
 
