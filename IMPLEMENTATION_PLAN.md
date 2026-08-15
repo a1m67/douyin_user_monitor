@@ -17,8 +17,8 @@
 ## Phase 1 - 现有代码理解 + Provider 抽象
 
 - [x] 审查抓取入口、调度、JSON 存储、通知和 Dashboard。
-- [ ] 定义 `DouyinProvider` 与标准化的账号 / 作品数据。
-- [ ] 用 `BuiltinDouyinProvider` 包装现有 `InProcessDouyinClient`。
+- [x] 定义 `DouyinProvider` 与标准化的账号 / 作品数据。
+- [x] 用 `BuiltinDouyinProvider` 包装现有 `InProcessDouyinClient`。
 
 验证：Provider 单元测试，现有 crawler 配置测试。
 
