@@ -204,6 +204,33 @@ class ShortDramaRepositoryTests(unittest.TestCase):
         self.assertTrue(upgraded_video["needs_review"])
         self.assertEqual(upgraded_account["nickname"], "作者 legacy-sec")
 
+    def test_history_sync_state_is_additive_and_can_pause_resume(self):
+        account = self.create_account("history-sec")
+        self.assertEqual(account["history_sync_status"], "idle")
+        self.assertTrue(account["history_has_more"])
+
+        started = self.repository.start_history_backfill(account["id"])
+        self.assertEqual(started["history_sync_status"], "pending")
+        self.assertEqual(started["history_sync"]["next_cursor"], 0)
+
+        progressed = self.repository.update_history_sync_state(
+            account["id"],
+            status="running",
+            next_cursor=50,
+            has_more=True,
+            processed_pages=1,
+            scanned_items=50,
+            new_videos=30,
+            started_at=started["history_started_at"],
+        )
+        paused = self.repository.pause_history_backfill(account["id"])
+        resumed = self.repository.resume_history_backfill(account["id"])
+
+        self.assertEqual(progressed["history_sync"]["next_cursor"], 50)
+        self.assertEqual(paused["history_sync_status"], "paused")
+        self.assertEqual(resumed["history_sync_status"], "running")
+        self.assertEqual(resumed["history_sync"]["scanned_items"], 50)
+
     def test_batch_ignore_only_changes_review_videos(self):
         account = self.create_account()
         review_video = self.create_video(account["id"], "review-1")

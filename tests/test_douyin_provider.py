@@ -73,6 +73,15 @@ class BuiltinDouyinProviderTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(ValueError, "limit"):
             await self.provider.get_latest_videos(ProviderAccount(id="1", sec_uid="sec-1"), 0)
 
+    async def test_video_page_preserves_cursor_and_has_more(self):
+        account = ProviderAccount(id="1", sec_uid="sec-1")
+        page = await self.provider.get_video_page(account, cursor=123, limit=5)
+
+        self.assertEqual(self.crawler.video_args, ("sec-1", 123, 5))
+        self.assertEqual([video.aweme_id for video in page.videos], ["1002", "1001"])
+        self.assertEqual(page.next_cursor, 123)
+        self.assertFalse(page.has_more)
+
 
 if __name__ == "__main__":
     unittest.main()

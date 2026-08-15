@@ -18,6 +18,8 @@ class ShortDramaSettings:
     check_interval_minutes: int
     max_concurrent_checks: int
     initial_sync_limit: int
+    incremental_fetch_limit: int
+    history_backfill_page_size: int
     notify_on_initial_sync: bool
     auto_accept_confidence: float
     max_backoff_minutes: int
@@ -56,6 +58,8 @@ def load_short_drama_settings(
         check_interval_minutes=_positive_int(values, "CHECK_INTERVAL_MINUTES", 10),
         max_concurrent_checks=_positive_int(values, "MAX_CONCURRENT_CHECKS", 3),
         initial_sync_limit=_positive_int(values, "INITIAL_SYNC_LIMIT", 20),
+        incremental_fetch_limit=_positive_int(values, "INCREMENTAL_FETCH_LIMIT", 30),
+        history_backfill_page_size=_positive_int(values, "HISTORY_BACKFILL_PAGE_SIZE", 50),
         notify_on_initial_sync=_boolean(values, "NOTIFY_ON_INITIAL_SYNC", False),
         auto_accept_confidence=_confidence(values, "AUTO_ACCEPT_CONFIDENCE", 0.8),
         max_backoff_minutes=_positive_int(values, "MAX_BACKOFF_MINUTES", 60),

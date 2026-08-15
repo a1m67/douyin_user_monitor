@@ -8,6 +8,7 @@ from douyin_user_monitor.providers.base import (
     ProviderAccount,
     ProviderProfile,
     ProviderVideo,
+    ProviderVideoPage,
 )
 
 
@@ -61,22 +62,39 @@ class BuiltinDouyinProvider:
         account: ProviderAccount,
         limit: int = 20,
     ) -> list[ProviderVideo]:
+        page = await self.get_video_page(account, cursor=0, limit=limit)
+        return list(page.videos)
+
+    async def get_video_page(
+        self,
+        account: ProviderAccount,
+        *,
+        cursor: int,
+        limit: int,
+    ) -> ProviderVideoPage:
         if limit <= 0:
             raise ValueError("limit 必须大于 0")
+        if cursor < 0:
+            raise ValueError("cursor 不能小于 0")
         payload = await self._crawler.fetch_user_post_videos(
             account.sec_uid,
-            max_cursor=0,
+            max_cursor=cursor,
             count=limit,
         )
         raw_list = payload.get("aweme_list") if isinstance(payload, dict) else None
         if raw_list is None:
-            return []
+            return ProviderVideoPage(videos=(), next_cursor=cursor, has_more=False)
         if not isinstance(raw_list, list) or not all(isinstance(item, dict) for item in raw_list):
             raise ValueError("抖音作品列表格式无效")
 
         videos = [self._to_provider_video(item) for item in raw_list]
         videos = [video for video in videos if video is not None]
-        return sorted(videos, key=lambda video: video.publish_time or "", reverse=True)
+        next_cursor = _extract_next_cursor(payload, fallback=cursor)
+        return ProviderVideoPage(
+            videos=tuple(sorted(videos, key=lambda video: video.publish_time or "", reverse=True)),
+            next_cursor=next_cursor,
+            has_more=_extract_has_more(payload, current_cursor=cursor, next_cursor=next_cursor),
+        )
 
     async def aclose(self) -> None:
         await self._crawler.aclose()
@@ -179,3 +197,26 @@ def _extract_avatar_url(raw_profile: Mapping[str, Any]) -> str | None:
                 if url:
                     return url
     return None
+
+
+def _extract_next_cursor(payload: Mapping[str, Any], *, fallback: int) -> int:
+    for key in ("next_cursor", "max_cursor", "cursor"):
+        try:
+            value = int(payload.get(key))
+        except (TypeError, ValueError):
+            continue
+        if value >= 0:
+            return value
+    return fallback
+
+
+def _extract_has_more(payload: Mapping[str, Any], *, current_cursor: int, next_cursor: int) -> bool:
+    value = payload.get("has_more")
+    if isinstance(value, bool):
+        return value
+    if value is not None:
+        try:
+            return int(value) > 0
+        except (TypeError, ValueError):
+            return False
+    return next_cursor > current_cursor

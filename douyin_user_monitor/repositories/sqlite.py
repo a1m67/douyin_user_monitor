@@ -12,9 +12,10 @@ from pathlib import Path
 from typing import Any, Iterator, Mapping, Sequence
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 SHOW_STATUSES = frozenset({"updating", "completed", "paused"})
 VIDEO_CLASSIFICATIONS = frozenset({"matched", "ignored", "review"})
+HISTORY_SYNC_STATUSES = frozenset({"idle", "pending", "running", "paused", "completed", "failed"})
 _PLACEHOLDER_NICKNAMES = frozenset({"", "nan", "none", "null", "undefined", "n/a"})
 
 
@@ -96,6 +97,17 @@ class ShortDramaRepository:
                 last_error TEXT,
                 consecutive_failures INTEGER NOT NULL DEFAULT 0,
                 initial_sync_completed INTEGER NOT NULL DEFAULT 0,
+                history_sync_status TEXT NOT NULL DEFAULT 'idle'
+                    CHECK (history_sync_status IN ('idle', 'pending', 'running', 'paused', 'completed', 'failed')),
+                history_next_cursor INTEGER NOT NULL DEFAULT 0,
+                history_has_more INTEGER NOT NULL DEFAULT 1,
+                history_processed_pages INTEGER NOT NULL DEFAULT 0,
+                history_scanned_items INTEGER NOT NULL DEFAULT 0,
+                history_new_videos INTEGER NOT NULL DEFAULT 0,
+                history_started_at TEXT,
+                history_updated_at TEXT,
+                history_completed_at TEXT,
+                history_last_error TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 CHECK (check_interval_minutes > 0),
@@ -191,9 +203,27 @@ class ShortDramaRepository:
             )
         if not _table_has_column(connection, "videos", "parser_reason"):
             connection.execute("ALTER TABLE videos ADD COLUMN parser_reason TEXT")
+        for column, definition in {
+            "history_sync_status": "TEXT NOT NULL DEFAULT 'idle'",
+            "history_next_cursor": "INTEGER NOT NULL DEFAULT 0",
+            "history_has_more": "INTEGER NOT NULL DEFAULT 1",
+            "history_processed_pages": "INTEGER NOT NULL DEFAULT 0",
+            "history_scanned_items": "INTEGER NOT NULL DEFAULT 0",
+            "history_new_videos": "INTEGER NOT NULL DEFAULT 0",
+            "history_started_at": "TEXT",
+            "history_updated_at": "TEXT",
+            "history_completed_at": "TEXT",
+            "history_last_error": "TEXT",
+        }.items():
+            if not _table_has_column(connection, "accounts", column):
+                connection.execute(f"ALTER TABLE accounts ADD COLUMN {column} {definition}")
         connection.execute(
             "CREATE INDEX IF NOT EXISTS idx_videos_classification "
             "ON videos(classification_status, created_at DESC)"
+        )
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_accounts_history_sync "
+            "ON accounts(history_sync_status, history_updated_at)"
         )
         if previous_version >= SCHEMA_VERSION:
             return
@@ -400,6 +430,112 @@ class ShortDramaRepository:
             cursor = connection.execute(
                 f"UPDATE accounts SET {assignments} WHERE id = ?",
                 (*values.values(), account_id),
+            )
+            if cursor.rowcount == 0:
+                raise KeyError("账号不存在")
+            return self._require_account(connection, account_id)
+
+    def start_history_backfill(self, account_id: str) -> dict[str, Any]:
+        """Reset persisted progress so a user can begin a fresh, idempotent scan."""
+        now = utc_now()
+        return self.update_history_sync_state(
+            account_id,
+            status="pending",
+            next_cursor=0,
+            has_more=True,
+            processed_pages=0,
+            scanned_items=0,
+            new_videos=0,
+            started_at=now,
+            updated_at=now,
+            completed_at=None,
+            last_error=None,
+        )
+
+    def pause_history_backfill(self, account_id: str) -> dict[str, Any]:
+        account = self.get_account(account_id)
+        if account is None:
+            raise KeyError("账号不存在")
+        if account["history_sync_status"] not in {"pending", "running"}:
+            raise ValueError("当前历史补全不能暂停")
+        history = account["history_sync"]
+        return self.update_history_sync_state(
+            account_id,
+            status="paused",
+            next_cursor=int(history["next_cursor"]),
+            has_more=bool(history["has_more"]),
+            processed_pages=int(history["processed_pages"]),
+            scanned_items=int(history["scanned_items"]),
+            new_videos=int(history["new_videos"]),
+            started_at=history["started_at"],
+            completed_at=history["completed_at"],
+            last_error=history["last_error"],
+        )
+
+    def resume_history_backfill(self, account_id: str) -> dict[str, Any]:
+        account = self.get_account(account_id)
+        if account is None:
+            raise KeyError("账号不存在")
+        if account["history_sync_status"] not in {"paused", "failed"}:
+            raise ValueError("当前历史补全不能继续")
+        history = account["history_sync"]
+        if not history["has_more"]:
+            raise ValueError("历史补全已完成，请重新开始")
+        return self.update_history_sync_state(
+            account_id,
+            status="running" if history["processed_pages"] else "pending",
+            next_cursor=int(history["next_cursor"]),
+            has_more=True,
+            processed_pages=int(history["processed_pages"]),
+            scanned_items=int(history["scanned_items"]),
+            new_videos=int(history["new_videos"]),
+            started_at=history["started_at"] or utc_now(),
+            completed_at=None,
+            last_error=None,
+        )
+
+    def update_history_sync_state(
+        self,
+        account_id: str,
+        *,
+        status: str,
+        next_cursor: int,
+        has_more: bool,
+        processed_pages: int,
+        scanned_items: int,
+        new_videos: int,
+        started_at: str | None,
+        updated_at: str | None = None,
+        completed_at: str | None = None,
+        last_error: str | None = None,
+    ) -> dict[str, Any]:
+        if status not in HISTORY_SYNC_STATUSES:
+            raise ValueError("历史同步状态无效")
+        now = updated_at or utc_now()
+        with self._transaction() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE accounts SET
+                    history_sync_status = ?, history_next_cursor = ?, history_has_more = ?,
+                    history_processed_pages = ?, history_scanned_items = ?, history_new_videos = ?,
+                    history_started_at = ?, history_updated_at = ?, history_completed_at = ?,
+                    history_last_error = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    status,
+                    _non_negative_int(next_cursor),
+                    int(bool(has_more)),
+                    _non_negative_int(processed_pages),
+                    _non_negative_int(scanned_items),
+                    _non_negative_int(new_videos),
+                    _optional_text(started_at),
+                    now,
+                    _optional_text(completed_at),
+                    _optional_text(last_error),
+                    now,
+                    account_id,
+                ),
             )
             if cursor.rowcount == 0:
                 raise KeyError("账号不存在")
@@ -1024,6 +1160,13 @@ def _schema_version(value: str | None) -> int:
         return 0
 
 
+def _non_negative_int(value: Any) -> int:
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return 0
+
+
 def _table_has_column(connection: sqlite3.Connection, table: str, column: str) -> bool:
     return any(str(row["name"]) == column for row in connection.execute(f"PRAGMA table_info({table})"))
 
@@ -1124,6 +1267,24 @@ def _account_row(row: sqlite3.Row) -> dict[str, Any]:
     result = _row_to_dict(row)
     result["enabled"] = bool(result["enabled"])
     result["initial_sync_completed"] = bool(result["initial_sync_completed"])
+    result["history_has_more"] = bool(result.get("history_has_more", 1))
+    result["history_next_cursor"] = _non_negative_int(result.get("history_next_cursor"))
+    result["history_processed_pages"] = _non_negative_int(result.get("history_processed_pages"))
+    result["history_scanned_items"] = _non_negative_int(result.get("history_scanned_items"))
+    result["history_new_videos"] = _non_negative_int(result.get("history_new_videos"))
+    result["history_sync_status"] = str(result.get("history_sync_status") or "idle")
+    result["history_sync"] = {
+        "status": result["history_sync_status"],
+        "next_cursor": result["history_next_cursor"],
+        "has_more": result["history_has_more"],
+        "processed_pages": result["history_processed_pages"],
+        "scanned_items": result["history_scanned_items"],
+        "new_videos": result["history_new_videos"],
+        "started_at": result.get("history_started_at"),
+        "updated_at": result.get("history_updated_at"),
+        "completed_at": result.get("history_completed_at"),
+        "last_error": result.get("history_last_error"),
+    }
     return result
 
 

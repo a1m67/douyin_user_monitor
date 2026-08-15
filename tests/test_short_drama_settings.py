@@ -26,6 +26,8 @@ class ShortDramaSettingsTests(unittest.TestCase):
                 "CHECK_INTERVAL_MINUTES": "12",
                 "MAX_CONCURRENT_CHECKS": "4",
                 "INITIAL_SYNC_LIMIT": "25",
+                "INCREMENTAL_FETCH_LIMIT": "31",
+                "HISTORY_BACKFILL_PAGE_SIZE": "51",
                 "NOTIFY_ON_INITIAL_SYNC": "true",
                 "AUTO_ACCEPT_CONFIDENCE": "0.85",
             },
@@ -34,6 +36,8 @@ class ShortDramaSettingsTests(unittest.TestCase):
         self.assertEqual(settings.check_interval_minutes, 12)
         self.assertEqual(settings.max_concurrent_checks, 4)
         self.assertEqual(settings.initial_sync_limit, 25)
+        self.assertEqual(settings.incremental_fetch_limit, 31)
+        self.assertEqual(settings.history_backfill_page_size, 51)
         self.assertTrue(settings.notify_on_initial_sync)
         self.assertEqual(settings.auto_accept_confidence, 0.85)
 

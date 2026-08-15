@@ -31,6 +31,15 @@ class ProviderVideo:
     raw: Mapping[str, Any]
 
 
+@dataclass(frozen=True)
+class ProviderVideoPage:
+    """One cursor-addressable page of a creator's published videos."""
+
+    videos: tuple[ProviderVideo, ...]
+    next_cursor: int
+    has_more: bool
+
+
 class DouyinProvider(Protocol):
     """Source boundary used by short-drama services.
 
@@ -51,6 +60,15 @@ class DouyinProvider(Protocol):
         limit: int = 20,
     ) -> list[ProviderVideo]:
         """Retrieve the latest published videos in newest-first order."""
+
+    async def get_video_page(
+        self,
+        account: ProviderAccount,
+        *,
+        cursor: int,
+        limit: int,
+    ) -> ProviderVideoPage:
+        """Retrieve one cursor-addressable page without changing latest-video semantics."""
 
     async def aclose(self) -> None:
         """Release provider resources when the application stops."""

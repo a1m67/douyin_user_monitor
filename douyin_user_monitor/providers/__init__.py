@@ -5,6 +5,7 @@ from douyin_user_monitor.providers.base import (
     ProviderAccount,
     ProviderProfile,
     ProviderVideo,
+    ProviderVideoPage,
 )
 from douyin_user_monitor.providers.builtin_douyin import BuiltinDouyinProvider
 
@@ -14,4 +15,5 @@ __all__ = [
     "ProviderAccount",
     "ProviderProfile",
     "ProviderVideo",
+    "ProviderVideoPage",
 ]
