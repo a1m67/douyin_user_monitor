@@ -698,6 +698,17 @@ class ShortDramaRepository:
                 raise KeyError("账号不存在")
             return self._require_account(connection, account_id)
 
+    def complete_initial_sync(self, account_id: str) -> dict[str, Any]:
+        """Mark a successfully fetched account as having an historical baseline."""
+        with self._transaction() as connection:
+            cursor = connection.execute(
+                "UPDATE accounts SET initial_sync_completed = 1, updated_at = ? WHERE id = ?",
+                (utc_now(), account_id),
+            )
+            if cursor.rowcount == 0:
+                raise KeyError("账号不存在")
+            return self._require_account(connection, account_id)
+
     def mark_account_sync_failure(
         self,
         account_id: str,

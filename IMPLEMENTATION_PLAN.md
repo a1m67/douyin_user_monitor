@@ -40,10 +40,10 @@
 
 ## Phase 4 - 新作品处理 Pipeline
 
-- [ ] 仅通过 `DouyinProvider` 拉取最近作品。
-- [ ] 按 `aweme_id` 落库后再解析，重复作品不重复解析。
-- [ ] 创建或关联 Show、Episode、EpisodeSource，并在事务后通知。
-- [ ] 实现首次同步历史基线且默认不通知。
+- [x] 仅通过 `DouyinProvider` 拉取最近作品。
+- [x] 按 `aweme_id` 落库后再解析，重复作品不重复解析。
+- [x] 创建或关联 Show、Episode、EpisodeSource，并生成事务后的通知事件（渠道分发在 Phase 5）。
+- [x] 实现首次同步历史基线且默认不通知。
 
 验证：验收场景 A-E、首次同步和重复抓取测试。
 
