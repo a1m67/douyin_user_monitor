@@ -359,8 +359,99 @@ class ShortDramaRepository:
     def delete_account(self, account_id: str) -> dict[str, Any]:
         with self._transaction() as connection:
             account = self._require_account(connection, account_id)
+
+            # Videos cascade with the account. Repair episodes that use one of
+            # those videos as their canonical first source before that happens.
+            affected_rows = connection.execute(
+                """
+                SELECT DISTINCT episodes.id, episodes.show_id
+                FROM episodes
+                WHERE episodes.first_account_id = ?
+                   OR episodes.first_video_id IN (
+                       SELECT id FROM videos WHERE account_id = ?
+                   )
+                """,
+                (account_id, account_id),
+            ).fetchall()
+            affected_show_ids = {int(row["show_id"]) for row in affected_rows}
+
+            for row in affected_rows:
+                alternate_source = connection.execute(
+                    """
+                    SELECT episode_sources.video_id, episode_sources.account_id,
+                           episode_sources.published_at
+                    FROM episode_sources
+                    JOIN videos ON videos.id = episode_sources.video_id
+                    WHERE episode_sources.episode_id = ?
+                      AND episode_sources.account_id != ?
+                      AND videos.account_id != ?
+                    ORDER BY COALESCE(episode_sources.published_at, episode_sources.created_at) ASC,
+                             episode_sources.id ASC
+                    LIMIT 1
+                    """,
+                    (int(row["id"]), account_id, account_id),
+                ).fetchone()
+                if alternate_source is None:
+                    connection.execute("DELETE FROM episodes WHERE id = ?", (int(row["id"]),))
+                    continue
+                connection.execute(
+                    """
+                    UPDATE episodes
+                    SET first_video_id = ?, first_account_id = ?, published_at = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        int(alternate_source["video_id"]),
+                        str(alternate_source["account_id"]),
+                        _optional_text(alternate_source["published_at"]),
+                        int(row["id"]),
+                    ),
+                )
+
+            # Remove source rows explicitly so the account's restrictive source
+            # foreign key cannot interfere with the videos' cascade deletion.
+            connection.execute("DELETE FROM episode_sources WHERE account_id = ?", (account_id,))
             connection.execute("DELETE FROM accounts WHERE id = ?", (account_id,))
+
+            self._refresh_show_latest(connection, affected_show_ids)
             return account
+
+    def _refresh_show_latest(
+        self, connection: sqlite3.Connection, show_ids: set[int]
+    ) -> None:
+        """Refresh cached show metadata after destructive source changes."""
+        if not show_ids:
+            return
+        now = utc_now()
+        for show_id in show_ids:
+            latest = connection.execute(
+                """
+                SELECT episode_number, COALESCE(published_at, created_at) AS latest_update_at
+                FROM episodes
+                WHERE show_id = ?
+                ORDER BY episode_number DESC, COALESCE(published_at, created_at) DESC, id DESC
+                LIMIT 1
+                """,
+                (show_id,),
+            ).fetchone()
+            if latest is None:
+                connection.execute(
+                    """
+                    UPDATE shows
+                    SET latest_episode = NULL, latest_update_at = NULL, updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (now, show_id),
+                )
+                continue
+            connection.execute(
+                """
+                UPDATE shows
+                SET latest_episode = ?, latest_update_at = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (int(latest["episode_number"]), latest["latest_update_at"], now, show_id),
+            )
 
     def create_video(
         self,

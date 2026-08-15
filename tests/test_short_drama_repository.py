@@ -87,6 +87,56 @@ class ShortDramaRepositoryTests(unittest.TestCase):
         self.assertEqual(len(self.repository.get_episode_sources(first_result.episode["id"])), 2)
         self.assertEqual(self.repository.get_show(show["id"])["latest_episode"], 27)
 
+    def test_deleting_account_reassigns_shared_episode_and_removes_orphaned_episodes(self):
+        first_account = self.create_account("sec-1")
+        second_account = self.create_account("sec-2")
+        show = self.repository.create_show(
+            title="末日重生",
+            normalized_title="末日重生",
+        )
+        first_video = self.create_video(first_account["id"], "1001")
+        shared_episode = self.repository.record_episode_source(
+            show_id=show["id"],
+            episode_number=27,
+            video_id=first_video["id"],
+            account_id=first_account["id"],
+            published_at=first_video["publish_time"],
+        )
+        second_video = self.create_video(second_account["id"], "2001")
+        self.repository.record_episode_source(
+            show_id=show["id"],
+            episode_number=27,
+            video_id=second_video["id"],
+            account_id=second_account["id"],
+            published_at=second_video["publish_time"],
+        )
+        orphaned_video = self.create_video(first_account["id"], "1002")
+        self.repository.record_episode_source(
+            show_id=show["id"],
+            episode_number=28,
+            video_id=orphaned_video["id"],
+            account_id=first_account["id"],
+            published_at=orphaned_video["publish_time"],
+        )
+
+        deleted = self.repository.delete_account(first_account["id"])
+
+        self.assertEqual(deleted["id"], first_account["id"])
+        self.assertIsNone(self.repository.get_account(first_account["id"]))
+        self.assertEqual(self.repository.counts()["videos"], 1)
+        episodes = self.repository.get_show_episodes(show["id"])
+        self.assertEqual([episode["episode_number"] for episode in episodes], [27])
+        self.assertEqual(episodes[0]["id"], shared_episode.episode["id"])
+        self.assertEqual(episodes[0]["first_video_id"], second_video["id"])
+        self.assertEqual(episodes[0]["first_account_id"], second_account["id"])
+        self.assertEqual(
+            [source["video_id"] for source in self.repository.get_episode_sources(episodes[0]["id"])],
+            [second_video["id"]],
+        )
+        refreshed_show = self.repository.get_show(show["id"])
+        self.assertEqual(refreshed_show["latest_episode"], 27)
+        self.assertEqual(refreshed_show["latest_update_at"], second_video["publish_time"])
+
     def test_legacy_json_accounts_and_aweme_ids_are_imported_as_processed_baseline(self):
         legacy_path = self.root / "monitor_users.json"
         legacy_path.write_text(
