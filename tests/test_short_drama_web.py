@@ -52,11 +52,30 @@ class ShortDramaWebTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn("最近更新短剧", response.text)
         self.assertIn("人工审核", response.text)
+        self.assertIn("startEditAccount", response.text)
 
         payload = self.client.get("/api/short-drama/shows").json()
         self.assertEqual(payload["shows"][0]["title"], "末日重生")
         detail = self.client.get(f"/api/short-drama/shows/{payload['shows'][0]['id']}").json()
         self.assertEqual(detail["show"]["episodes"][0]["episode_number"], 12)
+
+    async def test_account_endpoint_updates_editable_fields(self):
+        account = self.repository.list_accounts()[0]
+
+        response = self.client.patch(
+            f"/api/short-drama/accounts/{account['id']}",
+            json={
+                "nickname": "更新后的 AI 剧场",
+                "homepage_url": "https://www.douyin.com/user/updated-sec-1",
+                "check_interval_minutes": 15,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        updated = response.json()["account"]
+        self.assertEqual(updated["nickname"], "更新后的 AI 剧场")
+        self.assertEqual(updated["homepage_url"], "https://www.douyin.com/user/updated-sec-1")
+        self.assertEqual(updated["check_interval_minutes"], 15)
 
     async def test_review_endpoint_confirms_a_video(self):
         account = self.repository.list_accounts()[0]

@@ -72,6 +72,8 @@
     th, td { padding: 11px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
     tr:last-child td { border-bottom: 0; }
     .table-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+    .account-editor td { background: #f7fbfa; }
+    .account-edit-fields { display: grid; grid-template-columns: minmax(150px, 1fr) minmax(220px, 2fr) minmax(130px, .6fr) auto; align-items: end; gap: 10px; }
     .badge { display: inline-block; padding: 3px 7px; border-radius: 3px; background: var(--accent-soft); color: #075b57; font-size: 12px; font-weight: 600; }
     .badge.paused { background: var(--yellow-soft); color: var(--yellow); }
     .badge.completed { background: var(--blue-soft); color: var(--blue); }
@@ -99,8 +101,8 @@
     .notice { position: fixed; right: 20px; bottom: 20px; max-width: min(380px, calc(100vw - 40px)); background: #20313b; color: #fff; border-radius: var(--radius); padding: 12px 14px; box-shadow: 0 6px 20px rgba(0,0,0,.18); display: none; }
     .notice.error { background: #8d3636; }
     .muted { color: var(--muted); }
-    @media (max-width: 900px) { .shell { grid-template-columns: 1fr; } .sidebar { min-height: auto; flex-direction: row; align-items: center; overflow-x: auto; gap: 12px; } .brand { min-width: 160px; } .nav { display: flex; } .nav a { white-space: nowrap; } .sidebar-footer { display: none; } .summary { grid-template-columns: repeat(2, 1fr); } .metric:nth-child(2) { border-right: 0; } .detail, .status-layout { grid-template-columns: 1fr; } .review { grid-template-columns: 55px 1fr; } .cover { width: 55px; height: 74px; } .review-form { grid-column: 1 / -1; } }
-    @media (max-width: 560px) { .summary { grid-template-columns: 1fr; } .metric { border-right: 0; border-bottom: 1px solid var(--line); } .metric:last-child { border-bottom: 0; } .page-head { align-items: start; flex-direction: column; } .review { grid-template-columns: 1fr; } .cover { display: none; } }
+    @media (max-width: 900px) { .shell { grid-template-columns: 1fr; align-content: start; } .sidebar { min-height: auto; display: block; overflow: visible; padding: 14px 12px; } .brand { min-width: 0; } .nav { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); } .nav a { white-space: normal; } .sidebar-footer { display: none; } .summary { grid-template-columns: repeat(2, 1fr); } .metric:nth-child(2) { border-right: 0; } .detail, .status-layout { grid-template-columns: 1fr; } .review { grid-template-columns: 55px 1fr; } .cover { width: 55px; height: 74px; } .review-form { grid-column: 1 / -1; } }
+    @media (max-width: 560px) { .summary { grid-template-columns: 1fr; } .metric { border-right: 0; border-bottom: 1px solid var(--line); } .metric:last-child { border-bottom: 0; } .page-head { align-items: start; flex-direction: column; } .review { grid-template-columns: 1fr; } .cover { display: none; } .account-edit-fields { grid-template-columns: 1fr; } }
   </style>
 </head>
 <body>
@@ -128,6 +130,7 @@
     const notice = document.getElementById("notice");
     const route = location.pathname;
     let showOptions = [];
+    let editingAccountId = null;
 
     function escapeHtml(value) {
       return String(value ?? "").replace(/[&<>'"]/g, char => ({"&":"&amp;","<":"&lt;",">":"&gt;","'":"&#39;","\"":"&quot;"}[char]));
@@ -184,13 +187,22 @@
     async function saveShow(id) {
       try { await request(`/shows/${id}`, {method:"PATCH", body:JSON.stringify({status:document.getElementById("showStatus").value, aliases:document.getElementById("showAliases").value.split(",").map(value=>value.trim()).filter(Boolean)})}); message("短剧设置已保存"); await renderShowDetail(id); } catch (error) { message(error.message, true); }
     }
+    function accountEditor(account) {
+      if (editingAccountId !== account.id) return "";
+      return `<tr class="account-editor"><td colspan="8"><div class="account-edit-fields"><label class="field">昵称<input id="editAccountNickname-${account.id}" value="${escapeHtml(account.nickname)}" /></label><label class="field">抖音作者主页<input id="editAccountUrl-${account.id}" value="${escapeHtml(account.homepage_url)}" /></label><label class="field">检查间隔（分钟）<input id="editAccountInterval-${account.id}" type="number" min="1" max="1440" value="${account.check_interval_minutes}" /></label><div class="table-actions"><button class="small" onclick="saveAccount('${account.id}')">保存</button><button class="secondary small" onclick="cancelAccountEdit()">取消</button></div></div></td></tr>`;
+    }
     async function renderAccounts() {
       nav("accounts", "作者账号");
       const data = await request("/accounts");
-      app.innerHTML = `<div class="page-head"><div><h1>作者账号</h1><p class="subtitle">每个账号可设置自己的检查频率，也可手动检查。</p></div></div><div class="toolbar"><label class="field">抖音作者主页<input id="newAccountUrl" placeholder="https://www.douyin.com/user/..." /></label><label class="field">检查间隔（分钟）<input id="newAccountInterval" type="number" min="1" value="{{DEFAULT_CHECK_INTERVAL_MINUTES}}" /></label><button onclick="addAccount()">添加作者</button></div>${data.accounts.length ? `<div class="table-wrap"><table><thead><tr><th>作者</th><th>启用</th><th>检查间隔</th><th>最后检查</th><th>下次检查</th><th>连续失败</th><th>最后错误</th><th>操作</th></tr></thead><tbody>${data.accounts.map(account => `<tr><td><strong>${escapeHtml(account.nickname)}</strong><br><span class="muted">${escapeHtml(account.sec_uid)}</span></td><td>${account.enabled ? "启用" : "停用"}</td><td>${account.check_interval_minutes} 分钟</td><td>${formatTime(account.last_checked_at, "未检查")}</td><td>${formatTime(account.next_check_at, "等待调度")}</td><td>${account.consecutive_failures}</td><td>${escapeHtml(account.last_error || "-")}</td><td><div class="table-actions"><button class="secondary small" onclick="checkAccount('${account.id}')">立即检查</button><button class="secondary small" onclick="toggleAccount('${account.id}', ${!account.enabled})">${account.enabled ? "停用" : "启用"}</button><button class="danger small" onclick="deleteAccount('${account.id}')">删除</button></div></td></tr>`).join("")}</tbody></table></div>` : empty("尚未添加作者")}`;
+      if (editingAccountId && !data.accounts.some(account => account.id === editingAccountId)) editingAccountId = null;
+      const accountRows = data.accounts.map(account => `<tr><td><strong>${escapeHtml(account.nickname)}</strong><br><span class="muted">${escapeHtml(account.sec_uid)}</span></td><td>${account.enabled ? "启用" : "停用"}</td><td>${account.check_interval_minutes} 分钟</td><td>${formatTime(account.last_checked_at, "未检查")}</td><td>${formatTime(account.next_check_at, "等待调度")}</td><td>${account.consecutive_failures}</td><td>${escapeHtml(account.last_error || "-")}</td><td><div class="table-actions"><button class="secondary small" onclick="checkAccount('${account.id}')">立即检查</button><button class="secondary small" onclick="startEditAccount('${account.id}')">编辑</button><button class="secondary small" onclick="toggleAccount('${account.id}', ${!account.enabled})">${account.enabled ? "停用" : "启用"}</button><button class="danger small" onclick="deleteAccount('${account.id}')">删除</button></div></td></tr>${accountEditor(account)}`).join("");
+      app.innerHTML = `<div class="page-head"><div><h1>作者账号</h1><p class="subtitle">每个账号可设置自己的检查频率，也可手动检查。</p></div></div><div class="toolbar"><label class="field">抖音作者主页<input id="newAccountUrl" placeholder="https://www.douyin.com/user/..." /></label><label class="field">检查间隔（分钟）<input id="newAccountInterval" type="number" min="1" value="{{DEFAULT_CHECK_INTERVAL_MINUTES}}" /></label><button onclick="addAccount()">添加作者</button></div>${data.accounts.length ? `<div class="table-wrap"><table><thead><tr><th>作者</th><th>启用</th><th>检查间隔</th><th>最后检查</th><th>下次检查</th><th>连续失败</th><th>最后错误</th><th>操作</th></tr></thead><tbody>${accountRows}</tbody></table></div>` : empty("尚未添加作者")}`;
     }
     async function addAccount() { try { const url=document.getElementById("newAccountUrl").value.trim(); const interval=Number(document.getElementById("newAccountInterval").value); await request("/accounts", {method:"POST", body:JSON.stringify({homepage_url:url, check_interval_minutes:interval})}); message("作者已添加，首次检查会建立历史基线"); await renderAccounts(); await refreshStatus(); } catch(error) { message(error.message, true); } }
     async function checkAccount(id) { try { const data=await request(`/accounts/${id}/run-once`, {method:"POST"}); message(data.result.initial_sync ? "首次同步已完成，未发送历史通知" : `检查完成，发现 ${data.result.new_videos} 个新作品`); await renderAccounts(); await refreshStatus(); } catch(error) { message(error.message, true); } }
+    async function startEditAccount(id) { editingAccountId = id; await renderAccounts(); }
+    async function cancelAccountEdit() { editingAccountId = null; await renderAccounts(); }
+    async function saveAccount(id) { try { const nickname=document.getElementById(`editAccountNickname-${id}`).value.trim(); const homepageUrl=document.getElementById(`editAccountUrl-${id}`).value.trim(); const interval=Number(document.getElementById(`editAccountInterval-${id}`).value); await request(`/accounts/${id}`, {method:"PATCH", body:JSON.stringify({nickname, homepage_url:homepageUrl, check_interval_minutes:interval})}); editingAccountId = null; message("作者设置已保存"); await renderAccounts(); await refreshStatus(); } catch(error) { message(error.message, true); } }
     async function toggleAccount(id, enabled) { try { await request(`/accounts/${id}`, {method:"PATCH", body:JSON.stringify({enabled})}); await renderAccounts(); await refreshStatus(); } catch(error) { message(error.message, true); } }
     async function deleteAccount(id) { if (!confirm("删除账号会同时删除其视频和关联来源，继续吗？")) return; try { await request(`/accounts/${id}`, {method:"DELETE"}); message("账号已删除"); await renderAccounts(); await refreshStatus(); } catch(error) { message(error.message, true); } }
     async function renderVideos() {
