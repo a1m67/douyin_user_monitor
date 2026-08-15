@@ -1,0 +1,87 @@
+[
+  {
+    "name": "delimited_show_candidate",
+    "description": "原创ai漫剧丨契鬼人丨我开局契约了诡新娘？",
+    "hashtags": ["ai动漫", "契鬼人", "动画", "二次元"],
+    "expected": {
+      "status": "review",
+      "show_title_candidate": "契鬼人",
+      "content_type": "show_content"
+    }
+  },
+  {
+    "name": "bracketed_trailer",
+    "description": "个人原创AI新剧：《契鬼人》先行预告片",
+    "hashtags": ["ai漫剧"],
+    "expected": {
+      "status": "review",
+      "show_title_candidate": "契鬼人",
+      "content_type": "trailer"
+    }
+  },
+  {
+    "name": "prefix_show_candidate",
+    "description": "夜巡阴差 我的新剧跟预告片的设定差不多",
+    "hashtags": [],
+    "expected": {
+      "status": "review",
+      "show_title_candidate": "夜巡阴差"
+    }
+  },
+  {
+    "name": "bare_number_with_known_show",
+    "description": "人间夜游 李乐平 01 我是李乐平",
+    "hashtags": [],
+    "known_shows": [{"id": 1, "title": "人间夜游", "aliases": []}],
+    "expected": {
+      "status": "matched",
+      "show_title": "人间夜游",
+      "episode_number": 1
+    }
+  },
+  {
+    "name": "bare_number_without_context",
+    "description": "41 车与船",
+    "hashtags": [],
+    "expected": {
+      "status": "review",
+      "episode_candidate": 41
+    }
+  },
+  {
+    "name": "suffix_bare_number_without_context",
+    "description": "船登陆40 #动漫 #动画",
+    "hashtags": [],
+    "expected": {
+      "status": "review",
+      "episode_candidate": 40
+    }
+  },
+  {
+    "name": "bare_number_seedance",
+    "description": "39 本视频由小云雀Seedance2.0创作生成",
+    "hashtags": ["小云雀AI", "杨间", "叶真"],
+    "expected": {
+      "status": "review",
+      "episode_candidate": 39
+    }
+  },
+  {
+    "name": "year_is_not_episode",
+    "description": "2026新年快乐",
+    "hashtags": [],
+    "expected": {"status": "ignored"}
+  },
+  {
+    "name": "view_count_is_not_episode",
+    "description": "100万播放感谢大家",
+    "hashtags": [],
+    "expected": {"status": "ignored"}
+  },
+  {
+    "name": "technique_count_is_not_episode",
+    "description": "3种AI动漫制作技巧",
+    "hashtags": [],
+    "expected": {"status": "ignored"}
+  }
+]

@@ -9,6 +9,7 @@ MATCHED = "matched"
 IGNORED = "ignored"
 REVIEW = "review"
 PARSE_STATUSES = frozenset({MATCHED, IGNORED, REVIEW})
+CONTENT_TYPES = frozenset({"episode", "trailer", "show_content", "unknown", "non_drama"})
 
 
 @dataclass(frozen=True)
@@ -16,7 +17,12 @@ class EpisodeParseInput:
     description: str
     hashtags: tuple[str, ...]
     account_nickname: str
-    known_shows: Sequence[dict[str, Any]]
+    known_shows: Sequence[dict[str, Any]] = ()
+    # These context windows are intentionally plain mappings. They let a future
+    # parser backend consume the same data without importing repository classes.
+    recent_account_videos: Sequence[dict[str, Any]] = ()
+    recent_account_matches: Sequence[dict[str, Any]] = ()
+    account_show_candidates: Sequence[dict[str, Any]] = ()
 
 
 @dataclass(frozen=True)
@@ -28,10 +34,17 @@ class EpisodeParseResult:
     reason: str
     method: str
     matched_show_id: int | None = None
+    show_title_candidate: str | None = None
+    episode_candidate: int | None = None
+    content_type: str = "unknown"
 
     def __post_init__(self) -> None:
         if self.status not in PARSE_STATUSES:
             raise ValueError(f"无效的解析状态: {self.status}")
+        if self.content_type not in CONTENT_TYPES:
+            raise ValueError(f"无效的内容类型: {self.content_type}")
+        if self.episode_candidate is not None and self.episode_candidate <= 0:
+            raise ValueError("候选集数必须大于 0")
 
     @property
     def is_episode(self) -> bool:
@@ -47,6 +60,9 @@ class EpisodeParseResult:
             "reason": self.reason,
             "method": self.method,
             "matched_show_id": self.matched_show_id,
+            "show_title_candidate": self.show_title_candidate,
+            "episode_candidate": self.episode_candidate,
+            "content_type": self.content_type,
         }
 
 
