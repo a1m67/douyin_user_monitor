@@ -2,14 +2,23 @@
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any, Protocol, Sequence
 
+from douyin_user_monitor.monitor.history_sync import (
+    HISTORY_SYNC_STATUS_FAILED,
+    HISTORY_SYNC_STATUS_PENDING,
+    HISTORY_SYNC_STATUS_RUNNING,
+    build_history_sync_state,
+    complete_history_sync,
+    update_history_sync_progress,
+)
 from douyin_user_monitor.parsers.base import IGNORED, MATCHED, REVIEW
 from douyin_user_monitor.parsers.episode_parser import EpisodeParser
 from douyin_user_monitor.parsers.regex import normalize_title
 from douyin_user_monitor.providers.base import DouyinProvider, ProviderAccount, ProviderVideo
-from douyin_user_monitor.repositories.sqlite import EpisodeWriteResult, ShortDramaRepository
+from douyin_user_monitor.repositories.sqlite import EpisodeWriteResult, ShortDramaRepository, utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +46,16 @@ class SyncResult:
 
 
 @dataclass(frozen=True)
+class HistoryBackfillResult:
+    account: dict[str, Any]
+    fetched_videos: int
+    new_videos: int
+    duplicate_videos: int
+    review_videos: int
+    ignored_videos: int
+
+
+@dataclass(frozen=True)
 class ManualReviewResult:
     video: dict[str, Any]
     show: dict[str, Any]
@@ -48,6 +67,15 @@ class ManualReviewResult:
 class _VideoProcessingOutcome:
     status: str
     update: EpisodeUpdate | None
+
+
+@dataclass(frozen=True)
+class _VideoBatchResult:
+    new_videos: int
+    duplicate_videos: int
+    review_videos: int
+    ignored_videos: int
+    updates: tuple[EpisodeUpdate, ...]
 
 
 class EpisodeUpdateDispatcher(Protocol):
@@ -66,6 +94,8 @@ class ShortDramaPipeline:
         parser: EpisodeParser | None = None,
         auto_accept_confidence: float = 0.8,
         initial_sync_limit: int = 20,
+        incremental_fetch_limit: int = 30,
+        history_backfill_page_size: int = 50,
         notify_on_initial_sync: bool = False,
         dispatcher: EpisodeUpdateDispatcher | None = None,
         default_check_interval_minutes: int = 10,
@@ -74,6 +104,10 @@ class ShortDramaPipeline:
             raise ValueError("AUTO_ACCEPT_CONFIDENCE 必须在 0 到 1 之间")
         if initial_sync_limit <= 0:
             raise ValueError("INITIAL_SYNC_LIMIT 必须大于 0")
+        if incremental_fetch_limit <= 0:
+            raise ValueError("INCREMENTAL_FETCH_LIMIT 必须大于 0")
+        if history_backfill_page_size <= 0:
+            raise ValueError("HISTORY_BACKFILL_PAGE_SIZE 必须大于 0")
         if default_check_interval_minutes <= 0:
             raise ValueError("CHECK_INTERVAL_MINUTES 必须大于 0")
         self._repository = repository
@@ -81,6 +115,8 @@ class ShortDramaPipeline:
         self._parser = parser or EpisodeParser()
         self._auto_accept_confidence = auto_accept_confidence
         self._initial_sync_limit = initial_sync_limit
+        self._incremental_fetch_limit = incremental_fetch_limit
+        self._history_backfill_page_size = history_backfill_page_size
         self._notify_on_initial_sync = notify_on_initial_sync
         self._dispatcher = dispatcher
         self._default_check_interval_minutes = default_check_interval_minutes
@@ -114,50 +150,25 @@ class ShortDramaPipeline:
 
     async def sync_account(self, account_id: str, *, limit: int | None = None) -> SyncResult:
         account = self._require_account(account_id)
-        fetch_limit = limit or self._initial_sync_limit
+        initial_sync = not bool(account["initial_sync_completed"])
+        fetch_limit = limit or (
+            self._initial_sync_limit if initial_sync else self._incremental_fetch_limit
+        )
         logger.info("[account] start check nickname=%s account_id=%s", account["nickname"], account_id)
         videos = await self._provider.get_latest_videos(_provider_account(account), limit=fetch_limit)
         logger.info("[fetch] account_id=%s fetched_videos=%s", account_id, len(videos))
-        initial_sync = not bool(account["initial_sync_completed"])
-        updates: list[EpisodeUpdate] = []
-        new_videos = 0
-        duplicate_videos = 0
-        review_videos = 0
-        ignored_videos = 0
-
-        # Process oldest first: when a first sync contains episodes 14-16 the
-        # database receives a natural progression and later notifications stay ordered.
-        for provider_video in sorted(videos, key=lambda item: item.publish_time or ""):
-            video, created = self._repository.create_video(
-                aweme_id=provider_video.aweme_id,
-                account_id=account_id,
-                description=provider_video.description,
-                hashtags=provider_video.hashtags,
-                publish_time=provider_video.publish_time,
-                video_url=provider_video.video_url,
-                cover_url=provider_video.cover_url,
-                raw=provider_video.raw,
-            )
-            if not created:
-                duplicate_videos += 1
-                continue
-            new_videos += 1
-            outcome = self._process_new_video(account=account, video=video, provider_video=provider_video)
-            if outcome.status == REVIEW:
-                review_videos += 1
-            elif outcome.status == IGNORED:
-                ignored_videos += 1
-            if outcome.update is None:
-                continue
-            if not initial_sync or self._notify_on_initial_sync:
-                updates.append(outcome.update)
+        batch = self._ingest_videos(
+            account=account,
+            provider_videos=videos,
+            collect_updates=not initial_sync or self._notify_on_initial_sync,
+        )
         logger.info(
             "[dedupe] account_id=%s new_videos=%s duplicate_videos=%s review_videos=%s ignored_videos=%s",
             account_id,
-            new_videos,
-            duplicate_videos,
-            review_videos,
-            ignored_videos,
+            batch.new_videos,
+            batch.duplicate_videos,
+            batch.review_videos,
+            batch.ignored_videos,
         )
 
         if initial_sync:
@@ -165,18 +176,92 @@ class ShortDramaPipeline:
         else:
             account = self._require_account(account_id)
         if self._dispatcher is not None:
-            for update in updates:
+            for update in batch.updates:
                 await self._dispatcher.dispatch(update)
-        logger.info("[account] complete account_id=%s new_episode_updates=%s", account_id, len(updates))
+        logger.info("[account] complete account_id=%s new_episode_updates=%s", account_id, len(batch.updates))
         return SyncResult(
             account=account,
             initial_sync=initial_sync,
             fetched_videos=len(videos),
-            new_videos=new_videos,
-            duplicate_videos=duplicate_videos,
-            review_videos=review_videos,
-            ignored_videos=ignored_videos,
-            new_episode_updates=tuple(updates),
+            new_videos=batch.new_videos,
+            duplicate_videos=batch.duplicate_videos,
+            review_videos=batch.review_videos,
+            ignored_videos=batch.ignored_videos,
+            new_episode_updates=batch.updates,
+        )
+
+    def start_history_backfill(self, account_id: str) -> dict[str, Any]:
+        self._require_account(account_id)
+        return self._repository.start_history_backfill(account_id)
+
+    def pause_history_backfill(self, account_id: str) -> dict[str, Any]:
+        self._require_account(account_id)
+        return self._repository.pause_history_backfill(account_id)
+
+    def resume_history_backfill(self, account_id: str) -> dict[str, Any]:
+        self._require_account(account_id)
+        return self._repository.resume_history_backfill(account_id)
+
+    async def run_history_backfill_page(self, account_id: str) -> HistoryBackfillResult:
+        """Process exactly one persisted cursor page without dispatching notifications."""
+        account = self._require_account(account_id)
+        history = account["history_sync"]
+        if history["status"] not in {HISTORY_SYNC_STATUS_PENDING, HISTORY_SYNC_STATUS_RUNNING}:
+            raise ValueError("请先开始或继续历史补全")
+        if not history["has_more"]:
+            raise ValueError("历史补全已完成，请重新开始")
+
+        cursor = int(history["next_cursor"])
+        try:
+            page = await self._provider.get_video_page(
+                _provider_account(account),
+                cursor=cursor,
+                limit=self._history_backfill_page_size,
+            )
+            if page.has_more and page.next_cursor <= cursor:
+                raise ValueError("历史分页游标未推进")
+
+            batch = self._ingest_videos(
+                account=account,
+                provider_videos=page.videos,
+                collect_updates=False,
+            )
+            state = _legacy_history_state(
+                history,
+                page_size=self._history_backfill_page_size,
+            )
+            now = utc_now()
+            if not page.videos:
+                complete_history_sync(state, now=now)
+            else:
+                update_history_sync_progress(
+                    history_sync=state,
+                    page={"next_cursor": page.next_cursor, "has_more": page.has_more},
+                    scanned_count=len(page.videos),
+                    downloaded_count=batch.new_videos,
+                    errors=[],
+                    now=now,
+                )
+            account = self._store_history_state(account_id, state)
+        except Exception as exc:
+            self._store_history_failure(account_id, history, exc)
+            raise RuntimeError("历史补全失败，请恢复后重试") from exc
+
+        logger.info(
+            "[history] account_id=%s cursor=%s fetched_videos=%s new_videos=%s status=%s",
+            account_id,
+            cursor,
+            len(page.videos),
+            batch.new_videos,
+            account["history_sync_status"],
+        )
+        return HistoryBackfillResult(
+            account=account,
+            fetched_videos=len(page.videos),
+            new_videos=batch.new_videos,
+            duplicate_videos=batch.duplicate_videos,
+            review_videos=batch.review_videos,
+            ignored_videos=batch.ignored_videos,
         )
 
     def confirm_review(
@@ -253,6 +338,83 @@ class ShortDramaPipeline:
 
     def ignore_reviews(self, video_ids: list[int]) -> int:
         return self._repository.ignore_review_videos(video_ids)
+
+    def _ingest_videos(
+        self,
+        *,
+        account: dict[str, Any],
+        provider_videos: Sequence[ProviderVideo],
+        collect_updates: bool,
+    ) -> _VideoBatchResult:
+        new_videos = 0
+        duplicate_videos = 0
+        review_videos = 0
+        ignored_videos = 0
+        updates: list[EpisodeUpdate] = []
+
+        # Oldest first keeps episode creation and optional notifications ordered.
+        for provider_video in sorted(provider_videos, key=lambda item: item.publish_time or ""):
+            video, created = self._repository.create_video(
+                aweme_id=provider_video.aweme_id,
+                account_id=str(account["id"]),
+                description=provider_video.description,
+                hashtags=provider_video.hashtags,
+                publish_time=provider_video.publish_time,
+                video_url=provider_video.video_url,
+                cover_url=provider_video.cover_url,
+                raw=provider_video.raw,
+            )
+            if not created:
+                duplicate_videos += 1
+                continue
+            new_videos += 1
+            outcome = self._process_new_video(
+                account=account,
+                video=video,
+                provider_video=provider_video,
+            )
+            if outcome.status == REVIEW:
+                review_videos += 1
+            elif outcome.status == IGNORED:
+                ignored_videos += 1
+            if collect_updates and outcome.update is not None:
+                updates.append(outcome.update)
+        return _VideoBatchResult(
+            new_videos=new_videos,
+            duplicate_videos=duplicate_videos,
+            review_videos=review_videos,
+            ignored_videos=ignored_videos,
+            updates=tuple(updates),
+        )
+
+    def _store_history_state(self, account_id: str, state: dict[str, Any]) -> dict[str, Any]:
+        return self._repository.update_history_sync_state(
+            account_id,
+            status=str(state["status"]),
+            next_cursor=int(state["next_cursor"]),
+            has_more=bool(state["has_more"]),
+            processed_pages=int(state["processed_pages"]),
+            scanned_items=int(state["scanned_items"]),
+            new_videos=int(state["downloaded_items"]),
+            started_at=state.get("started_at"),
+            updated_at=state.get("updated_at"),
+            completed_at=state.get("completed_at"),
+            last_error=state.get("last_error"),
+        )
+
+    def _store_history_failure(
+        self,
+        account_id: str,
+        history: dict[str, Any],
+        exc: Exception,
+    ) -> None:
+        state = _legacy_history_state(history, page_size=self._history_backfill_page_size)
+        state["status"] = HISTORY_SYNC_STATUS_FAILED
+        state["updated_at"] = utc_now()
+        state["completed_at"] = None
+        state["last_error"] = _safe_history_error(exc)
+        self._store_history_state(account_id, state)
+        logger.warning("[history] failed account_id=%s reason=%s", account_id, state["last_error"])
 
     def _process_new_video(
         self,
@@ -375,6 +537,32 @@ def _provider_account(account: dict[str, Any]) -> ProviderAccount:
         sec_uid=str(account["sec_uid"]),
         homepage_url=str(account.get("homepage_url") or ""),
     )
+
+
+def _legacy_history_state(history: dict[str, Any], *, page_size: int) -> dict[str, Any]:
+    """Adapt persisted short-drama fields to the proven cursor state transition helper."""
+    return build_history_sync_state(
+        status=str(history["status"]),
+        next_cursor=int(history["next_cursor"]),
+        page_size=page_size,
+        processed_pages=int(history["processed_pages"]),
+        scanned_items=int(history["scanned_items"]),
+        downloaded_items=int(history["new_videos"]),
+        has_more=bool(history["has_more"]),
+        started_at=history.get("started_at"),
+        updated_at=history.get("updated_at"),
+        completed_at=history.get("completed_at"),
+        last_error=history.get("last_error"),
+    )
+
+
+def _safe_history_error(exc: Exception) -> str:
+    text = str(exc) or exc.__class__.__name__
+    return re.sub(
+        r"(?i)\b(cookie|token|authorization|webhook)(\s*[:=]\s*)[^\s,;]+",
+        r"\1\2***",
+        text,
+    )[:2000]
 
 
 def _usable_nickname(value: str, sec_uid: str) -> str:

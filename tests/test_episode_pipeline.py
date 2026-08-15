@@ -4,7 +4,12 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from douyin_user_monitor.providers.base import ProviderAccount, ProviderProfile, ProviderVideo
+from douyin_user_monitor.providers.base import (
+    ProviderAccount,
+    ProviderProfile,
+    ProviderVideo,
+    ProviderVideoPage,
+)
 from douyin_user_monitor.providers.fake import FakeDouyinProvider
 from douyin_user_monitor.repositories.sqlite import ShortDramaRepository
 from douyin_user_monitor.services.episode_pipeline import ShortDramaPipeline
@@ -20,6 +25,26 @@ def make_video(aweme_id: str, description: str, timestamp: int) -> ProviderVideo
         cover_url="https://cover.example/cover.jpg",
         raw={"aweme_id": aweme_id, "desc": description},
     )
+
+
+class RecordingDispatcher:
+    def __init__(self) -> None:
+        self.updates = []
+
+    async def dispatch(self, update) -> None:
+        self.updates.append(update)
+
+
+class FailOncePageProvider(FakeDouyinProvider):
+    def __init__(self, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.fail_next_page = True
+
+    async def get_video_page(self, account, *, cursor: int, limit: int):
+        if self.fail_next_page:
+            self.fail_next_page = False
+            raise RuntimeError("temporary page failure")
+        return await super().get_video_page(account, cursor=cursor, limit=limit)
 
 
 class ShortDramaPipelineTests(unittest.IsolatedAsyncioTestCase):
@@ -186,6 +211,167 @@ class ShortDramaPipelineTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result.video["is_processed"])
         self.assertEqual(result.episode["episode_number"], 12)
         self.assertIsNotNone(result.update)
+
+    async def test_daily_sync_uses_initial_then_incremental_first_page_only(self):
+        self.pipeline = ShortDramaPipeline(
+            repository=self.repository,
+            provider=self.provider,
+            initial_sync_limit=2,
+            incremental_fetch_limit=3,
+        )
+        self.provider.videos_by_sec_uid["sec-one"] = [
+            make_video("daily-5", "《末日重生》第5集", 5),
+            make_video("daily-4", "《末日重生》第4集", 4),
+            make_video("daily-3", "《末日重生》第3集", 3),
+            make_video("daily-2", "《末日重生》第2集", 2),
+            make_video("daily-1", "《末日重生》第1集", 1),
+        ]
+        account, _ = await self.pipeline.add_account(self.account_one_provider.homepage_url)
+
+        await self.pipeline.sync_account(account["id"])
+        await self.pipeline.sync_account(account["id"])
+
+        self.assertEqual(self.provider.latest_calls, [("sec-one", 2), ("sec-one", 3)])
+        self.assertEqual(self.provider.page_calls, [])
+
+    async def test_history_backfill_advances_cursor_creates_episodes_and_never_notifies(self):
+        dispatcher = RecordingDispatcher()
+        self.pipeline = ShortDramaPipeline(
+            repository=self.repository,
+            provider=self.provider,
+            dispatcher=dispatcher,
+            history_backfill_page_size=50,
+        )
+        self.provider.videos_by_sec_uid["sec-one"] = []
+        self.provider.video_pages_by_sec_uid["sec-one"] = {
+            0: ProviderVideoPage(
+                videos=(
+                    make_video("history-3", "《历史短剧》第3集", 3),
+                    make_video("history-2", "《历史短剧》第2集", 2),
+                ),
+                next_cursor=50,
+                has_more=True,
+            ),
+            50: ProviderVideoPage(
+                videos=(make_video("history-1", "《历史短剧》第1集", 1),),
+                next_cursor=100,
+                has_more=False,
+            ),
+        }
+        account, _ = await self.pipeline.add_account(self.account_one_provider.homepage_url)
+        await self.pipeline.sync_account(account["id"])
+        self.pipeline.start_history_backfill(account["id"])
+
+        first = await self.pipeline.run_history_backfill_page(account["id"])
+        second = await self.pipeline.run_history_backfill_page(account["id"])
+        stored = self.repository.get_account(account["id"])
+        shows = self.repository.list_shows()
+
+        self.assertEqual(self.provider.page_calls, [("sec-one", 0, 50), ("sec-one", 50, 50)])
+        self.assertEqual(first.new_videos, 2)
+        self.assertEqual(second.new_videos, 1)
+        self.assertEqual(dispatcher.updates, [])
+        self.assertEqual(stored["history_sync_status"], "completed")
+        self.assertFalse(stored["history_has_more"])
+        self.assertEqual(stored["history_next_cursor"], 100)
+        self.assertEqual(stored["history_processed_pages"], 2)
+        self.assertEqual(stored["history_scanned_items"], 3)
+        self.assertEqual(stored["history_new_videos"], 3)
+        self.assertEqual(len(shows), 1)
+        self.assertEqual(
+            [episode["episode_number"] for episode in self.repository.get_show_episodes(shows[0]["id"])],
+            [3, 2, 1],
+        )
+
+    async def test_history_backfill_can_pause_resume_and_is_idempotent_for_repeated_page(self):
+        self.provider.videos_by_sec_uid["sec-one"] = []
+        self.provider.video_pages_by_sec_uid["sec-one"] = {
+            0: ProviderVideoPage(
+                videos=(make_video("history-repeat", "《重复短剧》第8集", 8),),
+                next_cursor=50,
+                has_more=True,
+            )
+        }
+        account, _ = await self.pipeline.add_account(self.account_one_provider.homepage_url)
+        await self.pipeline.sync_account(account["id"])
+        self.pipeline.start_history_backfill(account["id"])
+        self.pipeline.pause_history_backfill(account["id"])
+        with self.assertRaisesRegex(ValueError, "开始或继续"):
+            await self.pipeline.run_history_backfill_page(account["id"])
+
+        self.pipeline.resume_history_backfill(account["id"])
+        first = await self.pipeline.run_history_backfill_page(account["id"])
+        self.pipeline.start_history_backfill(account["id"])
+        repeated = await self.pipeline.run_history_backfill_page(account["id"])
+        show = self.repository.list_shows()[0]
+
+        self.assertEqual(first.new_videos, 1)
+        self.assertEqual(repeated.new_videos, 0)
+        self.assertEqual(repeated.duplicate_videos, 1)
+        self.assertEqual(len(self.repository.get_show_episodes(show["id"])), 1)
+        self.assertEqual(len(self.repository.get_episode_sources(self.repository.get_show_episodes(show["id"])[0]["id"])), 1)
+
+    async def test_history_backfill_failure_preserves_cursor_and_can_resume(self):
+        failing_provider = FailOncePageProvider(
+            accounts_by_url={self.account_one_provider.homepage_url: self.account_one_provider},
+            profiles_by_sec_uid={"sec-one": ProviderProfile(nickname="AI末日剧场")},
+            videos_by_sec_uid={"sec-one": []},
+            video_pages_by_sec_uid={
+                "sec-one": {
+                    0: ProviderVideoPage(
+                        videos=(make_video("history-after-failure", "《恢复短剧》第1集", 1),),
+                        next_cursor=50,
+                        has_more=False,
+                    )
+                }
+            },
+        )
+        self.pipeline = ShortDramaPipeline(repository=self.repository, provider=failing_provider)
+        account, _ = await self.pipeline.add_account(self.account_one_provider.homepage_url)
+        await self.pipeline.sync_account(account["id"])
+        self.pipeline.start_history_backfill(account["id"])
+
+        with self.assertRaisesRegex(RuntimeError, "历史补全失败"):
+            await self.pipeline.run_history_backfill_page(account["id"])
+        failed = self.repository.get_account(account["id"])
+        self.pipeline.resume_history_backfill(account["id"])
+        recovered = await self.pipeline.run_history_backfill_page(account["id"])
+
+        self.assertEqual(failed["history_sync_status"], "failed")
+        self.assertEqual(failed["history_next_cursor"], 0)
+        self.assertEqual(recovered.account["history_sync_status"], "completed")
+        self.assertEqual(recovered.new_videos, 1)
+
+    async def test_history_backfill_keeps_one_episode_with_multiple_account_sources(self):
+        self.provider.videos_by_sec_uid["sec-one"] = []
+        self.provider.videos_by_sec_uid["sec-two"] = []
+        shared_page = ProviderVideoPage(
+            videos=(make_video("history-one", "《同剧历史》第12集", 12),),
+            next_cursor=50,
+            has_more=False,
+        )
+        self.provider.video_pages_by_sec_uid["sec-one"] = {0: shared_page}
+        self.provider.video_pages_by_sec_uid["sec-two"] = {
+            0: ProviderVideoPage(
+                videos=(make_video("history-two", "《同剧历史》第12集", 13),),
+                next_cursor=50,
+                has_more=False,
+            )
+        }
+        first, _ = await self.pipeline.add_account(self.account_one_provider.homepage_url)
+        second, _ = await self.pipeline.add_account(self.account_two_provider.homepage_url)
+        await self.pipeline.sync_account(first["id"])
+        await self.pipeline.sync_account(second["id"])
+        self.pipeline.start_history_backfill(first["id"])
+        self.pipeline.start_history_backfill(second["id"])
+
+        await self.pipeline.run_history_backfill_page(first["id"])
+        await self.pipeline.run_history_backfill_page(second["id"])
+        show = self.repository.list_shows()[0]
+        episode = self.repository.get_show_episodes(show["id"])[0]
+
+        self.assertEqual(len(self.repository.get_show_episodes(show["id"])), 1)
+        self.assertEqual(len(self.repository.get_episode_sources(episode["id"])), 2)
 
 
 if __name__ == "__main__":
