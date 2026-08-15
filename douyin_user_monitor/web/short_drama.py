@@ -17,10 +17,13 @@ class SchedulerStatus(Protocol):
     def health_status(self) -> str:
         ...
 
+    async def run_account_once(self, account_id: str) -> Any:
+        ...
+
 
 class AddAccountPayload(BaseModel):
     homepage_url: str = Field(min_length=1)
-    check_interval_minutes: int = Field(default=10, ge=1, le=1440)
+    check_interval_minutes: int | None = Field(default=None, ge=1, le=1440)
 
 
 class UpdateAccountPayload(BaseModel):
@@ -49,6 +52,7 @@ def create_short_drama_router(
     dispatcher: NotificationDispatcher | None = None,
     scheduler: SchedulerStatus | None = None,
     page_path: Path | None = None,
+    default_check_interval_minutes: int = 10,
 ) -> APIRouter:
     router = APIRouter()
     html_path = page_path or Path(__file__).with_name("short_drama.html")
@@ -57,7 +61,9 @@ def create_short_drama_router(
         if not html_path.is_file():
             raise HTTPException(status_code=500, detail="短剧 Dashboard 文件不存在")
         return HTMLResponse(
-            html_path.read_text(encoding="utf-8"),
+            html_path.read_text(encoding="utf-8").replace(
+                "{{DEFAULT_CHECK_INTERVAL_MINUTES}}", str(default_check_interval_minutes)
+            ),
             headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"},
         )
 
@@ -85,6 +91,18 @@ def create_short_drama_router(
     @router.get("/status", response_class=HTMLResponse, include_in_schema=False)
     async def status_page() -> HTMLResponse:
         return page()
+
+    def health_payload() -> dict[str, str]:
+        repository.counts()
+        return {
+            "status": "ok",
+            "database": "ok",
+            "scheduler": scheduler.health_status() if scheduler is not None else "not_started",
+        }
+
+    @router.get("/health")
+    async def root_health() -> dict[str, str]:
+        return health_payload()
 
     api = APIRouter(prefix="/api/short-drama", tags=["Short drama"])
 
@@ -141,7 +159,15 @@ def create_short_drama_router(
     @api.post("/accounts/{account_id}/run-once")
     async def run_account_once(account_id: str) -> dict[str, Any]:
         try:
-            result = await pipeline.sync_account(account_id)
+            if scheduler is not None:
+                check = await scheduler.run_account_once(account_id)
+                if not check.success:
+                    raise RuntimeError(check.error or "账号检查失败")
+                result = check.sync_result
+                if result is None:
+                    raise RuntimeError("账号检查没有返回同步结果")
+            else:
+                result = await pipeline.sync_account(account_id)
         except (ValueError, KeyError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"result": _sync_result(result)}
@@ -182,12 +208,7 @@ def create_short_drama_router(
 
     @api.get("/health")
     async def health() -> dict[str, str]:
-        repository.counts()
-        return {
-            "status": "ok",
-            "database": "ok",
-            "scheduler": scheduler.health_status() if scheduler is not None else "not_started",
-        }
+        return health_payload()
 
     router.include_router(api)
     return router

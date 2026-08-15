@@ -89,10 +89,17 @@ def _load_crawler_settings(project_root: Path, crawler_raw: Dict[str, Any]) -> C
         raise ValueError("crawler.timeout_seconds 必须大于 0")
     crawler_config_path = _resolve_path(project_root, crawler_config_raw)
     if not crawler_config_path.is_file():
-        raise ValueError(
-            f"爬虫配置文件不存在: {crawler_config_path}。"
-            "请从 config/douyin_web.example.yaml 复制并填入 Cookie。"
-        )
+        # Keep legacy endpoints bootable on a fresh checkout. Real requests
+        # still require a real Cookie, but the example configuration lets the
+        # web UI and health checks report a configuration problem gracefully.
+        example_path = project_root / "config" / "douyin_web.example.yaml"
+        if crawler_config_path == project_root / DEFAULT_CRAWLER_CONFIG_PATH and example_path.is_file():
+            crawler_config_path = example_path
+        else:
+            raise ValueError(
+                f"爬虫配置文件不存在: {crawler_config_path}。"
+                "请从 config/douyin_web.example.yaml 复制并填入 Cookie。"
+            )
     return CrawlerSettings(config_path=crawler_config_path, timeout_seconds=timeout_seconds)
 
 

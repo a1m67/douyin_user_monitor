@@ -100,6 +100,12 @@ class TokenManager:
         (Generate a real msToken and return a false value when an error occurs)
         """
 
+        # Sample config is deliberately not a login session. Avoid making an
+        # invalid outbound request while importing the crawler in a fresh
+        # checkout; a configured real session keeps the original behavior.
+        if not cls.token_conf or "PASTE_" in str(cls.token_conf.get("strData", "")):
+            return cls.gen_false_msToken()
+
         payload = json.dumps(
             {
                 "magic": cls.token_conf["magic"],

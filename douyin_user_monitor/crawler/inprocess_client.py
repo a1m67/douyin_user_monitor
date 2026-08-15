@@ -13,7 +13,7 @@ DEFAULT_HEADERS = {
 class InProcessDouyinClient:
     """Process-local Douyin Web crawler adapter implementing MonitorCrawlerProtocol."""
 
-    def __init__(self, config_path: Path | str):
+    def __init__(self, config_path: Path | str, *, cookie_override: str | None = None):
         path = Path(config_path).expanduser().resolve()
         if not path.is_file():
             raise FileNotFoundError(f"crawler config not found: {path}")
@@ -30,7 +30,7 @@ class InProcessDouyinClient:
         from crawlers.douyin.web.web_crawler import DouyinWebCrawler
 
         self._config_path = path
-        self._crawler = DouyinWebCrawler()
+        self._crawler = DouyinWebCrawler(cookie_override=cookie_override)
 
     async def aclose(self) -> None:
         return None

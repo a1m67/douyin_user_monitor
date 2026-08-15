@@ -1,6 +1,7 @@
 """Crawler-independent new-video to Show/Episode processing pipeline."""
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Any, Protocol
 
@@ -8,6 +9,8 @@ from douyin_user_monitor.parsers.episode_parser import EpisodeParser
 from douyin_user_monitor.parsers.regex import normalize_title
 from douyin_user_monitor.providers.base import DouyinProvider, ProviderAccount, ProviderVideo
 from douyin_user_monitor.repositories.sqlite import EpisodeWriteResult, ShortDramaRepository
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -57,11 +60,14 @@ class ShortDramaPipeline:
         initial_sync_limit: int = 20,
         notify_on_initial_sync: bool = False,
         dispatcher: EpisodeUpdateDispatcher | None = None,
+        default_check_interval_minutes: int = 10,
     ) -> None:
         if not 0.0 <= auto_accept_confidence <= 1.0:
             raise ValueError("AUTO_ACCEPT_CONFIDENCE 必须在 0 到 1 之间")
         if initial_sync_limit <= 0:
             raise ValueError("INITIAL_SYNC_LIMIT 必须大于 0")
+        if default_check_interval_minutes <= 0:
+            raise ValueError("CHECK_INTERVAL_MINUTES 必须大于 0")
         self._repository = repository
         self._provider = provider
         self._parser = parser or EpisodeParser()
@@ -69,12 +75,13 @@ class ShortDramaPipeline:
         self._initial_sync_limit = initial_sync_limit
         self._notify_on_initial_sync = notify_on_initial_sync
         self._dispatcher = dispatcher
+        self._default_check_interval_minutes = default_check_interval_minutes
 
     async def add_account(
         self,
         homepage_url: str,
         *,
-        check_interval_minutes: int = 10,
+        check_interval_minutes: int | None = None,
     ) -> tuple[dict[str, Any], bool]:
         provider_account = await self._provider.resolve_account(homepage_url)
         existing = self._repository.get_account_by_sec_uid(provider_account.sec_uid)
@@ -85,7 +92,7 @@ class ShortDramaPipeline:
             sec_uid=provider_account.sec_uid,
             nickname=profile.nickname,
             homepage_url=provider_account.homepage_url or homepage_url,
-            check_interval_minutes=check_interval_minutes,
+            check_interval_minutes=check_interval_minutes or self._default_check_interval_minutes,
         )
         return account, True
 
@@ -97,7 +104,9 @@ class ShortDramaPipeline:
     async def sync_account(self, account_id: str, *, limit: int | None = None) -> SyncResult:
         account = self._require_account(account_id)
         fetch_limit = limit or self._initial_sync_limit
+        logger.info("[account] start check nickname=%s account_id=%s", account["nickname"], account_id)
         videos = await self._provider.get_latest_videos(_provider_account(account), limit=fetch_limit)
+        logger.info("[fetch] account_id=%s fetched_videos=%s", account_id, len(videos))
         initial_sync = not bool(account["initial_sync_completed"])
         updates: list[EpisodeUpdate] = []
         new_videos = 0
@@ -127,6 +136,13 @@ class ShortDramaPipeline:
                 continue
             if not initial_sync or self._notify_on_initial_sync:
                 updates.append(update)
+        logger.info(
+            "[dedupe] account_id=%s new_videos=%s duplicate_videos=%s review_videos=%s",
+            account_id,
+            new_videos,
+            duplicate_videos,
+            review_videos,
+        )
 
         if initial_sync:
             account = self._repository.complete_initial_sync(account_id)
@@ -135,6 +151,7 @@ class ShortDramaPipeline:
         if self._dispatcher is not None:
             for update in updates:
                 await self._dispatcher.dispatch(update)
+        logger.info("[account] complete account_id=%s new_episode_updates=%s", account_id, len(updates))
         return SyncResult(
             account=account,
             initial_sync=initial_sync,
@@ -222,6 +239,12 @@ class ShortDramaPipeline:
             or parsed.episode_number is None
             or parsed.confidence < self._auto_accept_confidence
         ):
+            logger.info(
+                "[parse] needs_review aweme_id=%s method=%s confidence=%.2f",
+                video["aweme_id"],
+                parsed.method,
+                parsed.confidence,
+            )
             self._repository.update_video_processing(
                 int(video["id"]),
                 is_processed=False,
@@ -233,6 +256,14 @@ class ShortDramaPipeline:
             )
             return None
 
+        logger.info(
+            "[parse] accepted aweme_id=%s title=%s episode=%s method=%s confidence=%.2f",
+            video["aweme_id"],
+            parsed.show_title,
+            parsed.episode_number,
+            parsed.method,
+            parsed.confidence,
+        )
         show = self._find_or_create_show(parsed.show_title, parsed.matched_show_id)
         write = self._repository.record_episode_source(
             show_id=int(show["id"]),
@@ -260,8 +291,11 @@ class ShortDramaPipeline:
         normalized = normalize_title(title)
         existing = self._repository.get_show_by_normalized_title(normalized)
         if existing is not None:
+            logger.info("[show] matched show_id=%s", existing["id"])
             return existing
-        return self._repository.create_show(title=title, normalized_title=normalized, aliases=[])
+        created = self._repository.create_show(title=title, normalized_title=normalized, aliases=[])
+        logger.info("[show] created show_id=%s", created["id"])
+        return created
 
     def _require_account(self, account_id: str) -> dict[str, Any]:
         account = self._repository.get_account(account_id)
@@ -285,5 +319,7 @@ def _episode_update_if_new(
     account: dict[str, Any],
 ) -> EpisodeUpdate | None:
     if not write.is_new_episode:
+        logger.info("[episode] existing episode=%s", write.episode["episode_number"])
         return None
+    logger.info("[episode] new episode=%s", write.episode["episode_number"])
     return EpisodeUpdate(show=show, episode=write.episode, video=video, account=account)

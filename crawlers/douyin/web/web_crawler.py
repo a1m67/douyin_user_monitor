@@ -68,6 +68,11 @@ from crawlers.douyin.web.utils import _reload_token_manager_from_config  # noqa:
 
 class DouyinWebCrawler:
 
+    def __init__(self, *, cookie_override: str | None = None):
+        # The application may supply a locally mounted cookie file. Keep it in
+        # memory so neither credentials nor webhooks are written to logs.
+        self._cookie_override = str(cookie_override or "").strip() or None
+
     # 从配置文件中获取抖音的请求头
     async def get_douyin_headers(self):
         config = get_config()
@@ -77,7 +82,7 @@ class DouyinWebCrawler:
                 "Accept-Language": douyin_config["headers"]["Accept-Language"],
                 "User-Agent": douyin_config["headers"]["User-Agent"],
                 "Referer": douyin_config["headers"]["Referer"],
-                "Cookie": douyin_config["headers"]["Cookie"],
+                "Cookie": self._cookie_override or douyin_config["headers"]["Cookie"],
             },
             "proxies": {"http://": douyin_config["proxies"]["http"], "https://": douyin_config["proxies"]["https"]},
         }
@@ -405,10 +410,7 @@ class DouyinWebCrawler:
 
         service = "douyin"
         config = get_config()
-        print('DouyinWebCrawler before update', config["TokenManager"][service]["headers"]["Cookie"])
-        print('DouyinWebCrawler to update', cookie)
         config["TokenManager"][service]["headers"]["Cookie"] = cookie
-        print('DouyinWebCrawler cookie updated', config["TokenManager"][service]["headers"]["Cookie"])
         config_path = str(_cfg_loader.get_config_path())
         with open(config_path, 'w', encoding='utf-8') as file:
             yaml.dump(config, file, default_flow_style=False, allow_unicode=True, indent=2)
