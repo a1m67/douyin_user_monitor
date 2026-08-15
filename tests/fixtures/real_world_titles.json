@@ -83,5 +83,11 @@
     "description": "3种AI动漫制作技巧",
     "hashtags": [],
     "expected": {"status": "ignored"}
+  },
+  {
+    "name": "duration_is_not_episode",
+    "description": "10分钟制作一个AI短片",
+    "hashtags": [],
+    "expected": {"status": "ignored"}
   }
 ]

@@ -62,6 +62,9 @@ class ShortDramaWebTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("startEditAccount", response.text)
         self.assertIn("batchIgnoreReviews", response.text)
         self.assertIn("startHistoryBackfill", response.text)
+        self.assertIn("reparseAccount", response.text)
+        self.assertIn("reparseVideo", response.text)
+        self.assertIn("重新解析历史作品", response.text)
         self.assertIn("缺失集数", response.text)
 
         payload = self.client.get("/api/short-drama/shows").json()
@@ -69,6 +72,10 @@ class ShortDramaWebTests(unittest.IsolatedAsyncioTestCase):
         detail = self.client.get(f"/api/short-drama/shows/{payload['shows'][0]['id']}").json()
         self.assertEqual(detail["show"]["episodes"][0]["episode_number"], 12)
         self.assertIn(1, detail["show"]["missing_episode_numbers"])
+        videos = self.client.get("/api/short-drama/videos").json()["videos"]
+        self.assertIn("content_type", videos[0])
+        self.assertIn("show_title_candidate", videos[0])
+        self.assertIn("episode_candidate", videos[0])
 
     async def test_account_endpoint_updates_editable_fields(self):
         account = self.repository.list_accounts()[0]
