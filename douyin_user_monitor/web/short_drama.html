@@ -1,0 +1,212 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AI 短剧追更</title>
+  <style>
+    :root {
+      --canvas: #f7f8fa;
+      --surface: #ffffff;
+      --ink: #17202a;
+      --muted: #64707d;
+      --line: #dce1e6;
+      --nav: #183440;
+      --nav-hover: #24505f;
+      --accent: #0d7a75;
+      --accent-soft: #dff3ed;
+      --yellow: #b7791f;
+      --yellow-soft: #fef3d8;
+      --red: #b64646;
+      --red-soft: #ffe5e5;
+      --blue: #2169a7;
+      --blue-soft: #e1f0fc;
+      --radius: 6px;
+      font-family: Inter, "Microsoft YaHei", system-ui, sans-serif;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; background: var(--canvas); color: var(--ink); font-size: 14px; }
+    a { color: inherit; }
+    button, input, select { font: inherit; }
+    .shell { min-height: 100vh; display: grid; grid-template-columns: 224px minmax(0, 1fr); }
+    .sidebar { background: var(--nav); color: #eaf2f3; padding: 18px 12px; display: flex; flex-direction: column; gap: 22px; }
+    .brand { padding: 8px 10px; font-size: 18px; font-weight: 700; }
+    .brand span { display: block; color: #a8c6cc; font-size: 12px; font-weight: 500; margin-top: 5px; }
+    .nav { display: grid; gap: 4px; }
+    .nav a { color: #c4d4d7; padding: 10px; text-decoration: none; border-radius: var(--radius); }
+    .nav a:hover, .nav a.active { background: var(--nav-hover); color: #fff; }
+    .nav a.review-link { display: flex; justify-content: space-between; align-items: center; }
+    .count { background: #b7791f; color: #fff; border-radius: 10px; min-width: 20px; padding: 1px 6px; text-align: center; font-size: 12px; }
+    .sidebar-footer { color: #a8c6cc; font-size: 12px; margin-top: auto; padding: 8px 10px; }
+    .main { min-width: 0; }
+    .topbar { min-height: 64px; padding: 14px clamp(16px, 3vw, 36px); background: var(--surface); border-bottom: 1px solid var(--line); display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    .topbar-title { font-size: 18px; font-weight: 700; }
+    .system-state { color: var(--muted); font-size: 13px; }
+    .page { max-width: 1400px; padding: 24px clamp(16px, 3vw, 36px) 48px; margin: 0 auto; }
+    .page-head { display: flex; align-items: end; justify-content: space-between; gap: 16px; margin-bottom: 20px; }
+    h1 { font-size: 24px; margin: 0; font-weight: 700; }
+    .subtitle { color: var(--muted); margin: 6px 0 0; }
+    .summary { display: grid; grid-template-columns: repeat(4, minmax(130px, 1fr)); border: 1px solid var(--line); background: var(--surface); border-radius: var(--radius); overflow: hidden; margin-bottom: 20px; }
+    .metric { padding: 16px; border-right: 1px solid var(--line); }
+    .metric:last-child { border-right: 0; }
+    .metric small { display: block; color: var(--muted); margin-bottom: 7px; }
+    .metric strong { font-size: 22px; }
+    .toolbar { display: flex; align-items: end; flex-wrap: wrap; gap: 10px; margin-bottom: 16px; }
+    .field { display: grid; gap: 5px; color: var(--muted); font-size: 12px; }
+    input, select { height: 36px; min-width: 140px; padding: 7px 9px; border: 1px solid var(--line); background: #fff; border-radius: 4px; color: var(--ink); }
+    input:focus, select:focus { outline: 2px solid #9ed5cf; border-color: var(--accent); }
+    button { min-height: 36px; padding: 7px 11px; border: 1px solid transparent; border-radius: 4px; cursor: pointer; background: var(--accent); color: #fff; font-weight: 600; }
+    button:hover { filter: brightness(.95); }
+    button.secondary { background: #fff; color: var(--ink); border-color: var(--line); }
+    button.danger { background: #fff; color: var(--red); border-color: #efb9b9; }
+    button.small { min-height: 30px; padding: 4px 8px; font-size: 12px; }
+    .show-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; }
+    .show { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); min-height: 180px; padding: 16px; display: grid; grid-template-rows: auto 1fr auto; gap: 13px; text-decoration: none; }
+    .show:hover { border-color: var(--accent); }
+    .show h2 { font-size: 17px; margin: 0; line-height: 1.35; }
+    .show-episode { color: var(--accent); font-weight: 700; font-size: 22px; }
+    .show-meta { display: flex; justify-content: space-between; color: var(--muted); font-size: 12px; gap: 10px; }
+    .table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
+    table { width: 100%; border-collapse: collapse; min-width: 760px; }
+    th { background: #f1f4f6; color: #44515d; text-align: left; font-weight: 600; white-space: nowrap; }
+    th, td { padding: 11px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+    tr:last-child td { border-bottom: 0; }
+    .table-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+    .badge { display: inline-block; padding: 3px 7px; border-radius: 3px; background: var(--accent-soft); color: #075b57; font-size: 12px; font-weight: 600; }
+    .badge.paused { background: var(--yellow-soft); color: var(--yellow); }
+    .badge.completed { background: var(--blue-soft); color: var(--blue); }
+    .badge.review { background: var(--yellow-soft); color: var(--yellow); }
+    .empty { padding: 48px 20px; border: 1px dashed #bcc6cd; text-align: center; color: var(--muted); background: #fbfcfd; }
+    .detail { display: grid; grid-template-columns: minmax(0, 1fr) 310px; gap: 20px; }
+    .detail-main, .detail-side { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 18px; }
+    .episode-row { padding: 14px 0; border-bottom: 1px solid var(--line); }
+    .episode-row:last-child { border-bottom: 0; }
+    .episode-row h3 { margin: 0 0 6px; font-size: 16px; }
+    .source-list { margin: 8px 0 0; padding: 0; list-style: none; display: grid; gap: 6px; color: var(--muted); font-size: 13px; }
+    .review { display: grid; grid-template-columns: 70px minmax(0, 1fr) 300px; gap: 16px; padding: 16px; border: 1px solid var(--line); background: var(--surface); border-radius: var(--radius); margin-bottom: 12px; }
+    .cover { width: 70px; height: 94px; background: #e8ecef; object-fit: cover; border-radius: 3px; }
+    .review h2 { font-size: 16px; margin: 0 0 6px; }
+    .desc { color: #3e4a55; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .review-form { display: grid; grid-template-columns: 1fr 100px; gap: 8px; align-content: start; }
+    .review-form input, .review-form select { min-width: 0; width: 100%; }
+    .review-form .new-show { grid-column: 1 / -1; }
+    .review-form button { grid-column: 1 / -1; }
+    .status-layout { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; }
+    .panel { border: 1px solid var(--line); background: var(--surface); border-radius: var(--radius); padding: 16px; }
+    .panel h2 { margin: 0 0 14px; font-size: 16px; }
+    .error-item { padding: 10px 0; border-bottom: 1px solid var(--line); }
+    .error-item:last-child { border-bottom: 0; }
+    .notice { position: fixed; right: 20px; bottom: 20px; max-width: min(380px, calc(100vw - 40px)); background: #20313b; color: #fff; border-radius: var(--radius); padding: 12px 14px; box-shadow: 0 6px 20px rgba(0,0,0,.18); display: none; }
+    .notice.error { background: #8d3636; }
+    .muted { color: var(--muted); }
+    @media (max-width: 900px) { .shell { grid-template-columns: 1fr; } .sidebar { min-height: auto; flex-direction: row; align-items: center; overflow-x: auto; gap: 12px; } .brand { min-width: 160px; } .nav { display: flex; } .nav a { white-space: nowrap; } .sidebar-footer { display: none; } .summary { grid-template-columns: repeat(2, 1fr); } .metric:nth-child(2) { border-right: 0; } .detail, .status-layout { grid-template-columns: 1fr; } .review { grid-template-columns: 55px 1fr; } .cover { width: 55px; height: 74px; } .review-form { grid-column: 1 / -1; } }
+    @media (max-width: 560px) { .summary { grid-template-columns: 1fr; } .metric { border-right: 0; border-bottom: 1px solid var(--line); } .metric:last-child { border-bottom: 0; } .page-head { align-items: start; flex-direction: column; } .review { grid-template-columns: 1fr; } .cover { display: none; } }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <aside class="sidebar">
+      <div class="brand">AI 短剧追更<span>Douyin episode tracker</span></div>
+      <nav class="nav">
+        <a href="/shows" data-nav="shows">最近更新</a>
+        <a href="/accounts" data-nav="accounts">作者账号</a>
+        <a href="/videos" data-nav="videos">作品记录</a>
+        <a href="/review" class="review-link" data-nav="review">人工审核 <span class="count" id="reviewCount">0</span></a>
+        <a href="/status" data-nav="status">系统状态</a>
+      </nav>
+      <div class="sidebar-footer" id="sidebarStatus">加载系统状态</div>
+    </aside>
+    <main class="main">
+      <header class="topbar"><div class="topbar-title" id="topTitle">AI 短剧追更</div><div class="system-state" id="systemState"></div></header>
+      <section class="page" id="app"></section>
+    </main>
+  </div>
+  <div class="notice" id="notice" role="status"></div>
+  <script>
+    const API = "/api/short-drama";
+    const app = document.getElementById("app");
+    const notice = document.getElementById("notice");
+    const route = location.pathname;
+    let showOptions = [];
+
+    function escapeHtml(value) {
+      return String(value ?? "").replace(/[&<>'"]/g, char => ({"&":"&amp;","<":"&lt;",">":"&gt;","'":"&#39;","\"":"&quot;"}[char]));
+    }
+    function formatTime(value, fallback = "-") {
+      if (!value) return fallback;
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) return value;
+      return new Intl.DateTimeFormat("zh-CN", { timeZone: "Asia/Shanghai", hourCycle: "h23", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }).format(date);
+    }
+    function message(text, isError = false) {
+      notice.textContent = text;
+      notice.className = isError ? "notice error" : "notice";
+      notice.style.display = "block";
+      setTimeout(() => { notice.style.display = "none"; }, 3500);
+    }
+    async function request(path, options = {}) {
+      const response = await fetch(API + path, { headers: { "Content-Type": "application/json", ...(options.headers || {}) }, ...options });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.detail || "请求失败");
+      return data;
+    }
+    function nav(name, title) {
+      document.querySelectorAll("[data-nav]").forEach(item => item.classList.toggle("active", item.dataset.nav === name));
+      document.getElementById("topTitle").textContent = title;
+    }
+    async function refreshStatus() {
+      try {
+        const status = await request("/status");
+        document.getElementById("reviewCount").textContent = status.pending_review;
+        document.getElementById("sidebarStatus").textContent = `调度：${status.scheduler} · 上次巡检：${formatTime(status.last_check_at, "未开始")}`;
+        document.getElementById("systemState").textContent = `${status.enabled_accounts}/${status.accounts} 个账号启用`;
+        return status;
+      } catch (error) {
+        document.getElementById("sidebarStatus").textContent = "系统状态不可用";
+        return null;
+      }
+    }
+    function empty(text) { return `<div class="empty">${escapeHtml(text)}</div>`; }
+    function statusBadge(status) { return `<span class="badge ${escapeHtml(status)}">${escapeHtml({updating:"追更中", completed:"已完结", paused:"已暂停"}[status] || status)}</span>`; }
+
+    async function renderShows() {
+      nav("shows", "最近更新短剧");
+      const data = await request("/shows");
+      app.innerHTML = `<div class="page-head"><div><h1>最近更新短剧</h1><p class="subtitle">按最新剧集更新时间排列</p></div><button class="secondary" onclick="renderShows()">刷新</button></div>` + (data.shows.length ? `<div class="show-grid">${data.shows.map(show => `<a class="show" href="/shows/${show.id}"><h2>${escapeHtml(show.title)}</h2><div class="show-episode">${show.latest_episode ? `第 ${show.latest_episode} 集` : "尚无剧集"}</div><div class="show-meta"><span>${escapeHtml(show.latest_account_nickname || "-")}</span><span>${formatTime(show.latest_update_at, "未更新")}</span></div></a>`).join("")}</div>` : empty("还没有已识别的短剧。添加作者后，首次同步会建立历史基线。"));
+    }
+    async function renderShowDetail(id) {
+      nav("shows", "短剧详情");
+      const data = await request(`/shows/${id}`);
+      const show = data.show;
+      app.innerHTML = `<div class="page-head"><div><h1>${escapeHtml(show.title)}</h1><p class="subtitle">${show.aliases.length ? `别名：${escapeHtml(show.aliases.join("、"))}` : "暂无别名"}</p></div><a href="/shows"><button class="secondary">返回列表</button></a></div><div class="detail"><section class="detail-main"><div class="show-meta"><span>${statusBadge(show.status)}</span><span>最新：${show.latest_episode ? `第 ${show.latest_episode} 集` : "-"}</span><span>${formatTime(show.latest_update_at, "未更新")}</span></div><div>${show.episodes.length ? show.episodes.map(episode => `<article class="episode-row"><h3>第 ${episode.episode_number} 集</h3><div class="muted">首次发布：${formatTime(episode.published_at)}</div><ul class="source-list">${episode.sources.map(source => `<li>${escapeHtml(source.account_nickname)} · ${formatTime(source.published_at)} · <a href="${escapeHtml(source.video_url)}" target="_blank" rel="noreferrer">查看抖音</a></li>`).join("")}</ul></article>`).join("") : empty("还没有剧集")}</div></section><aside class="detail-side"><h2>短剧设置</h2><label class="field">状态<select id="showStatus"><option value="updating">追更中</option><option value="completed">已完结</option><option value="paused">已暂停</option></select></label><label class="field" style="margin-top:10px">别名（逗号分隔）<input id="showAliases" value="${escapeHtml(show.aliases.join(", "))}" /></label><button style="margin-top:12px" onclick="saveShow(${show.id})">保存</button></aside></div>`;
+      document.getElementById("showStatus").value = show.status;
+    }
+    async function saveShow(id) {
+      try { await request(`/shows/${id}`, {method:"PATCH", body:JSON.stringify({status:document.getElementById("showStatus").value, aliases:document.getElementById("showAliases").value.split(",").map(value=>value.trim()).filter(Boolean)})}); message("短剧设置已保存"); await renderShowDetail(id); } catch (error) { message(error.message, true); }
+    }
+    async function renderAccounts() {
+      nav("accounts", "作者账号");
+      const data = await request("/accounts");
+      app.innerHTML = `<div class="page-head"><div><h1>作者账号</h1><p class="subtitle">每个账号可设置自己的检查频率，也可手动检查。</p></div></div><div class="toolbar"><label class="field">抖音作者主页<input id="newAccountUrl" placeholder="https://www.douyin.com/user/..." /></label><label class="field">检查间隔（分钟）<input id="newAccountInterval" type="number" min="1" value="10" /></label><button onclick="addAccount()">添加作者</button></div>${data.accounts.length ? `<div class="table-wrap"><table><thead><tr><th>作者</th><th>启用</th><th>检查间隔</th><th>最后检查</th><th>下次检查</th><th>连续失败</th><th>最后错误</th><th>操作</th></tr></thead><tbody>${data.accounts.map(account => `<tr><td><strong>${escapeHtml(account.nickname)}</strong><br><span class="muted">${escapeHtml(account.sec_uid)}</span></td><td>${account.enabled ? "启用" : "停用"}</td><td>${account.check_interval_minutes} 分钟</td><td>${formatTime(account.last_checked_at, "未检查")}</td><td>${formatTime(account.next_check_at, "等待调度")}</td><td>${account.consecutive_failures}</td><td>${escapeHtml(account.last_error || "-")}</td><td><div class="table-actions"><button class="secondary small" onclick="checkAccount('${account.id}')">立即检查</button><button class="secondary small" onclick="toggleAccount('${account.id}', ${!account.enabled})">${account.enabled ? "停用" : "启用"}</button><button class="danger small" onclick="deleteAccount('${account.id}')">删除</button></div></td></tr>`).join("")}</tbody></table></div>` : empty("尚未添加作者")}`;
+    }
+    async function addAccount() { try { const url=document.getElementById("newAccountUrl").value.trim(); const interval=Number(document.getElementById("newAccountInterval").value); await request("/accounts", {method:"POST", body:JSON.stringify({homepage_url:url, check_interval_minutes:interval})}); message("作者已添加，首次检查会建立历史基线"); await renderAccounts(); await refreshStatus(); } catch(error) { message(error.message, true); } }
+    async function checkAccount(id) { try { const data=await request(`/accounts/${id}/run-once`, {method:"POST"}); message(data.result.initial_sync ? "首次同步已完成，未发送历史通知" : `检查完成，发现 ${data.result.new_videos} 个新作品`); await renderAccounts(); await refreshStatus(); } catch(error) { message(error.message, true); } }
+    async function toggleAccount(id, enabled) { try { await request(`/accounts/${id}`, {method:"PATCH", body:JSON.stringify({enabled})}); await renderAccounts(); await refreshStatus(); } catch(error) { message(error.message, true); } }
+    async function deleteAccount(id) { if (!confirm("删除账号会同时删除其视频和关联来源，继续吗？")) return; try { await request(`/accounts/${id}`, {method:"DELETE"}); message("账号已删除"); await renderAccounts(); await refreshStatus(); } catch(error) { message(error.message, true); } }
+    async function renderVideos() {
+      nav("videos", "作品记录"); const data=await request("/videos?limit=200");
+      app.innerHTML=`<div class="page-head"><div><h1>作品记录</h1><p class="subtitle">已入库作品不会因重复抓取而重复解析。</p></div><button class="secondary" onclick="renderVideos()">刷新</button></div>${data.videos.length ? `<div class="table-wrap"><table><thead><tr><th>作者</th><th>描述</th><th>发布时间</th><th>解析剧名</th><th>集数</th><th>置信度</th><th>状态</th></tr></thead><tbody>${data.videos.map(video=>`<tr><td>${escapeHtml(video.account_nickname)}</td><td><a href="${escapeHtml(video.video_url)}" target="_blank" rel="noreferrer">${escapeHtml(video.description || "（无描述）")}</a><br><span class="muted">${escapeHtml(video.hashtags.join(" #"))}</span></td><td>${formatTime(video.publish_time)}</td><td>${escapeHtml(video.parsed_show_title || "-")}</td><td>${video.parsed_episode_number || "-"}</td><td>${video.parser_confidence ?? "-"}</td><td>${video.needs_review ? '<span class="badge review">待审核</span>' : video.is_processed ? '<span class="badge">已处理</span>' : '<span class="badge review">未处理</span>'}</td></tr>`).join("")}</tbody></table></div>`:empty("暂无作品记录")}`;
+    }
+    async function renderReview() {
+      nav("review", "人工审核");
+      const [videos, shows] = await Promise.all([request("/videos?needs_review=true&limit=200"), request("/shows?limit=500")]);
+      showOptions = shows.shows;
+      app.innerHTML=`<div class="page-head"><div><h1>人工审核</h1><p class="subtitle">只在你确认剧名和集数后创建剧集，避免不确定解析污染数据。</p></div><button class="secondary" onclick="renderReview()">刷新</button></div>${videos.videos.length ? videos.videos.map(video => `<article class="review"><img class="cover" src="${escapeHtml(video.cover_url || "")}" alt="" onerror="this.style.visibility='hidden'" /><div><h2>${escapeHtml(video.account_nickname)}</h2><div class="desc">${escapeHtml(video.description || "（无描述）")}</div><p class="muted">${escapeHtml(video.hashtags.map(tag=>`#${tag}`).join(" "))} · ${formatTime(video.publish_time)} · <a href="${escapeHtml(video.video_url)}" target="_blank" rel="noreferrer">查看抖音</a></p></div><form class="review-form" onsubmit="confirmReview(event, ${video.id})"><select id="reviewShow-${video.id}"><option value="">选择已有短剧</option>${shows.shows.map(show=>`<option value="${show.id}">${escapeHtml(show.title)}</option>`).join("")}</select><input id="reviewEpisode-${video.id}" type="number" min="1" placeholder="集数" required /><input class="new-show" id="reviewNewShow-${video.id}" placeholder="或创建新短剧（填写时不要选择已有短剧）" /><button type="submit">确认归档</button></form></article>`).join("") : empty("没有待审核视频")}`;
+    }
+    async function confirmReview(event, videoId) { event.preventDefault(); try { const showId=document.getElementById(`reviewShow-${videoId}`).value; const title=document.getElementById(`reviewNewShow-${videoId}`).value.trim(); const number=Number(document.getElementById(`reviewEpisode-${videoId}`).value); await request(`/reviews/${videoId}`, {method:"POST", body:JSON.stringify({show_id:showId ? Number(showId) : null, new_show_title:title || null, episode_number:number})}); message("审核已确认"); await renderReview(); await refreshStatus(); } catch(error) { message(error.message, true); } }
+    async function renderStatus() { nav("status", "系统状态"); const status=await refreshStatus(); if(!status) { app.innerHTML=empty("状态不可用"); return; } app.innerHTML=`<div class="page-head"><div><h1>系统状态</h1><p class="subtitle">数据库、调度和最近巡检情况</p></div><button class="secondary" onclick="renderStatus()">刷新</button></div><div class="summary"><div class="metric"><small>账号总数</small><strong>${status.accounts}</strong></div><div class="metric"><small>启用账号</small><strong>${status.enabled_accounts}</strong></div><div class="metric"><small>短剧数量</small><strong>${status.shows}</strong></div><div class="metric"><small>待审核</small><strong>${status.pending_review}</strong></div></div><div class="status-layout"><section class="panel"><h2>运行状态</h2><p>数据库：正常</p><p>调度：${escapeHtml(status.scheduler)}</p><p>最近一次巡检：${formatTime(status.last_check_at, "未开始")}</p><p>通知渠道：${escapeHtml(status.enabled_notification_channels.join("、") || "未配置")}</p></section><section class="panel"><h2>最近错误</h2>${status.recent_errors.length ? status.recent_errors.map(error=>`<div class="error-item"><strong>${escapeHtml(error.nickname)}</strong><br><span class="muted">${escapeHtml(error.last_error)} · 连续失败 ${error.consecutive_failures}</span></div>`).join("") : '<p class="muted">暂无账号错误</p>'}</section></div>`; }
+    async function boot() { await refreshStatus(); try { const match=route.match(/^\/shows\/(\d+)$/); if(match) return renderShowDetail(match[1]); if(route==="/accounts") return renderAccounts(); if(route==="/videos") return renderVideos(); if(route==="/review") return renderReview(); if(route==="/status") return renderStatus(); return renderShows(); } catch(error) { app.innerHTML=empty(error.message); } }
+    boot();
+  </script>
+</body>
+</html>

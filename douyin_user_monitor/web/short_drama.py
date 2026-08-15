@@ -1,0 +1,205 @@
+"""FastAPI routes for the server-rendered short-drama dashboard."""
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any, Protocol
+
+from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import HTMLResponse
+from pydantic import BaseModel, Field
+
+from douyin_user_monitor.notifiers.dispatcher import NotificationDispatcher
+from douyin_user_monitor.repositories.sqlite import ShortDramaRepository
+from douyin_user_monitor.services.episode_pipeline import ShortDramaPipeline, SyncResult
+
+
+class SchedulerStatus(Protocol):
+    def health_status(self) -> str:
+        ...
+
+
+class AddAccountPayload(BaseModel):
+    homepage_url: str = Field(min_length=1)
+    check_interval_minutes: int = Field(default=10, ge=1, le=1440)
+
+
+class UpdateAccountPayload(BaseModel):
+    nickname: str | None = Field(default=None, min_length=1)
+    homepage_url: str | None = None
+    enabled: bool | None = None
+    check_interval_minutes: int | None = Field(default=None, ge=1, le=1440)
+
+
+class UpdateShowPayload(BaseModel):
+    title: str | None = Field(default=None, min_length=1)
+    aliases: list[str] | None = None
+    status: str | None = None
+
+
+class ReviewPayload(BaseModel):
+    show_id: int | None = None
+    new_show_title: str | None = Field(default=None, max_length=120)
+    episode_number: int = Field(ge=1, le=100000)
+
+
+def create_short_drama_router(
+    *,
+    repository: ShortDramaRepository,
+    pipeline: ShortDramaPipeline,
+    dispatcher: NotificationDispatcher | None = None,
+    scheduler: SchedulerStatus | None = None,
+    page_path: Path | None = None,
+) -> APIRouter:
+    router = APIRouter()
+    html_path = page_path or Path(__file__).with_name("short_drama.html")
+
+    def page() -> HTMLResponse:
+        if not html_path.is_file():
+            raise HTTPException(status_code=500, detail="短剧 Dashboard 文件不存在")
+        return HTMLResponse(
+            html_path.read_text(encoding="utf-8"),
+            headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"},
+        )
+
+    @router.get("/shows", response_class=HTMLResponse, include_in_schema=False)
+    async def shows_page() -> HTMLResponse:
+        return page()
+
+    @router.get("/shows/{show_id}", response_class=HTMLResponse, include_in_schema=False)
+    async def show_detail_page(show_id: int) -> HTMLResponse:
+        _ = show_id
+        return page()
+
+    @router.get("/accounts", response_class=HTMLResponse, include_in_schema=False)
+    async def accounts_page() -> HTMLResponse:
+        return page()
+
+    @router.get("/videos", response_class=HTMLResponse, include_in_schema=False)
+    async def videos_page() -> HTMLResponse:
+        return page()
+
+    @router.get("/review", response_class=HTMLResponse, include_in_schema=False)
+    async def review_page() -> HTMLResponse:
+        return page()
+
+    @router.get("/status", response_class=HTMLResponse, include_in_schema=False)
+    async def status_page() -> HTMLResponse:
+        return page()
+
+    api = APIRouter(prefix="/api/short-drama", tags=["Short drama"])
+
+    @api.get("/shows")
+    async def list_shows(limit: int = Query(default=100, ge=1, le=500)) -> dict[str, Any]:
+        return {"shows": repository.list_show_summaries(limit=limit)}
+
+    @api.get("/shows/{show_id}")
+    async def get_show(show_id: int) -> dict[str, Any]:
+        show = repository.get_show_detail(show_id)
+        if show is None:
+            raise HTTPException(status_code=404, detail="短剧不存在")
+        return {"show": show}
+
+    @api.patch("/shows/{show_id}")
+    async def update_show(show_id: int, payload: UpdateShowPayload) -> dict[str, Any]:
+        try:
+            show = repository.update_show(show_id, **payload.model_dump(exclude_unset=True))
+        except (ValueError, KeyError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"show": show}
+
+    @api.get("/accounts")
+    async def list_accounts() -> dict[str, Any]:
+        return {"accounts": repository.list_accounts()}
+
+    @api.post("/accounts", status_code=201)
+    async def add_account(payload: AddAccountPayload) -> dict[str, Any]:
+        try:
+            account, created = await pipeline.add_account(
+                payload.homepage_url,
+                check_interval_minutes=payload.check_interval_minutes,
+            )
+        except (ValueError, KeyError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"account": account, "created": created}
+
+    @api.patch("/accounts/{account_id}")
+    async def update_account(account_id: str, payload: UpdateAccountPayload) -> dict[str, Any]:
+        try:
+            account = repository.update_account(account_id, **payload.model_dump(exclude_unset=True))
+        except (ValueError, KeyError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"account": account}
+
+    @api.delete("/accounts/{account_id}")
+    async def delete_account(account_id: str) -> dict[str, Any]:
+        try:
+            account = repository.delete_account(account_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return {"account": account}
+
+    @api.post("/accounts/{account_id}/run-once")
+    async def run_account_once(account_id: str) -> dict[str, Any]:
+        try:
+            result = await pipeline.sync_account(account_id)
+        except (ValueError, KeyError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"result": _sync_result(result)}
+
+    @api.get("/videos")
+    async def list_videos(
+        needs_review: bool | None = None,
+        limit: int = Query(default=100, ge=1, le=500),
+    ) -> dict[str, Any]:
+        return {"videos": repository.list_videos(needs_review=needs_review, limit=limit)}
+
+    @api.post("/reviews/{video_id}")
+    async def confirm_review(video_id: int, payload: ReviewPayload) -> dict[str, Any]:
+        try:
+            result = pipeline.confirm_review(
+                video_id,
+                show_id=payload.show_id,
+                new_show_title=payload.new_show_title,
+                episode_number=payload.episode_number,
+            )
+        except (ValueError, KeyError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if result.update is not None and dispatcher is not None:
+            await dispatcher.dispatch(result.update)
+        return {
+            "video": result.video,
+            "show": result.show,
+            "episode": result.episode,
+            "new_episode": result.update is not None,
+        }
+
+    @api.get("/status")
+    async def status() -> dict[str, Any]:
+        result = repository.system_status()
+        result["scheduler"] = scheduler.health_status() if scheduler is not None else "not_started"
+        result["enabled_notification_channels"] = list(dispatcher.enabled_channels) if dispatcher else []
+        return result
+
+    @api.get("/health")
+    async def health() -> dict[str, str]:
+        repository.counts()
+        return {
+            "status": "ok",
+            "database": "ok",
+            "scheduler": scheduler.health_status() if scheduler is not None else "not_started",
+        }
+
+    router.include_router(api)
+    return router
+
+
+def _sync_result(result: SyncResult) -> dict[str, Any]:
+    return {
+        "account_id": result.account["id"],
+        "initial_sync": result.initial_sync,
+        "fetched_videos": result.fetched_videos,
+        "new_videos": result.new_videos,
+        "duplicate_videos": result.duplicate_videos,
+        "review_videos": result.review_videos,
+        "new_episode_count": len(result.new_episode_updates),
+    }

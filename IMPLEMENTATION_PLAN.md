@@ -57,9 +57,9 @@
 
 ## Phase 6 - Dashboard + Review
 
-- [ ] 将首页改为“最近更新短剧”。
-- [ ] 增加 `/shows/{id}`、`/accounts`、`/videos`、`/review`、`/status` 和 API。
-- [ ] 支持人工确认已有 / 新建 Show 及集数。
+- [x] 将首页改为“最近更新短剧”。
+- [x] 增加 `/shows/{id}`、`/accounts`、`/videos`、`/review`、`/status` 和 API。
+- [x] 支持人工确认已有 / 新建 Show 及集数。
 
 验证：路由、页面内容和审核确认测试。
 

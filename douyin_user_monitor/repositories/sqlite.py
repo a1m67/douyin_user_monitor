@@ -517,6 +517,46 @@ class ShortDramaRepository:
             ).fetchall()
             return [_show_row(row) for row in rows]
 
+    def list_show_summaries(self, *, limit: int = 100) -> list[dict[str, Any]]:
+        """Return dashboard rows with the first source of each latest episode."""
+        safe_limit = max(1, min(int(limit), 500))
+        with self._transaction() as connection:
+            rows = connection.execute(
+                """
+                SELECT
+                    shows.*,
+                    latest_episode.first_account_id AS latest_account_id,
+                    accounts.nickname AS latest_account_nickname,
+                    latest_video.video_url AS latest_video_url,
+                    latest_video.cover_url AS latest_cover_url
+                FROM shows
+                LEFT JOIN episodes AS latest_episode
+                    ON latest_episode.id = (
+                        SELECT episodes_inner.id
+                        FROM episodes AS episodes_inner
+                        WHERE episodes_inner.show_id = shows.id
+                        ORDER BY episodes_inner.episode_number DESC
+                        LIMIT 1
+                    )
+                LEFT JOIN accounts ON accounts.id = latest_episode.first_account_id
+                LEFT JOIN videos AS latest_video ON latest_video.id = latest_episode.first_video_id
+                ORDER BY shows.latest_update_at DESC, shows.updated_at DESC
+                LIMIT ?
+                """,
+                (safe_limit,),
+            ).fetchall()
+            return [_show_row(row) for row in rows]
+
+    def get_show_detail(self, show_id: int) -> dict[str, Any] | None:
+        show = self.get_show(show_id)
+        if show is None:
+            return None
+        episodes = self.get_show_episodes(show_id)
+        for episode in episodes:
+            episode["sources"] = self.get_episode_sources(int(episode["id"]))
+        show["episodes"] = episodes
+        return show
+
     def list_show_candidates(self) -> list[dict[str, Any]]:
         with self._transaction() as connection:
             rows = connection.execute("SELECT * FROM shows ORDER BY title COLLATE NOCASE").fetchall()
@@ -753,6 +793,31 @@ class ShortDramaRepository:
                 "shows": _count(connection, "shows"),
                 "videos": _count(connection, "videos"),
                 "pending_review": _count(connection, "videos WHERE needs_review = 1"),
+            }
+
+    def system_status(self) -> dict[str, Any]:
+        with self._transaction() as connection:
+            counts = {
+                "accounts": _count(connection, "accounts"),
+                "enabled_accounts": _count(connection, "accounts WHERE enabled = 1"),
+                "shows": _count(connection, "shows"),
+                "videos": _count(connection, "videos"),
+                "pending_review": _count(connection, "videos WHERE needs_review = 1"),
+            }
+            last_checked = connection.execute("SELECT MAX(last_checked_at) FROM accounts").fetchone()[0]
+            errors = connection.execute(
+                """
+                SELECT id, nickname, last_error, last_checked_at, consecutive_failures
+                FROM accounts
+                WHERE last_error IS NOT NULL AND last_error != ''
+                ORDER BY last_checked_at DESC
+                LIMIT 10
+                """
+            ).fetchall()
+            return {
+                **counts,
+                "last_check_at": last_checked,
+                "recent_errors": [_account_row(row) for row in errors],
             }
 
     def _require_account(self, connection: sqlite3.Connection, account_id: str) -> dict[str, Any]:
