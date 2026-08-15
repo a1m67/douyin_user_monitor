@@ -274,6 +274,66 @@ class ShortDramaRepositoryTests(unittest.TestCase):
         self.assertEqual(self.repository.get_video(review_video["id"])["classification_status"], "ignored")
         self.assertEqual(self.repository.get_video(ignored_video["id"])["classification_status"], "ignored")
 
+    def test_reparse_scopes_select_legacy_ignored_and_all_candidates(self):
+        account = self.create_account("reparse-sec")
+        legacy = self.create_video(account["id"], "reparse-legacy")
+        current_ignored = self.create_video(account["id"], "reparse-ignored")
+        review = self.create_video(account["id"], "reparse-review")
+        self.repository.update_video_processing(
+            legacy["id"],
+            is_processed=True,
+            needs_review=False,
+            parser_confidence=None,
+            classification_status="ignored",
+            parser_reason="legacy_ignored",
+            show_title_candidate="候选剧",
+            episode_candidate=39,
+            content_type="unknown",
+        )
+        self.repository.update_video_processing(
+            current_ignored["id"],
+            is_processed=True,
+            needs_review=False,
+            parser_confidence=0.0,
+            classification_status="ignored",
+            parser_reason="no_short_drama_or_episode_signal",
+            content_type="non_drama",
+        )
+        self.repository.update_video_processing(
+            review["id"],
+            is_processed=False,
+            needs_review=True,
+            parser_confidence=0.4,
+            parsed_episode_number=39,
+            parser_method="regex:bare_episode_signal",
+            classification_status="review",
+            parser_reason="bare_episode_signal_without_show_context",
+            episode_candidate=39,
+            content_type="unknown",
+        )
+
+        self.assertEqual(
+            [video["id"] for video in self.repository.list_reparse_videos(account["id"], scope="legacy_ignored")],
+            [legacy["id"]],
+        )
+        self.assertEqual(
+            {
+                video["id"]
+                for video in self.repository.list_reparse_videos(account["id"], scope="ignored")
+            },
+            {legacy["id"], current_ignored["id"]},
+        )
+        self.assertEqual(
+            {
+                video["id"]
+                for video in self.repository.list_reparse_videos(account["id"], scope="ignored_review")
+            },
+            {legacy["id"], current_ignored["id"], review["id"]},
+        )
+        refreshed = self.repository.get_video(legacy["id"])
+        self.assertEqual(refreshed["episode_candidate"], 39)
+        self.assertEqual(refreshed["show_title_candidate"], "候选剧")
+
 
 if __name__ == "__main__":
     unittest.main()

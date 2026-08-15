@@ -212,6 +212,107 @@ class ShortDramaPipelineTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.episode["episode_number"], 12)
         self.assertIsNotNone(result.update)
 
+    async def test_account_context_matches_new_bare_episode_without_notification_on_initial_sync(self):
+        dispatcher = RecordingDispatcher()
+        self.pipeline = ShortDramaPipeline(
+            repository=self.repository,
+            provider=self.provider,
+            dispatcher=dispatcher,
+            notify_on_initial_sync=False,
+        )
+        self.provider.videos_by_sec_uid["sec-one"] = [
+            make_video("context-38", "《国王战》第38集", 38),
+            make_video("context-37", "《国王战》第37集", 37),
+        ]
+        account, _ = await self.pipeline.add_account(self.account_one_provider.homepage_url)
+        await self.pipeline.sync_account(account["id"])
+        self.provider.videos_by_sec_uid["sec-one"] = [
+            make_video("context-39", "39 本视频由小云雀Seedance2.0创作生成", 39),
+            *self.provider.videos_by_sec_uid["sec-one"],
+        ]
+
+        result = await self.pipeline.sync_account(account["id"])
+        show = self.repository.get_show_by_normalized_title("国王战")
+        video = self.repository.get_video_by_aweme_id("context-39")
+
+        self.assertEqual(result.new_videos, 1)
+        self.assertEqual(len(result.new_episode_updates), 1)
+        self.assertEqual(dispatcher.updates[0].episode["episode_number"], 39)
+        self.assertEqual(video["classification_status"], "matched")
+        self.assertEqual(video["parser_method"], "context:account_sequence")
+        self.assertEqual(video["episode_candidate"], 39)
+        self.assertEqual(show["latest_episode"], 39)
+
+    async def test_reparse_legacy_ignored_reuses_context_without_notification(self):
+        dispatcher = RecordingDispatcher()
+        self.pipeline = ShortDramaPipeline(
+            repository=self.repository,
+            provider=self.provider,
+            dispatcher=dispatcher,
+        )
+        self.provider.videos_by_sec_uid["sec-one"] = [
+            make_video("legacy-context-38", "《国王战》第38集", 38),
+            make_video("legacy-context-37", "《国王战》第37集", 37),
+        ]
+        account, _ = await self.pipeline.add_account(self.account_one_provider.homepage_url)
+        await self.pipeline.sync_account(account["id"])
+        legacy, created = self.repository.create_video(
+            aweme_id="legacy-context-39",
+            account_id=account["id"],
+            description="39 本视频由小云雀Seedance2.0创作生成",
+            hashtags=("小云雀AI", "杨间", "叶真"),
+            publish_time="2026-08-15T13:39:00+00:00",
+            video_url="https://www.douyin.com/video/legacy-context-39",
+            cover_url=None,
+            raw={"aweme_id": "legacy-context-39"},
+        )
+        self.assertTrue(created)
+        self.repository.update_video_processing(
+            legacy["id"],
+            is_processed=True,
+            needs_review=False,
+            parser_confidence=None,
+            classification_status="ignored",
+            parser_reason="legacy_ignored",
+        )
+
+        result = self.pipeline.reparse_account(account["id"], scope="legacy_ignored")
+        reparsed = self.repository.get_video(legacy["id"])
+        show = self.repository.get_show_by_normalized_title("国王战")
+
+        self.assertEqual(result.requested_videos, 1)
+        self.assertEqual(result.matched_videos, 1)
+        self.assertEqual(result.new_episode_count, 1)
+        self.assertEqual(dispatcher.updates, [])
+        self.assertEqual(reparsed["classification_status"], "matched")
+        self.assertEqual(reparsed["parser_method"], "context:account_sequence")
+        self.assertEqual(show["latest_episode"], 39)
+        repeated = self.pipeline.reparse_account(account["id"], scope="legacy_ignored")
+        self.assertEqual(repeated.requested_videos, 0)
+        self.assertEqual(len(self.repository.get_show_episodes(show["id"])), 3)
+
+    async def test_show_candidate_without_episode_does_not_create_episode(self):
+        account, _ = await self.pipeline.add_account(self.account_one_provider.homepage_url)
+        self.provider.videos_by_sec_uid["sec-one"] = [
+            ProviderVideo(
+                aweme_id="trailer-1",
+                description="个人原创AI新剧：《契鬼人》先行预告片",
+                hashtags=("ai漫剧",),
+                publish_time="2026-08-15T13:00:00+00:00",
+                video_url="https://www.douyin.com/video/trailer-1",
+                cover_url=None,
+                raw={"aweme_id": "trailer-1"},
+            )
+        ]
+
+        result = await self.pipeline.sync_account(account["id"])
+        video = self.repository.get_video_by_aweme_id("trailer-1")
+
+        self.assertEqual(result.review_videos, 1)
+        self.assertEqual(video["show_title_candidate"], "契鬼人")
+        self.assertEqual(video["content_type"], "trailer")
+        self.assertEqual(self.repository.list_shows(), [])
+
     async def test_daily_sync_uses_initial_then_incremental_first_page_only(self):
         self.pipeline = ShortDramaPipeline(
             repository=self.repository,

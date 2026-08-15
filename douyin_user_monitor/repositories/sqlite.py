@@ -12,9 +12,10 @@ from pathlib import Path
 from typing import Any, Iterator, Mapping, Sequence
 
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 SHOW_STATUSES = frozenset({"updating", "completed", "paused"})
 VIDEO_CLASSIFICATIONS = frozenset({"matched", "ignored", "review"})
+VIDEO_CONTENT_TYPES = frozenset({"episode", "trailer", "show_content", "unknown", "non_drama"})
 HISTORY_SYNC_STATUSES = frozenset({"idle", "pending", "running", "paused", "completed", "failed"})
 _PLACEHOLDER_NICKNAMES = frozenset({"", "nan", "none", "null", "undefined", "n/a"})
 
@@ -133,6 +134,10 @@ class ShortDramaRepository:
                 parsed_episode_number INTEGER,
                 parser_method TEXT,
                 parser_reason TEXT,
+                show_title_candidate TEXT,
+                episode_candidate INTEGER,
+                content_type TEXT NOT NULL DEFAULT 'unknown'
+                    CHECK (content_type IN ('episode', 'trailer', 'show_content', 'unknown', 'non_drama')),
                 created_at TEXT NOT NULL,
                 processed_at TEXT
             );
@@ -204,6 +209,13 @@ class ShortDramaRepository:
         if not _table_has_column(connection, "videos", "parser_reason"):
             connection.execute("ALTER TABLE videos ADD COLUMN parser_reason TEXT")
         for column, definition in {
+            "show_title_candidate": "TEXT",
+            "episode_candidate": "INTEGER",
+            "content_type": "TEXT NOT NULL DEFAULT 'unknown'",
+        }.items():
+            if not _table_has_column(connection, "videos", column):
+                connection.execute(f"ALTER TABLE videos ADD COLUMN {column} {definition}")
+        for column, definition in {
             "history_sync_status": "TEXT NOT NULL DEFAULT 'idle'",
             "history_next_cursor": "INTEGER NOT NULL DEFAULT 0",
             "history_has_more": "INTEGER NOT NULL DEFAULT 1",
@@ -227,21 +239,22 @@ class ShortDramaRepository:
         )
         if previous_version >= SCHEMA_VERSION:
             return
-        connection.execute(
-            """
-            UPDATE videos
-            SET classification_status = CASE
-                    WHEN needs_review = 1 THEN 'review'
-                    WHEN parsed_show_title IS NOT NULL AND parsed_episode_number IS NOT NULL THEN 'matched'
-                    ELSE 'ignored'
-                END,
-                parser_reason = CASE
-                    WHEN needs_review = 1 THEN 'legacy_review'
-                    WHEN parsed_show_title IS NOT NULL AND parsed_episode_number IS NOT NULL THEN 'legacy_matched'
-                    ELSE 'legacy_ignored'
-                END
-            """
-        )
+        if previous_version < 3:
+            connection.execute(
+                """
+                UPDATE videos
+                SET classification_status = CASE
+                        WHEN needs_review = 1 THEN 'review'
+                        WHEN parsed_show_title IS NOT NULL AND parsed_episode_number IS NOT NULL THEN 'matched'
+                        ELSE 'ignored'
+                    END,
+                    parser_reason = CASE
+                        WHEN needs_review = 1 THEN 'legacy_review'
+                        WHEN parsed_show_title IS NOT NULL AND parsed_episode_number IS NOT NULL THEN 'legacy_matched'
+                        ELSE 'legacy_ignored'
+                    END
+                """
+            )
 
     def _repair_placeholder_account_nicknames(self, connection: sqlite3.Connection) -> None:
         rows = connection.execute("SELECT id, nickname, sec_uid FROM accounts").fetchall()
@@ -701,6 +714,9 @@ class ShortDramaRepository:
         parser_method: str | None = None,
         classification_status: str | None = None,
         parser_reason: str | None = None,
+        show_title_candidate: str | None = None,
+        episode_candidate: int | None = None,
+        content_type: str = "unknown",
     ) -> dict[str, Any]:
         resolved_status = classification_status or _classification_from_legacy_fields(
             needs_review=needs_review,
@@ -708,6 +724,9 @@ class ShortDramaRepository:
             parsed_episode_number=parsed_episode_number,
         )
         _validate_video_classification(resolved_status)
+        _validate_video_content_type(content_type)
+        if episode_candidate is not None and int(episode_candidate) <= 0:
+            raise ValueError("候选集数必须大于 0")
         if bool(needs_review) != (resolved_status == "review"):
             raise ValueError("needs_review 必须与分类状态一致")
         if bool(is_processed) == (resolved_status == "review"):
@@ -718,7 +737,7 @@ class ShortDramaRepository:
                 UPDATE videos SET
                     is_processed = ?, needs_review = ?, classification_status = ?, parser_confidence = ?,
                     parsed_show_title = ?, parsed_episode_number = ?, parser_method = ?,
-                    parser_reason = ?,
+                    parser_reason = ?, show_title_candidate = ?, episode_candidate = ?, content_type = ?,
                     processed_at = ?
                 WHERE id = ?
                 """,
@@ -731,6 +750,9 @@ class ShortDramaRepository:
                     parsed_episode_number,
                     _optional_text(parser_method),
                     _optional_text(parser_reason),
+                    _optional_text(show_title_candidate),
+                    episode_candidate,
+                    content_type,
                     utc_now() if is_processed else None,
                     video_id,
                 ),
@@ -745,6 +767,10 @@ class ShortDramaRepository:
         *,
         needs_review: bool | None = None,
         classification_status: str | None = None,
+        account_id: str | None = None,
+        parser_reason: str | None = None,
+        exclude_video_id: int | None = None,
+        oldest_first: bool = False,
         limit: int = 100,
     ) -> list[dict[str, Any]]:
         if classification_status is not None:
@@ -762,12 +788,126 @@ class ShortDramaRepository:
         if classification_status is not None:
             clauses.append("videos.classification_status = ?")
             params.append(classification_status)
+        if account_id is not None:
+            clauses.append("videos.account_id = ?")
+            params.append(str(account_id))
+        if parser_reason is not None:
+            clauses.append("videos.parser_reason = ?")
+            params.append(str(parser_reason))
+        if exclude_video_id is not None:
+            clauses.append("videos.id != ?")
+            params.append(int(exclude_video_id))
         if clauses:
             query += " WHERE " + " AND ".join(clauses)
-        query += " ORDER BY COALESCE(videos.publish_time, videos.created_at) DESC LIMIT ?"
+        query += (
+            " ORDER BY COALESCE(videos.publish_time, videos.created_at) "
+            + ("ASC" if oldest_first else "DESC")
+            + " LIMIT ?"
+        )
         params.append(safe_limit)
         with self._transaction() as connection:
             return [_video_row(row) for row in connection.execute(query, params).fetchall()]
+
+    def list_recent_account_videos(
+        self,
+        account_id: str,
+        *,
+        limit: int = 20,
+        exclude_video_id: int | None = None,
+    ) -> list[dict[str, Any]]:
+        """Return a bounded context window without leaking repository internals."""
+        return self.list_videos(
+            account_id=account_id,
+            exclude_video_id=exclude_video_id,
+            limit=limit,
+        )
+
+    def list_recent_account_matches(
+        self,
+        account_id: str,
+        *,
+        limit: int = 20,
+        exclude_video_id: int | None = None,
+    ) -> list[dict[str, Any]]:
+        safe_limit = max(1, min(int(limit), 100))
+        clauses = ["episode_sources.account_id = ?"]
+        params: list[Any] = [str(account_id)]
+        if exclude_video_id is not None:
+            clauses.append("videos.id != ?")
+            params.append(int(exclude_video_id))
+        query = """
+            SELECT videos.*, shows.id AS show_id, shows.title AS show_title,
+                   shows.aliases AS show_aliases, episodes.episode_number AS episode_number
+            FROM episode_sources
+            JOIN episodes ON episodes.id = episode_sources.episode_id
+            JOIN shows ON shows.id = episodes.show_id
+            JOIN videos ON videos.id = episode_sources.video_id
+            WHERE """ + " AND ".join(clauses) + """
+            ORDER BY COALESCE(videos.publish_time, episode_sources.published_at, videos.created_at) DESC,
+                     videos.id DESC
+            LIMIT ?
+        """
+        params.append(safe_limit)
+        with self._transaction() as connection:
+            results: list[dict[str, Any]] = []
+            for row in connection.execute(query, params).fetchall():
+                result = _video_row(row)
+                result["show_id"] = int(row["show_id"])
+                result["show_title"] = str(row["show_title"])
+                result["aliases"] = _json_list(row["show_aliases"])
+                result["episode_number"] = int(row["episode_number"])
+                results.append(result)
+            return results
+
+    def list_account_show_candidates(
+        self,
+        account_id: str,
+        *,
+        limit: int = 20,
+    ) -> list[dict[str, Any]]:
+        safe_limit = max(1, min(int(limit), 100))
+        with self._transaction() as connection:
+            rows = connection.execute(
+                """
+                SELECT shows.*, COUNT(DISTINCT episodes.id) AS matched_episode_count,
+                       MAX(episodes.episode_number) AS latest_account_episode,
+                       MAX(COALESCE(episode_sources.published_at, videos.publish_time, videos.created_at))
+                           AS latest_account_update_at
+                FROM shows
+                JOIN episodes ON episodes.show_id = shows.id
+                JOIN episode_sources ON episode_sources.episode_id = episodes.id
+                JOIN videos ON videos.id = episode_sources.video_id
+                WHERE episode_sources.account_id = ?
+                GROUP BY shows.id
+                ORDER BY latest_account_update_at DESC, matched_episode_count DESC, shows.id DESC
+                LIMIT ?
+                """,
+                (str(account_id), safe_limit),
+            ).fetchall()
+            return [_show_row(row) for row in rows]
+
+    def list_reparse_videos(self, account_id: str, *, scope: str) -> list[dict[str, Any]]:
+        filters = {
+            "legacy_ignored": "videos.parser_reason = 'legacy_ignored'",
+            "ignored": "videos.classification_status = 'ignored'",
+            "ignored_review": "videos.classification_status IN ('ignored', 'review')",
+        }
+        try:
+            scope_filter = filters[scope]
+        except KeyError as exc:
+            raise ValueError("重新解析范围无效") from exc
+        with self._transaction() as connection:
+            rows = connection.execute(
+                f"""
+                SELECT videos.*, accounts.nickname AS account_nickname, accounts.sec_uid AS account_sec_uid
+                FROM videos JOIN accounts ON accounts.id = videos.account_id
+                WHERE videos.account_id = ? AND {scope_filter}
+                ORDER BY COALESCE(videos.publish_time, videos.created_at) ASC, videos.id ASC
+                LIMIT 5000
+                """,
+                (str(account_id),),
+            ).fetchall()
+            return [_video_row(row) for row in rows]
 
     def ignore_review_videos(self, video_ids: Sequence[int]) -> int:
         safe_ids = _video_ids(video_ids)
@@ -1192,6 +1332,11 @@ def _fallback_account_nickname(sec_uid: str) -> str:
 def _validate_video_classification(value: str) -> None:
     if value not in VIDEO_CLASSIFICATIONS:
         raise ValueError("视频分类状态无效")
+
+
+def _validate_video_content_type(value: str) -> None:
+    if value not in VIDEO_CONTENT_TYPES:
+        raise ValueError("视频内容类型无效")
 
 
 def _classification_from_legacy_fields(

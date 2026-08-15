@@ -64,6 +64,23 @@ class ManualReviewResult:
 
 
 @dataclass(frozen=True)
+class ReparseVideoResult:
+    video: dict[str, Any]
+    status: str
+    new_episode: bool
+
+
+@dataclass(frozen=True)
+class ReparseResult:
+    account: dict[str, Any]
+    requested_videos: int
+    matched_videos: int
+    review_videos: int
+    ignored_videos: int
+    new_episode_count: int
+
+
+@dataclass(frozen=True)
 class _VideoProcessingOutcome:
     status: str
     update: EpisodeUpdate | None
@@ -315,6 +332,9 @@ class ShortDramaPipeline:
             parser_method="manual_review",
             classification_status=MATCHED,
             parser_reason="manual_review",
+            show_title_candidate=str(show["title"]),
+            episode_candidate=episode_number,
+            content_type="episode",
         )
         update = _episode_update_if_new(show, write, processed_video, account)
         return ManualReviewResult(
@@ -338,6 +358,56 @@ class ShortDramaPipeline:
 
     def ignore_reviews(self, video_ids: list[int]) -> int:
         return self._repository.ignore_review_videos(video_ids)
+
+    def reparse_video(self, video_id: int) -> ReparseVideoResult:
+        """Reparse one existing ignored/review video without notification."""
+        video = self._repository.get_video(video_id)
+        if video is None:
+            raise KeyError("视频不存在")
+        if video["classification_status"] == MATCHED:
+            raise ValueError("已匹配视频无需重新解析")
+        account = self._require_account(str(video["account_id"]))
+        outcome = self._process_video(account=account, video=video)
+        stored = self._repository.get_video(video_id)
+        if stored is None:
+            raise RuntimeError("重新解析后无法读取视频记录")
+        return ReparseVideoResult(
+            video=stored,
+            status=outcome.status,
+            new_episode=outcome.update is not None,
+        )
+
+    def reparse_account(
+        self,
+        account_id: str,
+        *,
+        scope: str = "legacy_ignored",
+    ) -> ReparseResult:
+        """Reparse persisted videos in chronological order, never dispatching."""
+        account = self._require_account(account_id)
+        videos = self._repository.list_reparse_videos(account_id, scope=scope)
+        matched_videos = 0
+        review_videos = 0
+        ignored_videos = 0
+        new_episode_count = 0
+        for video in videos:
+            outcome = self._process_video(account=account, video=video)
+            if outcome.status == MATCHED:
+                matched_videos += 1
+            elif outcome.status == REVIEW:
+                review_videos += 1
+            else:
+                ignored_videos += 1
+            if outcome.update is not None:
+                new_episode_count += 1
+        return ReparseResult(
+            account=self._require_account(account_id),
+            requested_videos=len(videos),
+            matched_videos=matched_videos,
+            review_videos=review_videos,
+            ignored_videos=ignored_videos,
+            new_episode_count=new_episode_count,
+        )
 
     def _ingest_videos(
         self,
@@ -368,10 +438,9 @@ class ShortDramaPipeline:
                 duplicate_videos += 1
                 continue
             new_videos += 1
-            outcome = self._process_new_video(
+            outcome = self._process_video(
                 account=account,
                 video=video,
-                provider_video=provider_video,
             )
             if outcome.status == REVIEW:
                 review_videos += 1
@@ -416,19 +485,28 @@ class ShortDramaPipeline:
         self._store_history_state(account_id, state)
         logger.warning("[history] failed account_id=%s reason=%s", account_id, state["last_error"])
 
-    def _process_new_video(
+    def _process_video(
         self,
         *,
         account: dict[str, Any],
         video: dict[str, Any],
-        provider_video: ProviderVideo,
     ) -> _VideoProcessingOutcome:
         parsed = self._parser.parse(
-            description=provider_video.description,
-            hashtags=provider_video.hashtags,
+            description=str(video.get("description") or ""),
+            hashtags=video.get("hashtags") or (),
             account_nickname=str(account["nickname"]),
             known_shows=self._repository.list_show_candidates(),
+            recent_account_videos=self._repository.list_recent_account_videos(
+                str(account["id"]), limit=20, exclude_video_id=int(video["id"])
+            ),
+            recent_account_matches=self._repository.list_recent_account_matches(
+                str(account["id"]), limit=20, exclude_video_id=int(video["id"])
+            ),
+            account_show_candidates=self._repository.list_account_show_candidates(
+                str(account["id"]), limit=20
+            ),
         )
+        candidate_title = parsed.show_title_candidate or parsed.show_title
         if parsed.status == IGNORED:
             logger.info(
                 "[parse] ignored aweme_id=%s reason=%s method=%s",
@@ -446,6 +524,9 @@ class ShortDramaPipeline:
                 parser_method=parsed.method,
                 classification_status=IGNORED,
                 parser_reason=parsed.reason,
+                show_title_candidate=candidate_title,
+                episode_candidate=parsed.episode_candidate,
+                content_type=parsed.content_type,
             )
             return _VideoProcessingOutcome(status=IGNORED, update=None)
 
@@ -475,6 +556,9 @@ class ShortDramaPipeline:
                 parser_method=parsed.method,
                 classification_status=REVIEW,
                 parser_reason=reason,
+                show_title_candidate=candidate_title,
+                episode_candidate=parsed.episode_candidate,
+                content_type=parsed.content_type,
             )
             return _VideoProcessingOutcome(status=REVIEW, update=None)
 
@@ -504,6 +588,9 @@ class ShortDramaPipeline:
             parser_method=parsed.method,
             classification_status=MATCHED,
             parser_reason=parsed.reason,
+            show_title_candidate=candidate_title,
+            episode_candidate=parsed.episode_candidate,
+            content_type=parsed.content_type,
         )
         return _VideoProcessingOutcome(
             status=MATCHED,

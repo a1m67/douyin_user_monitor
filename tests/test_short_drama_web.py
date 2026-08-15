@@ -196,6 +196,63 @@ class ShortDramaWebTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(page.json()["result"]["new_videos"], 1)
         self.assertEqual(page.json()["result"]["history_sync"]["status"], "completed")
 
+    async def test_reparse_video_endpoint_reuses_current_parser_without_notification(self):
+        account = self.repository.list_accounts()[0]
+        video, _ = self.repository.create_video(
+            aweme_id="legacy-reparse-1",
+            account_id=account["id"],
+            description="《末日重生》第13集",
+            hashtags=("末日重生",),
+            publish_time="2026-08-15T12:32:00+00:00",
+            video_url="https://www.douyin.com/video/legacy-reparse-1",
+            cover_url=None,
+            raw={"aweme_id": "legacy-reparse-1"},
+        )
+        self.repository.update_video_processing(
+            video["id"],
+            is_processed=True,
+            needs_review=False,
+            parser_confidence=None,
+            classification_status="ignored",
+            parser_reason="legacy_ignored",
+        )
+
+        response = self.client.post(f"/api/short-drama/videos/{video['id']}/reparse")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["status"], "matched")
+        self.assertTrue(response.json()["new_episode"])
+        stored = self.repository.get_video(video["id"])
+        self.assertEqual(stored["classification_status"], "matched")
+        self.assertEqual(stored["parser_method"], "regex:bracketed_known")
+
+    async def test_account_reparse_endpoint_defaults_to_legacy_ignored_scope(self):
+        account = self.repository.list_accounts()[0]
+        video, _ = self.repository.create_video(
+            aweme_id="legacy-reparse-account-1",
+            account_id=account["id"],
+            description="《末日重生》第13集",
+            hashtags=("末日重生",),
+            publish_time="2026-08-15T12:32:00+00:00",
+            video_url="https://www.douyin.com/video/legacy-reparse-account-1",
+            cover_url=None,
+            raw={"aweme_id": "legacy-reparse-account-1"},
+        )
+        self.repository.update_video_processing(
+            video["id"],
+            is_processed=True,
+            needs_review=False,
+            parser_confidence=None,
+            classification_status="ignored",
+            parser_reason="legacy_ignored",
+        )
+
+        response = self.client.post(f"/api/short-drama/accounts/{account['id']}/reparse")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["result"]["requested_videos"], 1)
+        self.assertEqual(response.json()["result"]["matched_videos"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()

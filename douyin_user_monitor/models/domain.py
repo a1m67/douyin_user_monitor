@@ -37,6 +37,9 @@ class Video:
     classification_status: str
     parser_confidence: float | None
     parser_reason: str | None
+    show_title_candidate: str | None
+    episode_candidate: int | None
+    content_type: str
     created_at: str
     processed_at: str | None
 

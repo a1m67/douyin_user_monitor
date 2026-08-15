@@ -53,6 +53,13 @@ class BatchIgnoreReviewPayload(BaseModel):
     video_ids: list[int] = Field(min_length=1, max_length=500)
 
 
+class ReparseAccountPayload(BaseModel):
+    scope: str = Field(
+        default="legacy_ignored",
+        pattern="^(legacy_ignored|ignored|ignored_review)$",
+    )
+
+
 def create_short_drama_router(
     *,
     repository: ShortDramaRepository,
@@ -212,6 +219,20 @@ def create_short_drama_router(
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"result": _history_backfill_result(result)}
 
+    @api.post("/accounts/{account_id}/reparse")
+    async def reparse_account(
+        account_id: str,
+        payload: ReparseAccountPayload | None = None,
+    ) -> dict[str, Any]:
+        try:
+            result = pipeline.reparse_account(
+                account_id,
+                scope=payload.scope if payload is not None else "legacy_ignored",
+            )
+        except (ValueError, KeyError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"result": _reparse_result(result)}
+
     @api.get("/videos")
     async def list_videos(
         needs_review: bool | None = None,
@@ -224,6 +245,18 @@ def create_short_drama_router(
                 classification_status=classification_status,
                 limit=limit,
             )
+        }
+
+    @api.post("/videos/{video_id}/reparse")
+    async def reparse_video(video_id: int) -> dict[str, Any]:
+        try:
+            result = pipeline.reparse_video(video_id)
+        except (ValueError, KeyError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {
+            "video": result.video,
+            "status": result.status,
+            "new_episode": result.new_episode,
         }
 
     @api.post("/reviews/batch-ignore")
@@ -296,4 +329,15 @@ def _history_backfill_result(result: HistoryBackfillResult) -> dict[str, Any]:
         "duplicate_videos": result.duplicate_videos,
         "review_videos": result.review_videos,
         "ignored_videos": result.ignored_videos,
+    }
+
+
+def _reparse_result(result: Any) -> dict[str, Any]:
+    return {
+        "account_id": result.account["id"],
+        "requested_videos": result.requested_videos,
+        "matched_videos": result.matched_videos,
+        "review_videos": result.review_videos,
+        "ignored_videos": result.ignored_videos,
+        "new_episode_count": result.new_episode_count,
     }
