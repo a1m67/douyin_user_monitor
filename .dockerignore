@@ -1,0 +1,14 @@
+.git
+.venv
+.pytest_cache
+__pycache__
+*.pyc
+.env
+data
+download
+logs
+runtime
+config.yaml
+config/douyin_web.yaml
+*.db
+*.sqlite3

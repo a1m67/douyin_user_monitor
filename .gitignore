@@ -7,6 +7,9 @@ config.yaml
 data/
 download/
 logs/
+.env
+*.db
+*.sqlite3
 
 # Tool configs
 .agents/

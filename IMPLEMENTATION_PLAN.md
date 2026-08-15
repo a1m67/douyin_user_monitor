@@ -73,8 +73,8 @@
 
 ## Phase 8 - 测试、Docker、README
 
-- [ ] 补足单元和集成测试，运行既有测试集。
-- [ ] 增加 `.env.example`、Dockerfile、Compose 持久化配置和 `.gitignore` 规则。
-- [ ] 更新 README 与 AGENTS.md，记录运行、部署、Cookie、通知和已知限制。
+- [x] 补足单元和集成测试，运行既有测试集。
+- [x] 增加 `.env.example`、Dockerfile、Compose 持久化配置、健康检查和 `.gitignore` 规则。
+- [x] 更新 README 与 AGENTS.md，记录运行、部署、Cookie、通知和已知限制。
 
-验证：测试、语法检查、应用启动和容器构建检查。
+验证：`python -m unittest discover -s tests -v` 共 79 项通过；本地 `/health` 返回数据库和调度状态，Dashboard 已检查。当前开发机未安装 Docker CLI，因此 Dockerfile 与 Compose 已静态检查但未实际构建容器。

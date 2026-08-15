@@ -1,59 +1,144 @@
-# douyin_user_monitor
+# AI 短剧追更系统
 
-抖音用户作品监控服务（监控调度 + 进程内抖音 Web 爬虫）。
+将原有的抖音作者作品监控器升级为面向短剧的追更后台：关注多个抖音作者后，系统定时发现新作品、按 `aweme_id` 去重、识别剧名和集数、合并同剧同集的多个来源，并在首次发现新集时发送通知。
 
-- 本项目负责：监控用户管理、轮询调度、下载落盘、监控面板
-- 抖音接口解析：进程内 vendored `crawlers/`（源自 `Douyin_TikTok_Download_API` 精简子集），不再依赖独立 8899 上游进程
+核心体验：
 
-## 启动
-
-1. 进入目录
-```bash
-cd /root/douyin_user_monitor
+```text
+《重生后我成了首富》
+最新：第 27 集
+更新时间：12 分钟前
+来源：AI剧场
 ```
 
-2. 安装依赖（建议 venv）
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-```
+## 功能
 
-3. 配置
-```bash
-cp config.example.yaml config.yaml
-```
+- 保留仓库内置的抖音 Web 抓取能力，业务层通过可替换的 `DouyinProvider` 调用。
+- SQLite 数据模型：`Account`、`Video`、`Show`、`Episode`、`EpisodeSource`、`Notification`。
+- 数据库级 `UNIQUE(aweme_id)`；同一短剧同一集只创建一个 Episode，多账号发布保存为多个 EpisodeSource。
+- 规则解析器支持书名号、`第 27 集`、`27集`、`EP27`、`EP.27`、`Episode 27`、`27/100`、`27-100` 和中文数字。
+- 低置信度或缺少剧名 / 集数的作品进入 `/review`，不会自动猜测。
+- 首次添加账号同步最近作品作为历史基线，默认不通知；后续新剧集才通知。
+- Telegram 和飞书 Webhook 通知；每个渠道的成功或失败都会记录，失败不会回滚 Video / Episode。
+- 按账号的 `next_check_at` 错峰巡检，有限并发和指数退避避免单个账号错误影响其他账号。
+- Dashboard：`/shows`、`/shows/{id}`、`/accounts`、`/videos`、`/review`、`/status`，以及 JSON 健康检查 `/health`。
 
-- `crawler.config_path`: 独立抖音爬虫配置（Cookie/headers），默认 `config/douyin_web.yaml`
-- `crawler.timeout_seconds`: 头像等直链下载超时
-- `monitor.state_path`: 本地监控状态文件
-- `monitor.download_root`: 本地下载目录
-- `notifications.telegram`: 新作品 Telegram 通知（支持发现新作品 + 下载完成两条消息）
+## 快速部署
 
-Cookie 配置：
+### Docker Compose
 
 ```bash
+cp .env.example .env
 cp config/douyin_web.example.yaml config/douyin_web.yaml
-# 编辑 config/douyin_web.yaml，填入浏览器获取的抖音 Cookie
+docker compose up -d --build
 ```
 
-4. 启动
+打开：<http://localhost:8900/shows>
+
+查看日志：
+
 ```bash
+docker compose logs -f short-drama-tracker
+```
+
+检查容器和健康状态：
+
+```bash
+docker compose ps
+curl http://localhost:8900/health
+```
+
+升级：
+
+```bash
+git pull
+docker compose up -d --build
+```
+
+`./data` 挂载到容器的 `/app/data`。数据库、账号、视频、短剧、剧集、通知记录和 Cookie 文件会在容器重启后保留。
+
+### 本地运行
+
+```bash
+python -m venv .venv
+.venv/Scripts/python -m pip install -r requirements.txt
+.venv/Scripts/python -m pip install pytest
+cp .env.example .env
 uvicorn douyin_user_monitor.main:app --host 0.0.0.0 --port 8900
 ```
 
-## 历史回填
+PowerShell 下可将 `.venv/Scripts/python` 替换为 `.venv\Scripts\python.exe`。
 
-- 日常巡检默认只检查最新 20 个作品。
-- 新用户会自动进入“历史回填”状态：每次同步额外补一页历史作品，每页 50 个。
-- 历史回填不会对旧作品逐条发送 Telegram“发现新作品/下载完成”通知，只更新本地状态与下载记录。
-- 可通过以下接口手动控制：
-  - `POST /api/monitor/users/{user_id}/backfill/start`
-  - `POST /api/monitor/users/{user_id}/backfill/pause`
-  - `POST /api/monitor/users/{user_id}/backfill/resume`
-  - `POST /api/monitor/users/{user_id}/backfill/run_once`
+## Cookie 配置
 
-## 访问
+新系统默认读取 `.env` 中的 `DOUYIN_COOKIE_FILE=data/cookies.json`。该文件可以是：
 
-- 监控管理页：`/api/monitor/dashboard`
-- API 文档：`/docs`
+- 浏览器导出的 JSON cookie 数组，例如 `[ {"name":"sid","value":"..."} ]`；
+- 包含 `cookies`、`cookie` 或 `Cookie` 字段的 JSON 对象；
+- 单行标准 `Cookie` 请求头。
+
+也可编辑 `config/douyin_web.yaml` 的 Cookie。Cookie、Token 和 Webhook 都受 `.gitignore` 保护，不能提交。没有有效 Cookie 时，应用仍可启动并显示管理页面，但真实抖音抓取会失败并按账号退避。
+
+## 日常使用
+
+1. 打开 `/accounts`，添加抖音作者主页并设置检查间隔。
+2. 首次“立即检查”会保存最近 `INITIAL_SYNC_LIMIT` 个作品作为历史基线，默认不发送通知。
+3. 后续巡检发现新作品时，系统根据规则识别短剧和集数。
+4. 无法可靠识别的作品在 `/review` 中选择已有短剧或新建短剧，再确认集数。
+5. 在 `/shows` 查看最近更新；点击短剧可查看每一集及全部来源账号。
+
+## 配置
+
+| 变量 | 默认值 | 说明 |
+| --- | --- | --- |
+| `DATABASE_URL` | `sqlite:///data/app.db` | 当前仅支持 SQLite URL。 |
+| `CHECK_INTERVAL_MINUTES` | `10` | 新账号默认检查间隔，可按账号覆盖。 |
+| `MAX_CONCURRENT_CHECKS` | `3` | 同时请求的账号上限。 |
+| `MAX_BACKOFF_MINUTES` | `60` | 连续失败时的退避上限。 |
+| `INITIAL_SYNC_LIMIT` | `20` | 首次同步最近作品数。 |
+| `NOTIFY_ON_INITIAL_SYNC` | `false` | 是否为历史基线发送通知。 |
+| `AUTO_ACCEPT_CONFIDENCE` | `0.8` | 自动归档最低解析置信度。 |
+| `DOUYIN_COOKIE_FILE` | `data/cookies.json` | Cookie 文件路径。 |
+| `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` | 空 | 两者都配置后启用 Telegram。 |
+| `FEISHU_WEBHOOK_URL` | 空 | 配置后启用飞书通知。 |
+
+## 数据与架构
+
+```text
+Account 1 --- * Video
+Show    1 --- * Episode
+Episode 1 --- * EpisodeSource --- 1 Video
+Episode 1 --- * Notification
+```
+
+- `Account` 是抖音作者，保存启用状态、单账号检查间隔、最近检查、错误和退避状态。
+- `Video` 以 `aweme_id` 唯一保存原始作品和解析结果。
+- `Show` 表示一部短剧，`normalized_title` 和 aliases 用于匹配。
+- `Episode` 是某一部剧的某一集；`EpisodeSource` 记录不同账号的同集来源。
+- `Notification` 记录每次渠道发送的结果。
+
+已有 `data/monitor_users.json` 会在新 SQLite 数据库首次创建时自动迁移账号及已下载 aweme ID 基线，避免升级后重复解析和通知旧作品。
+
+## Provider 和解析器
+
+`BuiltinDouyinProvider` 包装现有进程内 crawler。以后可新增 `PlaywrightDouyinProvider`、`ApiDouyinProvider` 或第三方 Provider，而不用更改短剧业务服务。
+
+`EpisodeParser` 当前只启用 `RegexParser`，并预留 `EpisodeParserBackend` 接口给未来的 LLM、OCR 或 ASR 后端。当前不会下载视频、抽帧、OCR、Whisper 或绕过验证码。
+
+## 测试
+
+```bash
+.venv/Scripts/python -m unittest discover -s tests -v
+```
+
+测试覆盖规则解析、中文数字、`aweme_id` 去重、同剧同集多来源、首次同步、审核、通知失败、Dashboard API、错峰并发、退避和旧 JSON 迁移。
+
+## 抖音限制与排障
+
+抖音页面、接口、Cookie 和风控规则会变化，真实抓取可能需要维护 Provider。系统不会实现验证码识别、验证码破解、登录绕过或反风控绕过。
+
+常见检查项：
+
+- Cookie 失效、403、429、登录要求或页面异常会写入账号 `last_error`，并按 10、20、40、60 分钟等指数退避。
+- `/status` 可查看最近错误和待审核数量；`/health` 用于容器健康检查。
+- 使用无 Cookie 或失效 Cookie 的开发环境时，业务链路应通过 `FakeDouyinProvider` 测试；不要把真实抓取失败表述为测试通过。
