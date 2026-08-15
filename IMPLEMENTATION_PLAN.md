@@ -32,9 +32,9 @@
 
 ## Phase 3 - EpisodeParser
 
-- [ ] 定义 `EpisodeParserBackend` 扩展点。
-- [ ] 实现仅规则驱动的 `RegexParser` 与置信度评分。
-- [ ] 支持中文数字、常见集数格式、书名号、已知别名和 hashtag。
+- [x] 定义 `EpisodeParserBackend` 扩展点。
+- [x] 实现仅规则驱动的 `RegexParser` 与置信度评分。
+- [x] 支持中文数字、常见集数格式、书名号、已知别名和 hashtag。
 
 验证：标题解析、低置信度与人工审核分流测试。
 
