@@ -64,6 +64,8 @@ class ShortDramaWebTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("startHistoryBackfill", response.text)
         self.assertIn("historyProgress", response.text)
         self.assertIn("history-progress-track", response.text)
+        self.assertIn('status === "idle"', response.text)
+        self.assertIn("尚未开始历史扫描", response.text)
         self.assertIn("抖音未提供历史总页数", response.text)
         self.assertIn("reparseAccount", response.text)
         self.assertIn("reparseVideo", response.text)

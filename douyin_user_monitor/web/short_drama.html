@@ -201,11 +201,13 @@
       const completed = status === "completed" || (status !== "idle" && history.has_more === false);
       const progressStatus = completed ? "completed" : ["pending", "running", "paused", "failed"].includes(status) ? status : "idle";
       const state = completed ? "已完成" : ({idle:"未开始", pending:"等待执行", running:"总页数未知，仍有下一页", paused:"已暂停，可继续", failed:"补全失败，可继续重试"}[status] || status);
-      const detail = completed
-        ? `已扫描 ${processedPages} 页 · ${scannedItems} 条作品 · 新增 ${newVideos} 条`
-        : `已扫描 ${processedPages} 页 · ${scannedItems} 条作品 · 新增 ${newVideos} 条；抖音未提供历史总页数`;
+      const detail = status === "idle"
+        ? "尚未开始历史扫描"
+        : `已扫描 ${processedPages} 页 · ${scannedItems} 条作品 · 新增 ${newVideos} 条${completed ? "" : "；抖音未提供历史总页数"}`;
       const ariaText = `历史补全${state}，${detail}`;
-      return `<div class="history-progress" data-history-progress="${escapeHtml(progressStatus)}"><div class="history-progress-head"><strong>${completed ? "100%" : "总量未知"}</strong><span>${escapeHtml(state)}</span></div><div class="history-progress-track" role="progressbar" aria-label="${escapeHtml(ariaText)}"${completed ? " aria-valuemin=\"0\" aria-valuemax=\"100\" aria-valuenow=\"100\"" : " aria-valuetext=\"总页数未知\""}><span class="history-progress-bar ${escapeHtml(progressStatus)}"></span></div><div class="history-progress-detail">${escapeHtml(detail)}</div></div>`;
+      const progressLabel = completed ? "100%" : status === "idle" ? "0%" : "总量未知";
+      const ariaValue = completed ? " aria-valuemin=\"0\" aria-valuemax=\"100\" aria-valuenow=\"100\"" : status === "idle" ? " aria-valuemin=\"0\" aria-valuemax=\"100\" aria-valuenow=\"0\"" : " aria-valuetext=\"总页数未知\"";
+      return `<div class="history-progress" data-history-progress="${escapeHtml(progressStatus)}"><div class="history-progress-head"><strong>${progressLabel}</strong><span>${escapeHtml(state)}</span></div><div class="history-progress-track" role="progressbar" aria-label="${escapeHtml(ariaText)}"${ariaValue}><span class="history-progress-bar ${escapeHtml(progressStatus)}"></span></div><div class="history-progress-detail">${escapeHtml(detail)}</div></div>`;
     }
     function contentTypeLabel(type) { return {episode:"正式剧集", trailer:"预告/先行", show_content:"短剧内容", unknown:"待判断", non_drama:"普通视频"}[type] || type || "-"; }
 
