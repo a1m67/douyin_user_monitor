@@ -98,6 +98,21 @@ class ShortDramaRepositoryTests(unittest.TestCase):
         self.assertEqual(updated["parser_evidence"]["episode"]["value"], 8)
         self.assertEqual(updated["parser_evidence"]["show"]["source_field"], "item_title")
 
+    def test_system_status_includes_accounts_with_sync_errors(self):
+        account = self.create_account()
+        self.repository.mark_account_sync_failure(
+            account["id"],
+            error="temporary Douyin response failure",
+            next_check_at="2026-08-16T10:00:00+00:00",
+        )
+
+        status = self.repository.system_status()
+
+        self.assertEqual(status["accounts"], 1)
+        self.assertEqual(len(status["recent_errors"]), 1)
+        self.assertEqual(status["recent_errors"][0]["id"], account["id"])
+        self.assertEqual(status["recent_errors"][0]["last_error"], "temporary Douyin response failure")
+
     def test_same_show_and_episode_keeps_multiple_sources_but_one_episode(self):
         first_account = self.create_account("sec-1")
         second_account = self.create_account("sec-2")

@@ -1312,7 +1312,7 @@ class ShortDramaRepository:
             last_checked = connection.execute("SELECT MAX(last_checked_at) FROM accounts").fetchone()[0]
             errors = connection.execute(
                 """
-                SELECT id, nickname, last_error, last_checked_at, consecutive_failures
+                SELECT *
                 FROM accounts
                 WHERE last_error IS NOT NULL AND last_error != ''
                 ORDER BY last_checked_at DESC
