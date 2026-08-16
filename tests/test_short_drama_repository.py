@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
@@ -31,6 +32,20 @@ class ShortDramaRepositoryTests(unittest.TestCase):
             description="《末日重生》第27集",
             hashtags=["末日重生"],
             publish_time="2026-08-15T12:31:00+00:00",
+            video_url=f"https://www.douyin.com/video/{aweme_id}",
+            cover_url=None,
+            raw={"aweme_id": aweme_id},
+        )
+        self.assertTrue(created)
+        return video
+
+    def create_video_at(self, account_id: str, aweme_id: str, published_at: str) -> dict:
+        video, created = self.repository.create_video(
+            aweme_id=aweme_id,
+            account_id=account_id,
+            description="《末日重生》第27集",
+            hashtags=["末日重生"],
+            publish_time=published_at,
             video_url=f"https://www.douyin.com/video/{aweme_id}",
             cover_url=None,
             raw={"aweme_id": aweme_id},
@@ -252,6 +267,255 @@ class ShortDramaRepositoryTests(unittest.TestCase):
         refreshed_show = self.repository.get_show(show["id"])
         self.assertEqual(refreshed_show["latest_episode"], 27)
         self.assertEqual(refreshed_show["latest_update_at"], second_video["publish_time"])
+
+    def test_later_recorded_earlier_source_repairs_episode_first_source(self):
+        account = self.create_account()
+        show = self.repository.create_show(title="契鬼人", normalized_title="契鬼人")
+        later_video = self.create_video_at(account["id"], "first-late", "2026/08/04")
+        first = self.repository.record_episode_source(
+            show_id=show["id"],
+            episode_number=1,
+            video_id=later_video["id"],
+            account_id=account["id"],
+            published_at="2026/08/04",
+        )
+        earlier_video = self.create_video_at(account["id"], "first-early", "2026/07/07")
+        second = self.repository.record_episode_source(
+            show_id=show["id"],
+            episode_number=1,
+            video_id=earlier_video["id"],
+            account_id=account["id"],
+            published_at="2026/07/07",
+        )
+
+        self.assertTrue(first.is_new_episode)
+        self.assertFalse(second.is_new_episode)
+        episode = self.repository.get_show_episodes(show["id"])[0]
+        self.assertEqual(episode["published_at"], "2026/07/07")
+        self.assertEqual(episode["first_video_id"], earlier_video["id"])
+        self.assertEqual(episode["first_account_id"], account["id"])
+        self.assertEqual(self.repository.get_show(show["id"])["latest_update_at"], "2026/07/07")
+
+    def test_merge_show_moves_non_overlapping_episodes_and_keeps_source_title_as_alias(self):
+        account = self.create_account()
+        target = self.repository.create_show(title="契鬼人", normalized_title="契鬼人")
+        source = self.repository.create_show(title="契鬼人 I", normalized_title="契鬼人i")
+        for number in range(7, 12):
+            video = self.create_video_at(
+                account["id"], f"target-{number}", f"2026-08-{number:02d}T00:00:00+00:00"
+            )
+            self.repository.record_episode_source(
+                show_id=target["id"],
+                episode_number=number,
+                video_id=video["id"],
+                account_id=account["id"],
+                published_at=video["publish_time"],
+            )
+        source_videos = []
+        for number in range(1, 7):
+            video = self.create_video_at(
+                account["id"], f"source-{number}", f"2026-07-{number:02d}T00:00:00+00:00"
+            )
+            source_videos.append(video)
+            self.repository.record_episode_source(
+                show_id=source["id"],
+                episode_number=number,
+                video_id=video["id"],
+                account_id=account["id"],
+                published_at=video["publish_time"],
+            )
+        self.repository.update_video_processing(
+            source_videos[0]["id"],
+            is_processed=True,
+            needs_review=False,
+            parser_confidence=0.9,
+            parsed_show_title=source["title"],
+            parsed_episode_number=1,
+            classification_status="matched",
+            content_type="episode",
+        )
+
+        merged = self.repository.merge_show(source["id"], target["id"])
+
+        self.assertEqual(merged["id"], target["id"])
+        self.assertIsNone(self.repository.get_show(source["id"]))
+        self.assertEqual(
+            sorted(episode["episode_number"] for episode in self.repository.get_show_episodes(target["id"])),
+            list(range(1, 12)),
+        )
+        self.assertEqual(merged["latest_episode"], 11)
+        self.assertIn(source["title"], merged["aliases"])
+        self.assertEqual(self.repository.get_video(source_videos[0]["id"])["parsed_show_title"], target["title"])
+
+    def test_merge_show_coalesces_same_episode_and_preserves_sources_and_notifications(self):
+        first_account = self.create_account("merge-sec-1")
+        second_account = self.create_account("merge-sec-2")
+        target = self.repository.create_show(title="契鬼人", normalized_title="契鬼人")
+        source = self.repository.create_show(title="契鬼人 I", normalized_title="契鬼人i")
+        target_video = self.create_video_at(
+            first_account["id"], "merge-target-6", "2026-08-04T00:00:00+00:00"
+        )
+        target_write = self.repository.record_episode_source(
+            show_id=target["id"],
+            episode_number=6,
+            video_id=target_video["id"],
+            account_id=first_account["id"],
+            published_at=target_video["publish_time"],
+        )
+        source_video = self.create_video_at(
+            second_account["id"], "merge-source-6", "2026-07-07T00:00:00+00:00"
+        )
+        source_write = self.repository.record_episode_source(
+            show_id=source["id"],
+            episode_number=6,
+            video_id=source_video["id"],
+            account_id=second_account["id"],
+            published_at=source_video["publish_time"],
+        )
+        notification = self.repository.record_notification(
+            show_id=source["id"],
+            episode_id=source_write.episode["id"],
+            channel="test",
+            success=True,
+        )
+
+        self.repository.merge_show(source["id"], target["id"])
+
+        episodes = self.repository.get_show_episodes(target["id"])
+        self.assertEqual(len(episodes), 1)
+        self.assertEqual(episodes[0]["id"], target_write.episode["id"])
+        self.assertEqual(episodes[0]["published_at"], "2026-07-07T00:00:00+00:00")
+        self.assertEqual(
+            {item["video_id"] for item in self.repository.get_episode_sources(episodes[0]["id"])},
+            {target_video["id"], source_video["id"]},
+        )
+        notifications = self.repository.list_notifications(episode_id=episodes[0]["id"])
+        self.assertEqual(notifications[0]["id"], notification["id"])
+        self.assertEqual(notifications[0]["show_id"], target["id"])
+
+    def test_merge_show_rolls_back_every_change_when_source_move_fails(self):
+        account = self.create_account()
+        target = self.repository.create_show(title="保留剧", normalized_title="保留剧")
+        source = self.repository.create_show(title="待合并剧", normalized_title="待合并剧")
+        target_video = self.create_video_at(
+            account["id"], "rollback-target", "2026-08-04T00:00:00+00:00"
+        )
+        self.repository.record_episode_source(
+            show_id=target["id"],
+            episode_number=1,
+            video_id=target_video["id"],
+            account_id=account["id"],
+            published_at=target_video["publish_time"],
+        )
+        source_video = self.create_video_at(
+            account["id"], "rollback-source", "2026-08-03T00:00:00+00:00"
+        )
+        source_write = self.repository.record_episode_source(
+            show_id=source["id"],
+            episode_number=1,
+            video_id=source_video["id"],
+            account_id=account["id"],
+            published_at=source_video["publish_time"],
+        )
+        with self.repository._transaction() as connection:
+            connection.execute(
+                """
+                CREATE TRIGGER fail_episode_source_move
+                BEFORE UPDATE OF episode_id ON episode_sources
+                BEGIN
+                    SELECT RAISE(ABORT, 'forced merge failure');
+                END
+                """
+            )
+
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.repository.merge_show(source["id"], target["id"])
+
+        self.assertEqual(self.repository.get_show(target["id"])["aliases"], [])
+        self.assertIsNotNone(self.repository.get_show(source["id"]))
+        self.assertEqual(
+            self.repository.get_episode_sources(source_write.episode["id"])[0]["video_id"],
+            source_video["id"],
+        )
+
+    def test_renaming_show_updates_normalized_title(self):
+        show = self.repository.create_show(title="旧剧名", normalized_title="旧剧名")
+
+        updated = self.repository.update_show(show["id"], title="新 剧 名")
+
+        self.assertEqual(updated["title"], "新 剧 名")
+        self.assertEqual(updated["normalized_title"], "新剧名")
+
+    def test_renaming_show_to_conflicting_normalized_title_requires_merge(self):
+        canonical = self.repository.create_show(title="契鬼人", normalized_title="契鬼人")
+        duplicate = self.repository.create_show(title="其它短剧", normalized_title="其它短剧")
+
+        with self.assertRaisesRegex(ValueError, "合并"):
+            self.repository.update_show(duplicate["id"], title="契 鬼 人！")
+
+        still_duplicate = self.repository.get_show(duplicate["id"])
+        self.assertEqual(still_duplicate["title"], "其它短剧")
+        self.assertEqual(still_duplicate["normalized_title"], "其它短剧")
+        self.assertIsNotNone(self.repository.get_show(canonical["id"]))
+
+    def test_repair_episode_and_show_consistency_is_idempotent_for_legacy_data(self):
+        account = self.create_account()
+        show = self.repository.create_show(title="历史修复", normalized_title="历史修复")
+        late_video = self.create_video_at(account["id"], "repair-late", "2026/08/04")
+        episode_one = self.repository.record_episode_source(
+            show_id=show["id"],
+            episode_number=1,
+            video_id=late_video["id"],
+            account_id=account["id"],
+            published_at="2026/08/04",
+        )
+        early_video = self.create_video_at(account["id"], "repair-early", "2026/07/07")
+        self.repository.record_episode_source(
+            show_id=show["id"],
+            episode_number=1,
+            video_id=early_video["id"],
+            account_id=account["id"],
+            published_at="2026/07/07",
+        )
+        latest_video = self.create_video_at(account["id"], "repair-latest", "2026/07/08")
+        self.repository.record_episode_source(
+            show_id=show["id"],
+            episode_number=2,
+            video_id=latest_video["id"],
+            account_id=account["id"],
+            published_at="2026/07/08",
+        )
+        with self.repository._transaction() as connection:
+            connection.execute(
+                """
+                UPDATE episodes
+                SET first_video_id = ?, first_account_id = ?, published_at = ?
+                WHERE id = ?
+                """,
+                (late_video["id"], account["id"], "2026/08/04", episode_one.episode["id"]),
+            )
+            connection.execute(
+                """
+                UPDATE shows
+                SET latest_episode = ?, latest_update_at = ?
+                WHERE id = ?
+                """,
+                (1, "2026/08/04", show["id"]),
+            )
+
+        repaired = self.repository.repair_episode_and_show_consistency()
+        repaired_episode = self.repository.get_show_episodes(show["id"])[1]
+        repaired_show = self.repository.get_show(show["id"])
+        second_run = self.repository.repair_episode_and_show_consistency()
+
+        self.assertGreaterEqual(repaired["episodes_repaired"], 1)
+        self.assertGreaterEqual(repaired["shows_repaired"], 1)
+        self.assertEqual(repaired_episode["first_video_id"], early_video["id"])
+        self.assertEqual(repaired_episode["published_at"], "2026/07/07")
+        self.assertEqual(repaired_show["latest_episode"], 2)
+        self.assertEqual(repaired_show["latest_update_at"], "2026/07/08")
+        self.assertEqual(second_run["episodes_repaired"], 0)
+        self.assertEqual(second_run["shows_repaired"], 0)
 
     def test_legacy_json_accounts_and_aweme_ids_are_imported_as_processed_baseline(self):
         legacy_path = self.root / "monitor_users.json"

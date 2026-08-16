@@ -74,6 +74,8 @@ class ShortDramaWebTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("解析证据", response.text)
         self.assertIn("重新解析历史作品", response.text)
         self.assertIn("缺失集数", response.text)
+        self.assertIn("合并短剧", response.text)
+        self.assertIn("mergeShow(", response.text)
 
         payload = self.client.get("/api/short-drama/shows").json()
         self.assertEqual(payload["shows"][0]["title"], "末日重生")
@@ -87,6 +89,44 @@ class ShortDramaWebTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("display_title", videos[0])
         self.assertIn("text_sources", videos[0])
         self.assertIn("parser_evidence", videos[0])
+
+    async def test_show_merge_and_consistency_repair_endpoints(self):
+        target = self.client.get("/api/short-drama/shows").json()["shows"][0]
+        account = self.repository.list_accounts()[0]
+        source = self.repository.create_show(title="末日重生 I", normalized_title="末日重生i")
+        video, created = self.repository.create_video(
+            aweme_id="merge-web-1",
+            account_id=account["id"],
+            description="《末日重生 I》第1集",
+            hashtags=[],
+            publish_time="2026-08-01T00:00:00+00:00",
+            video_url="https://www.douyin.com/video/merge-web-1",
+            cover_url=None,
+            raw={},
+        )
+        self.assertTrue(created)
+        self.repository.record_episode_source(
+            show_id=source["id"],
+            episode_number=1,
+            video_id=video["id"],
+            account_id=account["id"],
+            published_at=video["publish_time"],
+        )
+
+        merged = self.client.post(
+            f"/api/short-drama/shows/{target['id']}/merge",
+            json={"source_show_id": source["id"]},
+        )
+        repaired = self.client.post("/api/short-drama/repair-consistency")
+
+        self.assertEqual(merged.status_code, 200)
+        self.assertEqual(merged.json()["show"]["id"], target["id"])
+        self.assertIsNone(self.repository.get_show(source["id"]))
+        self.assertEqual(repaired.status_code, 200)
+        self.assertIn("episodes_repaired", repaired.json()["result"])
+        openapi = self.client.get("/openapi.json").json()
+        self.assertIn("/api/short-drama/shows/{target_show_id}/merge", openapi["paths"])
+        self.assertIn("/api/short-drama/repair-consistency", openapi["paths"])
 
     async def test_account_endpoint_updates_editable_fields(self):
         account = self.repository.list_accounts()[0]

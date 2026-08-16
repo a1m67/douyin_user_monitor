@@ -43,6 +43,10 @@ class UpdateShowPayload(BaseModel):
     status: str | None = None
 
 
+class MergeShowPayload(BaseModel):
+    source_show_id: int = Field(gt=0)
+
+
 class ReviewPayload(BaseModel):
     show_id: int | None = None
     new_show_title: str | None = Field(default=None, max_length=120)
@@ -139,6 +143,18 @@ def create_short_drama_router(
         except (ValueError, KeyError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"show": show}
+
+    @api.post("/shows/{target_show_id}/merge")
+    async def merge_show(target_show_id: int, payload: MergeShowPayload) -> dict[str, Any]:
+        try:
+            show = repository.merge_show(payload.source_show_id, target_show_id)
+        except (ValueError, KeyError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"show": show}
+
+    @api.post("/repair-consistency")
+    async def repair_consistency() -> dict[str, Any]:
+        return {"result": repository.repair_episode_and_show_consistency()}
 
     @api.get("/accounts")
     async def list_accounts() -> dict[str, Any]:

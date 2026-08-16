@@ -11,6 +11,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator, Mapping, Sequence
 
+from douyin_user_monitor.parsers.regex import normalize_title
+
 
 SCHEMA_VERSION = 5
 SHOW_STATUSES = frozenset({"updating", "completed", "paused"})
@@ -622,11 +624,12 @@ class ShortDramaRepository:
 
     def _refresh_show_latest(
         self, connection: sqlite3.Connection, show_ids: set[int]
-    ) -> None:
-        """Refresh cached show metadata after destructive source changes."""
+    ) -> int:
+        """Refresh cached metadata from each show's highest numbered episode."""
         if not show_ids:
-            return
+            return 0
         now = utc_now()
+        refreshed = 0
         for show_id in show_ids:
             latest = connection.execute(
                 """
@@ -638,7 +641,14 @@ class ShortDramaRepository:
                 """,
                 (show_id,),
             ).fetchone()
+            current = connection.execute(
+                "SELECT latest_episode, latest_update_at FROM shows WHERE id = ?", (show_id,)
+            ).fetchone()
+            if current is None:
+                continue
             if latest is None:
+                if current["latest_episode"] is None and current["latest_update_at"] is None:
+                    continue
                 connection.execute(
                     """
                     UPDATE shows
@@ -647,6 +657,14 @@ class ShortDramaRepository:
                     """,
                     (now, show_id),
                 )
+                refreshed += 1
+                continue
+            latest_episode = int(latest["episode_number"])
+            latest_update_at = latest["latest_update_at"]
+            if (
+                current["latest_episode"] == latest_episode
+                and current["latest_update_at"] == latest_update_at
+            ):
                 continue
             connection.execute(
                 """
@@ -654,8 +672,63 @@ class ShortDramaRepository:
                 SET latest_episode = ?, latest_update_at = ?, updated_at = ?
                 WHERE id = ?
                 """,
-                (int(latest["episode_number"]), latest["latest_update_at"], now, show_id),
+                (latest_episode, latest_update_at, now, show_id),
             )
+            refreshed += 1
+        return refreshed
+
+    def _repair_episode_first_source(
+        self, connection: sqlite3.Connection, episode_id: int
+    ) -> bool:
+        """Make an episode's canonical source point at its earliest known publication."""
+        episode = connection.execute(
+            """
+            SELECT id, first_video_id, first_account_id, published_at
+            FROM episodes
+            WHERE id = ?
+            """,
+            (episode_id,),
+        ).fetchone()
+        if episode is None:
+            return False
+
+        source_rows = connection.execute(
+            """
+            SELECT episode_sources.id, episode_sources.video_id, episode_sources.account_id,
+                   episode_sources.published_at AS source_published_at,
+                   videos.publish_time AS video_published_at,
+                   episode_sources.created_at
+            FROM episode_sources
+            JOIN videos ON videos.id = episode_sources.video_id
+            WHERE episode_sources.episode_id = ?
+            """,
+            (episode_id,),
+        ).fetchall()
+        if not source_rows:
+            return False
+
+        earliest = min(source_rows, key=_episode_source_order_key)
+        published_at = _episode_source_published_at(earliest)
+        if (
+            int(episode["first_video_id"]) == int(earliest["video_id"])
+            and str(episode["first_account_id"]) == str(earliest["account_id"])
+            and _optional_text(episode["published_at"]) == published_at
+        ):
+            return False
+        connection.execute(
+            """
+            UPDATE episodes
+            SET first_video_id = ?, first_account_id = ?, published_at = ?
+            WHERE id = ?
+            """,
+            (
+                int(earliest["video_id"]),
+                str(earliest["account_id"]),
+                published_at,
+                episode_id,
+            ),
+        )
+        return True
 
     def create_video(
         self,
@@ -1144,7 +1217,11 @@ class ShortDramaRepository:
             cleaned_title = title.strip()
             if not cleaned_title:
                 raise ValueError("剧名不能为空")
+            normalized_title = normalize_title(cleaned_title)
+            if not normalized_title:
+                raise ValueError("剧名标准化结果不能为空")
             changes["title"] = cleaned_title
+            changes["normalized_title"] = normalized_title
         if aliases is not None:
             changes["aliases"] = _json_array(aliases)
         if status is not None:
@@ -1159,6 +1236,19 @@ class ShortDramaRepository:
         changes["updated_at"] = utc_now()
         assignments = ", ".join(f"{key} = ?" for key in changes)
         with self._transaction() as connection:
+            existing = connection.execute("SELECT * FROM shows WHERE id = ?", (show_id,)).fetchone()
+            if existing is None:
+                raise KeyError("短剧不存在")
+            normalized_title = changes.get("normalized_title")
+            if normalized_title is not None:
+                conflict = connection.execute(
+                    "SELECT id, title FROM shows WHERE normalized_title = ? AND id != ?",
+                    (normalized_title, show_id),
+                ).fetchone()
+                if conflict is not None:
+                    raise ValueError(
+                        f"标准化剧名已被“{conflict['title']}”占用，请使用短剧合并"
+                    )
             cursor = connection.execute(
                 f"UPDATE shows SET {assignments} WHERE id = ?", (*changes.values(), show_id)
             )
@@ -1166,6 +1256,126 @@ class ShortDramaRepository:
                 raise KeyError("短剧不存在")
             row = connection.execute("SELECT * FROM shows WHERE id = ?", (show_id,)).fetchone()
             return _show_row(row)
+
+    def merge_show(self, source_show_id: int, target_show_id: int) -> dict[str, Any]:
+        """Merge a manually selected duplicate show into its canonical target.
+
+        Episode sources and notification history are retained even when both
+        shows already have the same episode number. The entire move uses one
+        SQLite transaction so an error cannot leave a partially merged show.
+        """
+        if source_show_id == target_show_id:
+            raise ValueError("源短剧和保留短剧不能相同")
+        now = utc_now()
+        with self._transaction() as connection:
+            source_show = connection.execute(
+                "SELECT * FROM shows WHERE id = ?", (source_show_id,)
+            ).fetchone()
+            target_show = connection.execute(
+                "SELECT * FROM shows WHERE id = ?", (target_show_id,)
+            ).fetchone()
+            if source_show is None:
+                raise KeyError("源短剧不存在")
+            if target_show is None:
+                raise KeyError("保留短剧不存在")
+
+            aliases = _merge_show_aliases(
+                str(target_show["title"]),
+                _json_list(target_show["aliases"]),
+                [str(source_show["title"])],
+                _json_list(source_show["aliases"]),
+            )
+            connection.execute(
+                "UPDATE shows SET aliases = ?, updated_at = ? WHERE id = ?",
+                (_json_array(aliases), now, target_show_id),
+            )
+
+            target_episodes = {
+                int(row["episode_number"]): int(row["id"])
+                for row in connection.execute(
+                    "SELECT id, episode_number FROM episodes WHERE show_id = ?", (target_show_id,)
+                ).fetchall()
+            }
+            source_episodes = connection.execute(
+                "SELECT id, episode_number FROM episodes WHERE show_id = ?", (source_show_id,)
+            ).fetchall()
+            for source_episode in source_episodes:
+                source_episode_id = int(source_episode["id"])
+                episode_number = int(source_episode["episode_number"])
+                target_episode_id = target_episodes.get(episode_number)
+                if target_episode_id is None:
+                    connection.execute(
+                        "UPDATE episodes SET show_id = ? WHERE id = ?",
+                        (target_show_id, source_episode_id),
+                    )
+                    target_episodes[episode_number] = source_episode_id
+                    continue
+
+                connection.execute(
+                    "UPDATE episode_sources SET episode_id = ? WHERE episode_id = ?",
+                    (target_episode_id, source_episode_id),
+                )
+                connection.execute(
+                    """
+                    UPDATE notifications
+                    SET episode_id = ?, show_id = ?
+                    WHERE episode_id = ?
+                    """,
+                    (target_episode_id, target_show_id, source_episode_id),
+                )
+                connection.execute("DELETE FROM episodes WHERE id = ?", (source_episode_id,))
+
+            # Notifications for moved (rather than coalesced) episodes still
+            # point at the source show, so update them before deleting it.
+            connection.execute(
+                "UPDATE notifications SET show_id = ? WHERE show_id = ?",
+                (target_show_id, source_show_id),
+            )
+            connection.execute(
+                """
+                UPDATE videos
+                SET parsed_show_title = ?
+                WHERE id IN (
+                    SELECT episode_sources.video_id
+                    FROM episode_sources
+                    JOIN episodes ON episodes.id = episode_sources.episode_id
+                    WHERE episodes.show_id = ?
+                )
+                """,
+                (str(target_show["title"]), target_show_id),
+            )
+            connection.execute("DELETE FROM shows WHERE id = ?", (source_show_id,))
+
+            target_episode_rows = connection.execute(
+                "SELECT id FROM episodes WHERE show_id = ?", (target_show_id,)
+            ).fetchall()
+            for episode_row in target_episode_rows:
+                self._repair_episode_first_source(connection, int(episode_row["id"]))
+            self._refresh_show_latest(connection, {target_show_id})
+            row = connection.execute("SELECT * FROM shows WHERE id = ?", (target_show_id,)).fetchone()
+            if row is None:
+                raise RuntimeError("合并短剧后无法读取保留短剧")
+            return _show_row(row)
+
+    def repair_episode_and_show_consistency(self) -> dict[str, int]:
+        """Rebuild canonical episode sources and cached show metadata safely."""
+        with self._transaction() as connection:
+            episode_rows = connection.execute("SELECT id FROM episodes ORDER BY id").fetchall()
+            repaired_episodes = 0
+            for episode_row in episode_rows:
+                if self._repair_episode_first_source(connection, int(episode_row["id"])):
+                    repaired_episodes += 1
+            show_ids = {
+                int(row["id"])
+                for row in connection.execute("SELECT id FROM shows").fetchall()
+            }
+            repaired_shows = self._refresh_show_latest(connection, show_ids)
+            return {
+                "episodes_checked": len(episode_rows),
+                "episodes_repaired": repaired_episodes,
+                "shows_checked": len(show_ids),
+                "shows_repaired": repaired_shows,
+            }
 
     def record_episode_source(
         self,
@@ -1197,20 +1407,7 @@ class ShortDramaRepository:
                     (show_id, episode_number, video_id, account_id, _optional_text(published_at), now),
                 )
                 episode_id = int(cursor.lastrowid)
-                episode_row = connection.execute("SELECT * FROM episodes WHERE id = ?", (episode_id,)).fetchone()
-                current_show = connection.execute("SELECT latest_episode FROM shows WHERE id = ?", (show_id,)).fetchone()
-                latest_episode = current_show["latest_episode"] if current_show else None
-                if latest_episode is None or episode_number >= int(latest_episode):
-                    connection.execute(
-                        """
-                        UPDATE shows
-                        SET latest_episode = ?, latest_update_at = ?, updated_at = ?
-                        WHERE id = ?
-                        """,
-                        (episode_number, _optional_text(published_at) or now, now, show_id),
-                    )
             else:
-                episode_row = existing_episode
                 episode_id = int(existing_episode["id"])
 
             source_cursor = connection.execute(
@@ -1226,6 +1423,11 @@ class ShortDramaRepository:
             ).fetchone()
             if source_row is None:
                 raise RuntimeError("保存剧集来源后无法读取记录")
+            self._repair_episode_first_source(connection, episode_id)
+            self._refresh_show_latest(connection, {show_id})
+            episode_row = connection.execute("SELECT * FROM episodes WHERE id = ?", (episode_id,)).fetchone()
+            if episode_row is None:
+                raise RuntimeError("保存剧集后无法读取记录")
             return EpisodeWriteResult(
                 episode=_episode_row(episode_row),
                 source=_episode_source_row(source_row),
@@ -1490,6 +1692,55 @@ def _positive_int(value: Any, default: int) -> int:
 def _optional_text(value: Any) -> str | None:
     text = str(value or "").strip()
     return text or None
+
+
+def _merge_show_aliases(canonical_title: str, *groups: Sequence[str]) -> list[str]:
+    """Retain human-recognizable prior titles without duplicating the canonical one."""
+    canonical_normalized = normalize_title(canonical_title)
+    seen = {canonical_normalized} if canonical_normalized else set()
+    aliases: list[str] = []
+    for group in groups:
+        for raw_value in group:
+            value = str(raw_value or "").strip()
+            normalized = normalize_title(value)
+            if not value or not normalized or normalized in seen:
+                continue
+            aliases.append(value)
+            seen.add(normalized)
+    return aliases
+
+
+def _episode_source_published_at(source: sqlite3.Row) -> str | None:
+    return _optional_text(source["source_published_at"]) or _optional_text(
+        source["video_published_at"]
+    )
+
+
+def _episode_source_order_key(source: sqlite3.Row) -> tuple[int, tuple[int, str], tuple[int, str], int]:
+    published_at = _episode_source_published_at(source)
+    return (
+        0 if published_at is not None else 1,
+        _timestamp_order_key(published_at),
+        _timestamp_order_key(source["created_at"]),
+        int(source["id"]),
+    )
+
+
+def _timestamp_order_key(value: Any) -> tuple[int, str]:
+    """Compare ISO timestamps and legacy slash-delimited dates consistently."""
+    text = _optional_text(value)
+    if text is None:
+        return (1, "")
+    normalized = text.replace("/", "-")
+    if normalized.endswith("Z"):
+        normalized = f"{normalized[:-1]}+00:00"
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        return (1, normalized)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return (0, parsed.astimezone(timezone.utc).isoformat(timespec="microseconds"))
 
 
 def _json_array(values: Sequence[str]) -> str:
