@@ -1,7 +1,7 @@
 """Service facade for the first-stage regex parser."""
 from __future__ import annotations
 
-from typing import Any, Iterable
+from typing import Any, Iterable, Mapping
 
 from douyin_user_monitor.parsers.base import EpisodeParseInput, EpisodeParseResult, EpisodeParserBackend
 from douyin_user_monitor.parsers.context import ContextParser
@@ -35,6 +35,7 @@ class EpisodeParser:
         recent_account_videos: Iterable[dict[str, Any]] = (),
         recent_account_matches: Iterable[dict[str, Any]] = (),
         account_show_candidates: Iterable[dict[str, Any]] = (),
+        text_sources: Mapping[str, Any] | None = None,
     ) -> EpisodeParseResult:
         request = EpisodeParseInput(
             description=str(description or ""),
@@ -44,6 +45,11 @@ class EpisodeParser:
             recent_account_videos=tuple(recent_account_videos),
             recent_account_matches=tuple(recent_account_matches),
             account_show_candidates=tuple(account_show_candidates),
+            text_sources={
+                str(field or ""): str(text or "")
+                for field, text in (text_sources or {}).items()
+                if str(field or "").strip() and str(text or "").strip()
+            },
         )
         result = self._backend.parse(request)
         if result.status != "matched":

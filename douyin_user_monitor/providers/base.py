@@ -1,7 +1,7 @@
 """Stable, crawler-independent Douyin provider contract."""
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Mapping, Protocol
 
 
@@ -29,6 +29,8 @@ class ProviderVideo:
     video_url: str
     cover_url: str | None
     raw: Mapping[str, Any]
+    display_title: str | None = None
+    text_sources: Mapping[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

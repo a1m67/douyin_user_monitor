@@ -56,6 +56,48 @@ class ShortDramaRepositoryTests(unittest.TestCase):
         self.assertEqual(second["id"], first["id"])
         self.assertEqual(self.repository.counts()["videos"], 1)
 
+    def test_video_text_metadata_and_parser_evidence_round_trip(self):
+        account = self.create_account()
+        video, created = self.repository.create_video(
+            aweme_id="metadata-1",
+            account_id=account["id"],
+            description="原创ai漫剧《契鬼人》义庄副本第一夜",
+            hashtags=[],
+            publish_time=None,
+            video_url="https://www.douyin.com/video/metadata-1",
+            cover_url=None,
+            raw={"aweme_id": "metadata-1"},
+            display_title="第8集 | 原创ai漫剧《契鬼人》义庄副本第一夜",
+            text_sources={
+                "series_play_info.item_title_prefix.text": "第8集",
+                "item_title": "原创ai漫剧《契鬼人》义庄副本第一夜",
+            },
+        )
+        self.assertTrue(created)
+        updated = self.repository.update_video_processing(
+            video["id"],
+            is_processed=True,
+            needs_review=False,
+            parser_confidence=0.97,
+            parsed_show_title="契鬼人",
+            parsed_episode_number=8,
+            parser_method="regex:bracketed",
+            classification_status="matched",
+            parser_reason="explicit_bracketed_title_and_episode",
+            show_title_candidate="契鬼人",
+            episode_candidate=8,
+            content_type="episode",
+            parser_evidence={
+                "episode": {"source_field": "series_play_info.item_title_prefix.text", "value": 8},
+                "show": {"source_field": "item_title", "value": "契鬼人"},
+            },
+        )
+
+        self.assertEqual(updated["display_title"], "第8集 | 原创ai漫剧《契鬼人》义庄副本第一夜")
+        self.assertEqual(updated["text_sources"]["series_play_info.item_title_prefix.text"], "第8集")
+        self.assertEqual(updated["parser_evidence"]["episode"]["value"], 8)
+        self.assertEqual(updated["parser_evidence"]["show"]["source_field"], "item_title")
+
     def test_same_show_and_episode_keeps_multiple_sources_but_one_episode(self):
         first_account = self.create_account("sec-1")
         second_account = self.create_account("sec-2")

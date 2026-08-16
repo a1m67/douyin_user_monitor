@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, Iterator, Mapping, Sequence
 
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 SHOW_STATUSES = frozenset({"updating", "completed", "paused"})
 VIDEO_CLASSIFICATIONS = frozenset({"matched", "ignored", "review"})
 VIDEO_CONTENT_TYPES = frozenset({"episode", "trailer", "show_content", "unknown", "non_drama"})
@@ -125,6 +125,8 @@ class ShortDramaRepository:
                 video_url TEXT NOT NULL DEFAULT '',
                 cover_url TEXT,
                 raw_json TEXT NOT NULL DEFAULT '{}',
+                display_title TEXT,
+                text_sources TEXT NOT NULL DEFAULT '{}',
                 is_processed INTEGER NOT NULL DEFAULT 0,
                 needs_review INTEGER NOT NULL DEFAULT 0,
                 classification_status TEXT NOT NULL DEFAULT 'ignored'
@@ -138,6 +140,7 @@ class ShortDramaRepository:
                 episode_candidate INTEGER,
                 content_type TEXT NOT NULL DEFAULT 'unknown'
                     CHECK (content_type IN ('episode', 'trailer', 'show_content', 'unknown', 'non_drama')),
+                parser_evidence TEXT NOT NULL DEFAULT '{}',
                 created_at TEXT NOT NULL,
                 processed_at TEXT
             );
@@ -212,6 +215,9 @@ class ShortDramaRepository:
             "show_title_candidate": "TEXT",
             "episode_candidate": "INTEGER",
             "content_type": "TEXT NOT NULL DEFAULT 'unknown'",
+            "display_title": "TEXT",
+            "text_sources": "TEXT NOT NULL DEFAULT '{}'",
+            "parser_evidence": "TEXT NOT NULL DEFAULT '{}'",
         }.items():
             if not _table_has_column(connection, "videos", column):
                 connection.execute(f"ALTER TABLE videos ADD COLUMN {column} {definition}")
@@ -662,6 +668,8 @@ class ShortDramaRepository:
         video_url: str,
         cover_url: str | None,
         raw: Mapping[str, Any],
+        display_title: str | None = None,
+        text_sources: Mapping[str, Any] | None = None,
     ) -> tuple[dict[str, Any], bool]:
         safe_aweme_id = aweme_id.strip()
         if not safe_aweme_id:
@@ -672,8 +680,8 @@ class ShortDramaRepository:
                 """
                 INSERT OR IGNORE INTO videos(
                     aweme_id, account_id, description, hashtags, publish_time, video_url,
-                    cover_url, raw_json, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    cover_url, raw_json, display_title, text_sources, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     safe_aweme_id,
@@ -684,6 +692,8 @@ class ShortDramaRepository:
                     video_url.strip(),
                     _optional_text(cover_url),
                     json.dumps(raw, ensure_ascii=False, sort_keys=True),
+                    _optional_text(display_title),
+                    _json_text_sources(text_sources),
                     now,
                 ),
             )
@@ -691,6 +701,31 @@ class ShortDramaRepository:
             if row is None:
                 raise RuntimeError("保存视频后无法读取记录")
             return _video_row(row), cursor.rowcount == 1
+
+    def update_video_text_metadata(
+        self,
+        video_id: int,
+        *,
+        display_title: str | None,
+        text_sources: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        with self._transaction() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE videos
+                SET display_title = ?, text_sources = ?
+                WHERE id = ?
+                """,
+                (
+                    _optional_text(display_title),
+                    _json_text_sources(text_sources),
+                    video_id,
+                ),
+            )
+            if cursor.rowcount == 0:
+                raise KeyError("视频不存在")
+            row = connection.execute("SELECT * FROM videos WHERE id = ?", (video_id,)).fetchone()
+            return _video_row(row)
 
     def get_video(self, video_id: int) -> dict[str, Any] | None:
         with self._transaction() as connection:
@@ -717,6 +752,7 @@ class ShortDramaRepository:
         show_title_candidate: str | None = None,
         episode_candidate: int | None = None,
         content_type: str = "unknown",
+        parser_evidence: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         resolved_status = classification_status or _classification_from_legacy_fields(
             needs_review=needs_review,
@@ -738,6 +774,7 @@ class ShortDramaRepository:
                     is_processed = ?, needs_review = ?, classification_status = ?, parser_confidence = ?,
                     parsed_show_title = ?, parsed_episode_number = ?, parser_method = ?,
                     parser_reason = ?, show_title_candidate = ?, episode_candidate = ?, content_type = ?,
+                    parser_evidence = COALESCE(?, parser_evidence),
                     processed_at = ?
                 WHERE id = ?
                 """,
@@ -753,6 +790,7 @@ class ShortDramaRepository:
                     _optional_text(show_title_candidate),
                     episode_candidate,
                     content_type,
+                    _json_mapping(parser_evidence) if parser_evidence is not None else None,
                     utc_now() if is_processed else None,
                     video_id,
                 ),
@@ -1409,6 +1447,32 @@ def _json_list(value: Any) -> list[str]:
     return [str(item) for item in parsed if str(item).strip()]
 
 
+def _json_text_sources(values: Mapping[str, Any] | None) -> str:
+    result: dict[str, str] = {}
+    if isinstance(values, Mapping):
+        for raw_field, raw_text in values.items():
+            field = str(raw_field or "").strip()
+            text = str(raw_text or "").strip()
+            if field and text:
+                result[field] = text
+    return json.dumps(result, ensure_ascii=False, sort_keys=True)
+
+
+def _json_mapping(values: Mapping[str, Any]) -> str:
+    try:
+        return json.dumps(dict(values), ensure_ascii=False, sort_keys=True)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("解析证据必须是 JSON 对象") from exc
+
+
+def _json_object(value: Any) -> dict[str, Any]:
+    try:
+        parsed = json.loads(str(value or "{}"))
+    except json.JSONDecodeError:
+        return {}
+    return dict(parsed) if isinstance(parsed, Mapping) else {}
+
+
 def _row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
     return {key: row[key] for key in row.keys()}
 
@@ -1441,6 +1505,8 @@ def _account_row(row: sqlite3.Row) -> dict[str, Any]:
 def _video_row(row: sqlite3.Row) -> dict[str, Any]:
     result = _row_to_dict(row)
     result["hashtags"] = _json_list(result.get("hashtags"))
+    result["text_sources"] = _json_object(result.get("text_sources"))
+    result["parser_evidence"] = _json_object(result.get("parser_evidence"))
     result["is_processed"] = bool(result["is_processed"])
     result["needs_review"] = bool(result["needs_review"])
     return result

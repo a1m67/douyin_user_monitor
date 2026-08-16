@@ -1,8 +1,8 @@
 """Contracts shared by current and future episode parser backends."""
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Any, Protocol, Sequence
+from dataclasses import dataclass, field
+from typing import Any, Mapping, Protocol, Sequence
 
 
 MATCHED = "matched"
@@ -23,6 +23,7 @@ class EpisodeParseInput:
     recent_account_videos: Sequence[dict[str, Any]] = ()
     recent_account_matches: Sequence[dict[str, Any]] = ()
     account_show_candidates: Sequence[dict[str, Any]] = ()
+    text_sources: Mapping[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -37,6 +38,8 @@ class EpisodeParseResult:
     show_title_candidate: str | None = None
     episode_candidate: int | None = None
     content_type: str = "unknown"
+    episode_evidence: Mapping[str, Any] | None = None
+    show_evidence: Mapping[str, Any] | None = None
 
     def __post_init__(self) -> None:
         if self.status not in PARSE_STATUSES:
@@ -63,6 +66,15 @@ class EpisodeParseResult:
             "show_title_candidate": self.show_title_candidate,
             "episode_candidate": self.episode_candidate,
             "content_type": self.content_type,
+            "episode_evidence": dict(self.episode_evidence or {}),
+            "show_evidence": dict(self.show_evidence or {}),
+        }
+
+    @property
+    def evidence(self) -> dict[str, dict[str, Any]]:
+        return {
+            "episode": dict(self.episode_evidence or {}),
+            "show": dict(self.show_evidence or {}),
         }
 
 

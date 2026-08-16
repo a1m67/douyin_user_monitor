@@ -42,6 +42,8 @@ class ContextParser:
                 confidence=0.91 if base_result.episode_candidate else 0.94,
                 reason="known_show_context_resolved_episode",
                 method="context:known_show",
+                base_result=base_result,
+                evidence_kind="known_show_context",
             )
 
         inferred = _infer_account_show(request, candidate, base_result)
@@ -53,6 +55,8 @@ class ContextParser:
                 confidence=confidence,
                 reason="account_sequence_resolved_episode",
                 method="context:account_sequence",
+                base_result=base_result,
+                evidence_kind="account_sequence",
             )
 
         if base_result.episode_candidate is None:
@@ -67,6 +71,8 @@ class ContextParser:
                 show_title_candidate=base_result.show_title_candidate,
                 episode_candidate=candidate,
                 content_type=base_result.content_type,
+                episode_evidence=base_result.episode_evidence,
+                show_evidence=base_result.show_evidence,
             )
         return base_result
 
@@ -79,6 +85,7 @@ def _find_referenced_show(
         " ".join(
             [
                 request.description,
+                *request.text_sources.values(),
                 *request.hashtags,
                 result.show_title_candidate or "",
                 result.show_title or "",
@@ -192,18 +199,29 @@ def _matched_from_context(
     confidence: float,
     reason: str,
     method: str,
+    base_result: EpisodeParseResult,
+    evidence_kind: str,
 ) -> EpisodeParseResult:
+    title = str(show.get("title") or "").strip() or None
     return EpisodeParseResult(
         status=MATCHED,
-        show_title=str(show.get("title") or "").strip() or None,
+        show_title=title,
         episode_number=episode_number,
         confidence=confidence,
         reason=reason,
         method=method,
         matched_show_id=_optional_int(show.get("id")),
-        show_title_candidate=str(show.get("title") or "").strip() or None,
+        show_title_candidate=title,
         episode_candidate=episode_number,
         content_type="episode",
+        episode_evidence=base_result.episode_evidence,
+        show_evidence=base_result.show_evidence
+        or {
+            "value": title,
+            "source_field": "account_context",
+            "matched_text": title,
+            "kind": evidence_kind,
+        },
     )
 
 

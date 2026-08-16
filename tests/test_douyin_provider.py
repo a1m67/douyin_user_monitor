@@ -26,7 +26,9 @@ class StubCrawler:
             "aweme_list": [
                 {
                     "aweme_id": "1002",
-                    "desc": "《末日重生》第12集 #短剧",
+                    "desc": "原创ai漫剧《契鬼人》义庄副本第一夜 #短剧",
+                    "item_title": "原创ai漫剧《契鬼人》义庄副本第一夜",
+                    "series_play_info": {"item_title_prefix": {"text": "第8集"}},
                     "create_time": 1_700_000_000,
                     "text_extra": [{"hashtag_name": "末日重生"}],
                     "video": {"cover": {"url_list": ["https://cover.example/12.jpg"]}},
@@ -68,6 +70,10 @@ class BuiltinDouyinProviderTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(videos[0].hashtags, ("末日重生",))
         self.assertEqual(videos[0].cover_url, "https://cover.example/12.jpg")
         self.assertEqual(videos[0].video_url, "https://www.douyin.com/video/1002")
+        self.assertEqual(videos[0].description, "原创ai漫剧《契鬼人》义庄副本第一夜 #短剧")
+        self.assertEqual(videos[0].display_title, "第8集 | 原创ai漫剧《契鬼人》义庄副本第一夜")
+        self.assertEqual(videos[0].text_sources["series_play_info.item_title_prefix.text"], "第8集")
+        self.assertEqual(videos[0].text_sources["item_title"], "原创ai漫剧《契鬼人》义庄副本第一夜")
 
     async def test_rejects_non_positive_limit(self):
         with self.assertRaisesRegex(ValueError, "limit"):

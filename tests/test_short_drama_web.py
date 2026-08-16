@@ -69,6 +69,9 @@ class ShortDramaWebTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("抖音未提供历史总页数", response.text)
         self.assertIn("reparseAccount", response.text)
         self.assertIn("reparseVideo", response.text)
+        self.assertIn("videoDescription", response.text)
+        self.assertIn("parserEvidence", response.text)
+        self.assertIn("解析证据", response.text)
         self.assertIn("重新解析历史作品", response.text)
         self.assertIn("缺失集数", response.text)
 
@@ -81,6 +84,9 @@ class ShortDramaWebTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("content_type", videos[0])
         self.assertIn("show_title_candidate", videos[0])
         self.assertIn("episode_candidate", videos[0])
+        self.assertIn("display_title", videos[0])
+        self.assertIn("text_sources", videos[0])
+        self.assertIn("parser_evidence", videos[0])
 
     async def test_account_endpoint_updates_editable_fields(self):
         account = self.repository.list_accounts()[0]

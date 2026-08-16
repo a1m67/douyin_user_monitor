@@ -19,6 +19,7 @@ from douyin_user_monitor.parsers.episode_parser import EpisodeParser
 from douyin_user_monitor.parsers.regex import normalize_title
 from douyin_user_monitor.providers.base import DouyinProvider, ProviderAccount, ProviderVideo
 from douyin_user_monitor.repositories.sqlite import EpisodeWriteResult, ShortDramaRepository, utc_now
+from douyin_user_monitor.video_text import build_video_text_metadata
 
 logger = logging.getLogger(__name__)
 
@@ -424,6 +425,12 @@ class ShortDramaPipeline:
 
         # Oldest first keeps episode creation and optional notifications ordered.
         for provider_video in sorted(provider_videos, key=lambda item: item.publish_time or ""):
+            text_metadata = build_video_text_metadata(
+                provider_video.raw,
+                description=provider_video.description,
+                display_title=provider_video.display_title,
+                text_sources=provider_video.text_sources,
+            )
             video, created = self._repository.create_video(
                 aweme_id=provider_video.aweme_id,
                 account_id=str(account["id"]),
@@ -433,6 +440,8 @@ class ShortDramaPipeline:
                 video_url=provider_video.video_url,
                 cover_url=provider_video.cover_url,
                 raw=provider_video.raw,
+                display_title=text_metadata.display_title,
+                text_sources=text_metadata.text_sources,
             )
             if not created:
                 duplicate_videos += 1
@@ -491,6 +500,21 @@ class ShortDramaPipeline:
         account: dict[str, Any],
         video: dict[str, Any],
     ) -> _VideoProcessingOutcome:
+        text_metadata = build_video_text_metadata(
+            video.get("raw_json"),
+            description=str(video.get("description") or ""),
+            display_title=video.get("display_title"),
+            text_sources=video.get("text_sources"),
+        )
+        if (
+            video.get("display_title") != text_metadata.display_title
+            or video.get("text_sources") != text_metadata.text_sources
+        ):
+            video = self._repository.update_video_text_metadata(
+                int(video["id"]),
+                display_title=text_metadata.display_title,
+                text_sources=text_metadata.text_sources,
+            )
         parsed = self._parser.parse(
             description=str(video.get("description") or ""),
             hashtags=video.get("hashtags") or (),
@@ -505,6 +529,7 @@ class ShortDramaPipeline:
             account_show_candidates=self._repository.list_account_show_candidates(
                 str(account["id"]), limit=20
             ),
+            text_sources=text_metadata.text_sources,
         )
         candidate_title = parsed.show_title_candidate or parsed.show_title
         if parsed.status == IGNORED:
@@ -527,6 +552,7 @@ class ShortDramaPipeline:
                 show_title_candidate=candidate_title,
                 episode_candidate=parsed.episode_candidate,
                 content_type=parsed.content_type,
+                parser_evidence=parsed.evidence,
             )
             return _VideoProcessingOutcome(status=IGNORED, update=None)
 
@@ -559,6 +585,7 @@ class ShortDramaPipeline:
                 show_title_candidate=candidate_title,
                 episode_candidate=parsed.episode_candidate,
                 content_type=parsed.content_type,
+                parser_evidence=parsed.evidence,
             )
             return _VideoProcessingOutcome(status=REVIEW, update=None)
 
@@ -591,6 +618,7 @@ class ShortDramaPipeline:
             show_title_candidate=candidate_title,
             episode_candidate=parsed.episode_candidate,
             content_type=parsed.content_type,
+            parser_evidence=parsed.evidence,
         )
         return _VideoProcessingOutcome(
             status=MATCHED,

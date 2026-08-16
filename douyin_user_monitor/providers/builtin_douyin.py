@@ -10,6 +10,7 @@ from douyin_user_monitor.providers.base import (
     ProviderVideo,
     ProviderVideoPage,
 )
+from douyin_user_monitor.video_text import build_video_text_metadata
 
 
 class BuiltinCrawlerProtocol(Protocol):
@@ -103,14 +104,18 @@ class BuiltinDouyinProvider:
         aweme_id = str(raw.get("aweme_id") or "").strip()
         if not aweme_id:
             return None
+        description = str(raw.get("desc") or "").strip()
+        text_metadata = build_video_text_metadata(raw, description=description)
         return ProviderVideo(
             aweme_id=aweme_id,
-            description=str(raw.get("desc") or "").strip(),
+            description=description,
             hashtags=tuple(_extract_hashtags(raw)),
             publish_time=_to_iso_time(raw.get("create_time")),
             video_url=_extract_video_url(raw, aweme_id),
             cover_url=_extract_cover_url(raw),
             raw=dict(raw),
+            display_title=text_metadata.display_title,
+            text_sources=text_metadata.text_sources,
         )
 
 

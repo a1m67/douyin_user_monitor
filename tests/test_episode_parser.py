@@ -11,12 +11,13 @@ class EpisodeParserTests(unittest.TestCase):
     def setUp(self) -> None:
         self.parser = EpisodeParser()
 
-    def parse(self, description: str, *, hashtags=(), shows=()):
+    def parse(self, description: str, *, hashtags=(), shows=(), text_sources=None):
         return self.parser.parse(
             description=description,
             hashtags=hashtags,
             account_nickname="AI剧场",
             known_shows=shows,
+            text_sources=text_sources,
         )
 
     def assert_episode(self, description: str, title: str, number: int) -> None:
@@ -96,6 +97,52 @@ class EpisodeParserTests(unittest.TestCase):
         self.assertEqual(result.status, REVIEW)
         self.assertEqual(result.show_title, "重生后我成了首富")
         self.assertIsNone(result.episode_number)
+
+    def test_confirmed_douyin_title_sources_match_and_record_evidence(self):
+        result = self.parse(
+            "原创ai漫剧《契鬼人》义庄副本第一夜 全片由小云雀Seedance2.5制作",
+            text_sources={
+                "series_play_info.item_title_prefix.text": "第8集",
+                "item_title": "原创ai漫剧《契鬼人》义庄副本第一夜",
+                "desc": "原创ai漫剧《契鬼人》义庄副本第一夜 全片由小云雀Seedance2.5制作",
+            },
+        )
+
+        self.assertEqual(result.status, MATCHED)
+        self.assertEqual(result.show_title, "契鬼人")
+        self.assertEqual(result.episode_number, 8)
+        self.assertEqual(result.episode_evidence["source_field"], "series_play_info.item_title_prefix.text")
+        self.assertEqual(result.show_evidence["source_field"], "item_title")
+
+    def test_decimal_versions_do_not_become_bare_episode_candidates(self):
+        target = self.parse("原创ai漫剧《契鬼人》义庄副本第一夜 Seedance2.5制作")
+        self.assertEqual(target.status, REVIEW)
+        self.assertEqual(target.show_title_candidate, "契鬼人")
+        self.assertIsNone(target.episode_candidate)
+
+        for description in ("2.5", "2.0", "V2.1", "GPT5.6", "Seedance2.5"):
+            with self.subTest(description=description):
+                result = self.parse(description)
+                self.assertIsNone(result.episode_candidate)
+
+    def test_bare_number_candidates_score_context_and_reject_counts(self):
+        cases = [
+            ("39 本视频由小云雀Seedance2.0创作生成", 39),
+            ("船登陆40", 40),
+            ("人间夜游 李乐平 01 我是李乐平", 1),
+        ]
+        for description, expected in cases:
+            with self.subTest(description=description):
+                result = self.parse(description)
+                self.assertEqual(result.status, REVIEW)
+                self.assertEqual(result.episode_candidate, expected)
+                self.assertEqual(result.episode_evidence["value"], expected)
+
+        for description in ("2026新年快乐", "100万播放", "3种AI技巧"):
+            with self.subTest(description=description):
+                result = self.parse(description)
+                self.assertEqual(result.status, IGNORED)
+                self.assertIsNone(result.episode_candidate)
 
     def test_normalization_and_chinese_numbers(self):
         self.assertEqual(normalize_title("《重生后，我成了首富！》"), "重生后我成了首富")

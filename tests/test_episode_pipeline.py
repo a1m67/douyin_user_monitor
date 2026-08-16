@@ -291,6 +291,50 @@ class ShortDramaPipelineTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(repeated.requested_videos, 0)
         self.assertEqual(len(self.repository.get_show_episodes(show["id"])), 3)
 
+    async def test_reparse_rebuilds_confirmed_title_sources_from_stored_raw_json(self):
+        account, _ = await self.pipeline.add_account(self.account_one_provider.homepage_url)
+        description = "原创ai漫剧《契鬼人》义庄副本第一夜 全片由小云雀Seedance2.5制作"
+        legacy, created = self.repository.create_video(
+            aweme_id="stored-qi-gui-ren-8",
+            account_id=account["id"],
+            description=description,
+            hashtags=("小云雀AI",),
+            publish_time="2026-08-15T13:08:00+00:00",
+            video_url="https://www.douyin.com/video/stored-qi-gui-ren-8",
+            cover_url=None,
+            raw={
+                "aweme_id": "stored-qi-gui-ren-8",
+                "desc": description,
+                "item_title": "原创ai漫剧《契鬼人》义庄副本第一夜",
+                "series_play_info": {"item_title_prefix": {"text": "第8集"}},
+            },
+        )
+        self.assertTrue(created)
+        self.repository.update_video_processing(
+            legacy["id"],
+            is_processed=False,
+            needs_review=True,
+            parser_confidence=0.46,
+            classification_status="review",
+            parser_reason="bare_episode_signal_without_show_context",
+            episode_candidate=2,
+            content_type="unknown",
+        )
+
+        result = self.pipeline.reparse_video(legacy["id"])
+        reparsed = self.repository.get_video(legacy["id"])
+        show = self.repository.get_show_by_normalized_title("契鬼人")
+
+        self.assertEqual(result.status, "matched")
+        self.assertTrue(result.new_episode)
+        self.assertEqual(reparsed["classification_status"], "matched")
+        self.assertEqual(reparsed["parsed_episode_number"], 8)
+        self.assertEqual(reparsed["display_title"], "第8集 | 原创ai漫剧《契鬼人》义庄副本第一夜")
+        self.assertEqual(reparsed["text_sources"]["series_play_info.item_title_prefix.text"], "第8集")
+        self.assertEqual(reparsed["parser_evidence"]["episode"]["source_field"], "series_play_info.item_title_prefix.text")
+        self.assertEqual(reparsed["parser_evidence"]["show"]["source_field"], "item_title")
+        self.assertEqual(show["latest_episode"], 8)
+
     async def test_show_candidate_without_episode_does_not_create_episode(self):
         account, _ = await self.pipeline.add_account(self.account_one_provider.homepage_url)
         self.provider.videos_by_sec_uid["sec-one"] = [

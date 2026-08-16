@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any, Mapping
 
 
 @dataclass(frozen=True)
@@ -32,6 +33,8 @@ class Video:
     video_url: str
     cover_url: str | None
     raw_json: str
+    display_title: str | None
+    text_sources: Mapping[str, str]
     is_processed: bool
     needs_review: bool
     classification_status: str
@@ -40,6 +43,7 @@ class Video:
     show_title_candidate: str | None
     episode_candidate: int | None
     content_type: str
+    parser_evidence: Mapping[str, Any]
     created_at: str
     processed_at: str | None
 
