@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -157,6 +158,147 @@ class ShortDramaPipelineTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(videos[0]["classification_status"], "ignored")
         self.assertTrue(videos[0]["is_processed"])
         self.assertFalse(videos[0]["needs_review"])
+
+    async def test_duplicate_provider_video_rehydrates_legacy_metadata_without_notification(self):
+        dispatcher = RecordingDispatcher()
+        self.pipeline = ShortDramaPipeline(
+            repository=self.repository,
+            provider=self.provider,
+            dispatcher=dispatcher,
+        )
+        account, _ = await self.pipeline.add_account(self.account_one_provider.homepage_url)
+        self.repository.complete_initial_sync(account["id"])
+        legacy, created = self.repository.create_video(
+            aweme_id="rehydrate-qi-gui-ren-8",
+            account_id=account["id"],
+            description="旧的短描述",
+            hashtags=(),
+            publish_time="2026-08-15T13:08:00+00:00",
+            video_url="",
+            cover_url=None,
+            raw={},
+        )
+        self.assertTrue(created)
+        self.repository.update_video_processing(
+            legacy["id"],
+            is_processed=True,
+            needs_review=False,
+            parser_confidence=0.0,
+            classification_status="ignored",
+            parser_reason="legacy_ignored",
+        )
+        description = "原创ai漫剧《契鬼人》义庄副本第一夜 全片由小云雀Seedance2.5制作"
+        self.provider.videos_by_sec_uid["sec-one"] = [
+            ProviderVideo(
+                aweme_id="rehydrate-qi-gui-ren-8",
+                description=description,
+                hashtags=("小云雀AI",),
+                publish_time="2026-08-15T13:08:00+00:00",
+                video_url="https://www.douyin.com/video/rehydrate-qi-gui-ren-8",
+                cover_url="https://cover.example/rehydrated.jpg",
+                raw={
+                    "aweme_id": "rehydrate-qi-gui-ren-8",
+                    "desc": description,
+                    "item_title": "原创ai漫剧《契鬼人》义庄副本第一夜",
+                    "series_play_info": {"item_title_prefix": {"text": "第8集"}},
+                },
+            )
+        ]
+
+        result = await self.pipeline.sync_account(account["id"])
+        refreshed = self.repository.get_video(legacy["id"])
+        show = self.repository.get_show_by_normalized_title("契鬼人")
+
+        self.assertEqual(result.new_videos, 0)
+        self.assertEqual(result.duplicate_videos, 1)
+        self.assertEqual(result.new_episode_updates, ())
+        self.assertEqual(dispatcher.updates, [])
+        self.assertEqual(self.repository.counts()["videos"], 1)
+        self.assertEqual(refreshed["classification_status"], "matched")
+        self.assertEqual(refreshed["parsed_show_title"], "契鬼人")
+        self.assertEqual(refreshed["parsed_episode_number"], 8)
+        self.assertEqual(refreshed["display_title"], "第8集 | 原创ai漫剧《契鬼人》义庄副本第一夜")
+        self.assertEqual(refreshed["text_sources"]["series_play_info.item_title_prefix.text"], "第8集")
+        self.assertEqual(json.loads(refreshed["raw_json"])["series_play_info"]["item_title_prefix"]["text"], "第8集")
+        self.assertEqual(refreshed["description"], description)
+        self.assertEqual(refreshed["video_url"], "https://www.douyin.com/video/rehydrate-qi-gui-ren-8")
+        self.assertEqual(refreshed["cover_url"], "https://cover.example/rehydrated.jpg")
+        self.assertEqual(show["latest_episode"], 8)
+        self.assertEqual(len(self.repository.list_notifications()), 0)
+
+    async def test_duplicate_metadata_refresh_does_not_reparse_matched_video(self):
+        dispatcher = RecordingDispatcher()
+        self.pipeline = ShortDramaPipeline(
+            repository=self.repository,
+            provider=self.provider,
+            dispatcher=dispatcher,
+        )
+        account, _ = await self.pipeline.add_account(self.account_one_provider.homepage_url)
+        self.repository.complete_initial_sync(account["id"])
+        archived, created = self.repository.create_video(
+            aweme_id="matched-metadata-refresh",
+            account_id=account["id"],
+            description="旧归档描述",
+            hashtags=(),
+            publish_time="2026-08-15T13:08:00+00:00",
+            video_url="",
+            cover_url=None,
+            raw={},
+        )
+        self.assertTrue(created)
+        show = self.repository.create_show(title="已归档短剧", normalized_title="已归档短剧", aliases=[])
+        self.repository.record_episode_source(
+            show_id=show["id"],
+            episode_number=8,
+            video_id=archived["id"],
+            account_id=account["id"],
+            published_at=archived["publish_time"],
+        )
+        self.repository.update_video_processing(
+            archived["id"],
+            is_processed=True,
+            needs_review=False,
+            parser_confidence=1.0,
+            parsed_show_title="已归档短剧",
+            parsed_episode_number=8,
+            parser_method="manual_review",
+            classification_status="matched",
+            parser_reason="manual_review",
+            show_title_candidate="已归档短剧",
+            episode_candidate=8,
+            content_type="episode",
+        )
+        self.provider.videos_by_sec_uid["sec-one"] = [
+            ProviderVideo(
+                aweme_id="matched-metadata-refresh",
+                description="原创ai漫剧《不应自动改档》完整作品描述",
+                hashtags=(),
+                publish_time="2026-08-15T13:08:00+00:00",
+                video_url="https://www.douyin.com/video/matched-metadata-refresh",
+                cover_url="https://cover.example/matched-refresh.jpg",
+                raw={
+                    "aweme_id": "matched-metadata-refresh",
+                    "item_title": "原创ai漫剧《不应自动改档》",
+                    "series_play_info": {"item_title_prefix": {"text": "第99集"}},
+                },
+            )
+        ]
+
+        result = await self.pipeline.sync_account(account["id"])
+        stored = self.repository.get_video(archived["id"])
+
+        self.assertEqual(result.new_videos, 0)
+        self.assertEqual(result.duplicate_videos, 1)
+        self.assertEqual(result.new_episode_updates, ())
+        self.assertEqual(dispatcher.updates, [])
+        self.assertEqual(stored["display_title"], "第99集 | 原创ai漫剧《不应自动改档》")
+        self.assertEqual(stored["classification_status"], "matched")
+        self.assertEqual(stored["parsed_show_title"], "已归档短剧")
+        self.assertEqual(stored["parsed_episode_number"], 8)
+        self.assertEqual(
+            [episode["episode_number"] for episode in self.repository.get_show_episodes(show["id"])],
+            [8],
+        )
 
     async def test_known_show_without_episode_is_sent_to_review(self):
         account, _ = await self.pipeline.add_account(self.account_one_provider.homepage_url)

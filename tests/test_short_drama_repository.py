@@ -98,6 +98,65 @@ class ShortDramaRepositoryTests(unittest.TestCase):
         self.assertEqual(updated["parser_evidence"]["episode"]["value"], 8)
         self.assertEqual(updated["parser_evidence"]["show"]["source_field"], "item_title")
 
+    def test_refresh_video_metadata_merges_richer_values_and_preserves_existing_data(self):
+        account = self.create_account()
+        video, created = self.repository.create_video(
+            aweme_id="metadata-refresh-1",
+            account_id=account["id"],
+            description="完整的旧描述",
+            hashtags=[],
+            publish_time=None,
+            video_url="https://www.douyin.com/video/metadata-refresh-1",
+            cover_url="https://cover.example/old.jpg",
+            raw={"aweme_id": "metadata-refresh-1", "kept": "value"},
+            display_title="旧标题",
+            text_sources={"item_title": "旧标题"},
+        )
+        self.assertTrue(created)
+
+        unchanged, changed = self.repository.refresh_video_metadata(
+            video["id"],
+            description="",
+            video_url="",
+            cover_url=None,
+            raw={},
+            display_title=None,
+            text_sources={},
+        )
+        self.assertFalse(changed)
+        self.assertEqual(unchanged["description"], "完整的旧描述")
+        self.assertEqual(unchanged["display_title"], "旧标题")
+        self.assertEqual(unchanged["video_url"], "https://www.douyin.com/video/metadata-refresh-1")
+        self.assertEqual(unchanged["cover_url"], "https://cover.example/old.jpg")
+
+        refreshed, changed = self.repository.refresh_video_metadata(
+            video["id"],
+            description="完整的旧描述，并补充了来自最新作品列表的更多内容",
+            video_url="https://www.douyin.com/video/metadata-refresh-1?source=latest",
+            cover_url="https://cover.example/new.jpg",
+            raw={"aweme_id": "metadata-refresh-1", "new_field": "new value"},
+            display_title="第8集 | 旧标题",
+            text_sources={
+                "series_play_info.item_title_prefix.text": "第8集",
+                "item_title": "旧标题",
+            },
+        )
+        self.assertTrue(changed)
+        raw = json.loads(refreshed["raw_json"])
+        self.assertEqual(raw["kept"], "value")
+        self.assertEqual(raw["new_field"], "new value")
+        self.assertEqual(refreshed["display_title"], "第8集 | 旧标题")
+        self.assertEqual(
+            refreshed["text_sources"]["series_play_info.item_title_prefix.text"],
+            "第8集",
+        )
+        self.assertEqual(refreshed["description"], "完整的旧描述，并补充了来自最新作品列表的更多内容")
+        self.assertEqual(
+            refreshed["video_url"],
+            "https://www.douyin.com/video/metadata-refresh-1?source=latest",
+        )
+        self.assertEqual(refreshed["cover_url"], "https://cover.example/old.jpg")
+
     def test_system_status_includes_accounts_with_sync_errors(self):
         account = self.create_account()
         self.repository.mark_account_sync_failure(

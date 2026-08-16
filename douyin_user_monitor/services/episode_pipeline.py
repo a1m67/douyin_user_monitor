@@ -445,6 +445,28 @@ class ShortDramaPipeline:
             )
             if not created:
                 duplicate_videos += 1
+                refreshed_video, metadata_enhanced = self._repository.refresh_video_metadata(
+                    int(video["id"]),
+                    description=provider_video.description,
+                    video_url=provider_video.video_url,
+                    cover_url=provider_video.cover_url,
+                    raw=provider_video.raw,
+                    display_title=text_metadata.display_title,
+                    text_sources=text_metadata.text_sources,
+                )
+                if (
+                    not metadata_enhanced
+                    or not _metadata_refresh_can_reparse(video)
+                    or not _metadata_refresh_changes_parser_inputs(video, refreshed_video)
+                ):
+                    continue
+                # Rehydration recovers historical records. It may create an
+                # EpisodeSource, but it never enters the notification batch.
+                outcome = self._process_video(account=account, video=refreshed_video)
+                if outcome.status == REVIEW:
+                    review_videos += 1
+                elif outcome.status == IGNORED:
+                    ignored_videos += 1
                 continue
             new_videos += 1
             outcome = self._process_video(
@@ -644,6 +666,25 @@ class ShortDramaPipeline:
         if account is None:
             raise KeyError("账号不存在")
         return account
+
+
+def _metadata_refresh_can_reparse(video: dict[str, Any]) -> bool:
+    """Only rehydrate unresolved historical records during normal syncs."""
+    status = str(video.get("classification_status") or "")
+    if status == MATCHED:
+        return False
+    return status in {IGNORED, REVIEW} or str(video.get("parser_reason") or "") == "legacy_ignored"
+
+
+def _metadata_refresh_changes_parser_inputs(
+    previous: dict[str, Any],
+    refreshed: dict[str, Any],
+) -> bool:
+    """Avoid reprocessing when only artwork, playback links, or opaque raw data changed."""
+    return (
+        previous.get("description") != refreshed.get("description")
+        or previous.get("text_sources") != refreshed.get("text_sources")
+    )
 
 
 def _provider_account(account: dict[str, Any]) -> ProviderAccount:

@@ -727,6 +727,70 @@ class ShortDramaRepository:
             row = connection.execute("SELECT * FROM videos WHERE id = ?", (video_id,)).fetchone()
             return _video_row(row)
 
+    def refresh_video_metadata(
+        self,
+        video_id: int,
+        *,
+        description: str,
+        video_url: str,
+        cover_url: str | None,
+        raw: Mapping[str, Any],
+        display_title: str | None,
+        text_sources: Mapping[str, Any],
+    ) -> tuple[dict[str, Any], bool]:
+        """Merge richer provider metadata without erasing persisted values.
+
+        This deliberately updates source metadata only. Parser state and episode
+        archives remain unchanged until the pipeline explicitly reparses an
+        eligible ignored/review video.
+        """
+        with self._transaction() as connection:
+            row = connection.execute("SELECT * FROM videos WHERE id = ?", (video_id,)).fetchone()
+            if row is None:
+                raise KeyError("视频不存在")
+            existing = _video_row(row)
+            existing_raw = _json_object(existing.get("raw_json"))
+            merged_raw = _merge_richer_json(existing_raw, raw)
+            merged_sources = _merge_text_sources(existing.get("text_sources"), text_sources)
+            merged_description = _prefer_richer_text(existing.get("description"), description)
+            merged_display_title = _prefer_richer_text(existing.get("display_title"), display_title)
+            merged_video_url = _prefer_non_empty(existing.get("video_url"), video_url)
+            merged_cover_url = _prefer_non_empty(existing.get("cover_url"), cover_url)
+            merged_raw_json = json.dumps(merged_raw, ensure_ascii=False, sort_keys=True)
+            changed = any(
+                (
+                    merged_description != existing.get("description"),
+                    merged_display_title != existing.get("display_title"),
+                    merged_video_url != existing.get("video_url"),
+                    merged_cover_url != existing.get("cover_url"),
+                    merged_raw != existing_raw,
+                    merged_sources != existing.get("text_sources"),
+                )
+            )
+            if not changed:
+                return existing, False
+            connection.execute(
+                """
+                UPDATE videos SET
+                    description = ?, video_url = ?, cover_url = ?, raw_json = ?,
+                    display_title = ?, text_sources = ?
+                WHERE id = ?
+                """,
+                (
+                    merged_description or "",
+                    merged_video_url or "",
+                    merged_cover_url,
+                    merged_raw_json,
+                    merged_display_title,
+                    _json_text_sources(merged_sources),
+                    video_id,
+                ),
+            )
+            updated = connection.execute("SELECT * FROM videos WHERE id = ?", (video_id,)).fetchone()
+            if updated is None:
+                raise RuntimeError("更新视频 metadata 后无法读取记录")
+            return _video_row(updated), True
+
     def get_video(self, video_id: int) -> dict[str, Any] | None:
         with self._transaction() as connection:
             row = connection.execute("SELECT * FROM videos WHERE id = ?", (video_id,)).fetchone()
@@ -1466,11 +1530,101 @@ def _json_mapping(values: Mapping[str, Any]) -> str:
 
 
 def _json_object(value: Any) -> dict[str, Any]:
+    if isinstance(value, Mapping):
+        return dict(value)
     try:
         parsed = json.loads(str(value or "{}"))
     except json.JSONDecodeError:
         return {}
     return dict(parsed) if isinstance(parsed, Mapping) else {}
+
+
+def _prefer_non_empty(existing: Any, incoming: Any) -> str | None:
+    current = _optional_text(existing)
+    candidate = _optional_text(incoming)
+    if not current:
+        return candidate
+    if not candidate:
+        return current
+    return _prefer_richer_text(current, candidate)
+
+
+def _prefer_richer_text(existing: Any, incoming: Any) -> str | None:
+    current = _optional_text(existing)
+    candidate = _optional_text(incoming)
+    if not candidate or candidate == current:
+        return current
+    if not current:
+        return candidate
+    current_compact = " ".join(current.split())
+    candidate_compact = " ".join(candidate.split())
+    if current_compact and current_compact in candidate_compact:
+        return candidate
+    if len(candidate_compact) >= max(len(current_compact) + 16, int(len(current_compact) * 1.5)):
+        return candidate
+    return current
+
+
+def _merge_text_sources(existing: Any, incoming: Mapping[str, Any] | None) -> dict[str, str]:
+    current = _json_object(existing)
+    candidate = incoming if isinstance(incoming, Mapping) else {}
+    merged: dict[str, str] = {}
+    for raw_field in set(current) | set(candidate):
+        field = str(raw_field or "").strip()
+        if not field:
+            continue
+        value = _prefer_richer_text(current.get(raw_field), candidate.get(raw_field))
+        if value:
+            merged[field] = value
+    return merged
+
+
+def _merge_richer_json(existing: Mapping[str, Any], incoming: Mapping[str, Any]) -> dict[str, Any]:
+    current = dict(existing) if isinstance(existing, Mapping) else {}
+    candidate = dict(incoming) if isinstance(incoming, Mapping) else {}
+    merged: dict[str, Any] = {}
+    for key in set(current) | set(candidate):
+        if key not in candidate:
+            merged[key] = current[key]
+        elif key not in current:
+            merged[key] = candidate[key]
+        else:
+            merged[key] = _merge_json_value(current[key], candidate[key])
+    return merged
+
+
+def _merge_json_value(existing: Any, incoming: Any) -> Any:
+    if isinstance(existing, Mapping) and isinstance(incoming, Mapping):
+        return _merge_richer_json(existing, incoming)
+    if not _json_value_present(incoming):
+        return existing
+    if not _json_value_present(existing):
+        return incoming
+    if isinstance(existing, str) and isinstance(incoming, str):
+        return _prefer_richer_text(existing, incoming)
+    if _json_value_richness(incoming) > _json_value_richness(existing):
+        return incoming
+    return existing
+
+
+def _json_value_present(value: Any) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, (Mapping, list, tuple, set)):
+        return bool(value)
+    return True
+
+
+def _json_value_richness(value: Any) -> int:
+    if isinstance(value, Mapping):
+        return sum(1 + _json_value_richness(item) for item in value.values())
+    if isinstance(value, (list, tuple, set)):
+        return sum(_json_value_richness(item) for item in value)
+    if isinstance(value, str):
+        return len(value.strip())
+    return 1 if value is not None else 0
 
 
 def _row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
