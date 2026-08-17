@@ -26,6 +26,14 @@ class SchedulerStatus(Protocol):
         ...
 
 
+class HistoryBackfillWorkerControl(Protocol):
+    def wake(self) -> None:
+        ...
+
+    def health_status(self) -> str:
+        ...
+
+
 class AddAccountPayload(BaseModel):
     homepage_url: str = Field(min_length=1)
     check_interval_minutes: int | None = Field(default=None, ge=1, le=1440)
@@ -71,6 +79,7 @@ def create_short_drama_router(
     pipeline: ShortDramaPipeline,
     dispatcher: NotificationDispatcher | None = None,
     scheduler: SchedulerStatus | None = None,
+    history_backfill_worker: HistoryBackfillWorkerControl | None = None,
     page_path: Path | None = None,
     default_check_interval_minutes: int = 10,
 ) -> APIRouter:
@@ -118,6 +127,11 @@ def create_short_drama_router(
             "status": "ok",
             "database": "ok",
             "scheduler": scheduler.health_status() if scheduler is not None else "not_started",
+            "history_backfill_worker": (
+                history_backfill_worker.health_status()
+                if history_backfill_worker is not None
+                else "not_started"
+            ),
         }
 
     @router.get("/health")
@@ -210,6 +224,8 @@ def create_short_drama_router(
             account = pipeline.start_history_backfill(account_id)
         except (ValueError, KeyError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if history_backfill_worker is not None:
+            history_backfill_worker.wake()
         return {"account": account}
 
     @api.post("/accounts/{account_id}/history/pause")
@@ -226,6 +242,8 @@ def create_short_drama_router(
             account = pipeline.resume_history_backfill(account_id)
         except (ValueError, KeyError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if history_backfill_worker is not None:
+            history_backfill_worker.wake()
         return {"account": account}
 
     @api.post("/accounts/{account_id}/history/next-page")
@@ -314,6 +332,11 @@ def create_short_drama_router(
     async def status() -> dict[str, Any]:
         result = repository.system_status()
         result["scheduler"] = scheduler.health_status() if scheduler is not None else "not_started"
+        result["history_backfill_worker"] = (
+            history_backfill_worker.health_status()
+            if history_backfill_worker is not None
+            else "not_started"
+        )
         result["enabled_notification_channels"] = list(dispatcher.enabled_channels) if dispatcher else []
         return result
 

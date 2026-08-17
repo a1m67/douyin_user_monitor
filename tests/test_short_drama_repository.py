@@ -608,7 +608,7 @@ class ShortDramaRepositoryTests(unittest.TestCase):
 
         self.assertEqual(progressed["history_sync"]["next_cursor"], 50)
         self.assertEqual(paused["history_sync_status"], "paused")
-        self.assertEqual(resumed["history_sync_status"], "running")
+        self.assertEqual(resumed["history_sync_status"], "pending")
         self.assertEqual(resumed["history_sync"]["scanned_items"], 50)
 
     def test_show_detail_reports_database_episode_gaps(self):

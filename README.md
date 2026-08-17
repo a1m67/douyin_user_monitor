@@ -85,7 +85,7 @@ PowerShell 下可将 `.venv/Scripts/python` 替换为 `.venv\Scripts\python.exe`
 
 1. 打开 `/accounts`，添加抖音作者主页并设置检查间隔。
 2. 首次“立即检查”会保存最近 `INITIAL_SYNC_LIMIT` 个作品作为历史基线，默认不发送通知。
-3. 如果需要补全更早作品，在账号行点击“开始补全历史”，再按页点击“执行下一页”；可随时暂停或继续。
+3. 如果需要补全更早作品，在账号行点击“开始补全历史”。后台会按持久化 cursor 自动连续扫描，可随时暂停、继续或在失败后重试，关闭浏览器不影响任务。
 4. 后续巡检只抓取最新一页作品，系统根据规则识别短剧和集数。
 5. 无法可靠识别的作品在 `/review` 中选择已有短剧或新建短剧，再确认集数。
 6. 在 `/shows` 查看最近更新；点击短剧可查看每一集、全部来源账号和数据库缺集提示。
@@ -100,7 +100,10 @@ PowerShell 下可将 `.venv/Scripts/python` 替换为 `.venv\Scripts\python.exe`
 | `MAX_BACKOFF_MINUTES` | `60` | 连续失败时的退避上限。 |
 | `INITIAL_SYNC_LIMIT` | `20` | 首次同步最近作品数。 |
 | `INCREMENTAL_FETCH_LIMIT` | `30` | 首次同步之后每次日常巡检抓取的最新作品数。 |
-| `HISTORY_BACKFILL_PAGE_SIZE` | `50` | 手动历史补全每页扫描作品数。 |
+| `HISTORY_BACKFILL_PAGE_SIZE` | `20` | 后台历史补全每页扫描作品数。 |
+| `HISTORY_BACKFILL_DELAY_MIN_SECONDS` | `3` | 历史补全页间随机延迟下限（秒）。 |
+| `HISTORY_BACKFILL_DELAY_MAX_SECONDS` | `6` | 历史补全页间随机延迟上限（秒）。 |
+| `MAX_CONCURRENT_HISTORY_BACKFILLS` | `1` | 同时运行的历史补全账号上限，与日常巡检并发限制分开。 |
 | `NOTIFY_ON_INITIAL_SYNC` | `false` | 是否为历史基线发送通知。 |
 | `AUTO_ACCEPT_CONFIDENCE` | `0.8` | 自动归档最低解析置信度。 |
 | `LLM_ENABLED` | `false` | 是否启用 OpenAI-compatible AI fallback。 |
@@ -123,7 +126,7 @@ Episode 1 --- * Notification
 ```
 
 - `Account` 是抖音作者，保存启用状态、单账号检查间隔、最近检查、错误和退避状态。
-- `Account` 还保存历史补全状态、cursor、扫描页数、扫描数量、新增数量及失败恢复时间点。
+- `Account` 还保存历史补全状态、opaque cursor、已访问 cursor、扫描页数、扫描数量、新增数量及失败恢复时间点。服务重启会从已保存 cursor 自动恢复未完成任务。
 - `Video` 以 `aweme_id` 唯一保存原始作品和解析结果。
 - `Show` 表示一部短剧，`normalized_title` 和 aliases 用于匹配。
 - `Episode` 是某一部剧的某一集；`EpisodeSource` 记录不同账号的同集来源。

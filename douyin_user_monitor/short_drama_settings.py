@@ -20,6 +20,9 @@ class ShortDramaSettings:
     initial_sync_limit: int
     incremental_fetch_limit: int
     history_backfill_page_size: int
+    history_backfill_delay_min_seconds: float
+    history_backfill_delay_max_seconds: float
+    max_concurrent_history_backfills: int
     notify_on_initial_sync: bool
     auto_accept_confidence: float
     llm_enabled: bool
@@ -65,7 +68,16 @@ def load_short_drama_settings(
         max_concurrent_checks=_positive_int(values, "MAX_CONCURRENT_CHECKS", 3),
         initial_sync_limit=_positive_int(values, "INITIAL_SYNC_LIMIT", 20),
         incremental_fetch_limit=_positive_int(values, "INCREMENTAL_FETCH_LIMIT", 30),
-        history_backfill_page_size=_positive_int(values, "HISTORY_BACKFILL_PAGE_SIZE", 50),
+        history_backfill_page_size=_positive_int(values, "HISTORY_BACKFILL_PAGE_SIZE", 20),
+        history_backfill_delay_min_seconds=_non_negative_float(
+            values, "HISTORY_BACKFILL_DELAY_MIN_SECONDS", 3.0
+        ),
+        history_backfill_delay_max_seconds=_non_negative_float(
+            values, "HISTORY_BACKFILL_DELAY_MAX_SECONDS", 6.0
+        ),
+        max_concurrent_history_backfills=_positive_int(
+            values, "MAX_CONCURRENT_HISTORY_BACKFILLS", 1
+        ),
         notify_on_initial_sync=_boolean(values, "NOTIFY_ON_INITIAL_SYNC", False),
         auto_accept_confidence=_confidence(values, "AUTO_ACCEPT_CONFIDENCE", 0.8),
         llm_enabled=_boolean(values, "LLM_ENABLED", False),
@@ -94,6 +106,10 @@ def load_short_drama_settings(
         ]
         if missing:
             raise ValueError(f"启用 LLM 时必须设置: {', '.join(missing)}")
+    if settings.history_backfill_delay_max_seconds < settings.history_backfill_delay_min_seconds:
+        raise ValueError(
+            "HISTORY_BACKFILL_DELAY_MAX_SECONDS 不能小于 HISTORY_BACKFILL_DELAY_MIN_SECONDS"
+        )
     return settings
 
 
@@ -189,6 +205,17 @@ def _positive_float(values: Mapping[str, str], key: str, default: float) -> floa
         raise ValueError(f"{key} 必须是正数") from exc
     if result <= 0:
         raise ValueError(f"{key} 必须大于 0")
+    return result
+
+
+def _non_negative_float(values: Mapping[str, str], key: str, default: float) -> float:
+    raw = _value(values, key, str(default))
+    try:
+        result = float(raw)
+    except ValueError as exc:
+        raise ValueError(f"{key} 必须是非负数") from exc
+    if result < 0:
+        raise ValueError(f"{key} 不能小于 0")
     return result
 
 

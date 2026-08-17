@@ -28,6 +28,9 @@ class ShortDramaSettingsTests(unittest.TestCase):
                 "INITIAL_SYNC_LIMIT": "25",
                 "INCREMENTAL_FETCH_LIMIT": "31",
                 "HISTORY_BACKFILL_PAGE_SIZE": "51",
+                "HISTORY_BACKFILL_DELAY_MIN_SECONDS": "1.5",
+                "HISTORY_BACKFILL_DELAY_MAX_SECONDS": "2.5",
+                "MAX_CONCURRENT_HISTORY_BACKFILLS": "2",
                 "NOTIFY_ON_INITIAL_SYNC": "true",
                 "AUTO_ACCEPT_CONFIDENCE": "0.85",
                 "LLM_ENABLED": "true",
@@ -44,6 +47,9 @@ class ShortDramaSettingsTests(unittest.TestCase):
         self.assertEqual(settings.initial_sync_limit, 25)
         self.assertEqual(settings.incremental_fetch_limit, 31)
         self.assertEqual(settings.history_backfill_page_size, 51)
+        self.assertEqual(settings.history_backfill_delay_min_seconds, 1.5)
+        self.assertEqual(settings.history_backfill_delay_max_seconds, 2.5)
+        self.assertEqual(settings.max_concurrent_history_backfills, 2)
         self.assertTrue(settings.notify_on_initial_sync)
         self.assertEqual(settings.auto_accept_confidence, 0.85)
         self.assertTrue(settings.llm_enabled)

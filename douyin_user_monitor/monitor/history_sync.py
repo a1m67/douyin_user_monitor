@@ -9,7 +9,7 @@ HISTORY_SYNC_STATUS_COMPLETED = "completed"
 HISTORY_SYNC_STATUS_FAILED = "failed"
 HISTORY_SYNC_STATUS_IDLE = "idle"
 
-HISTORY_SYNC_PAGE_SIZE = 50
+HISTORY_SYNC_PAGE_SIZE = 20
 ACTIVE_HISTORY_SYNC_STATUSES = {
     HISTORY_SYNC_STATUS_PENDING,
     HISTORY_SYNC_STATUS_RUNNING,
@@ -144,8 +144,10 @@ def _safe_int(value: Any) -> int:
 
 def _extract_next_cursor(page: Dict[str, Any], fallback: int) -> int:
     for key in ("next_cursor", "max_cursor", "cursor"):
+        if key not in page:
+            continue
         value = _safe_int(page.get(key))
-        if value > fallback:
+        if value >= 0:
             return value
     return fallback
 

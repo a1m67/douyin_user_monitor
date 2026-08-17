@@ -19,6 +19,17 @@ from douyin_user_monitor.services.episode_pipeline import ShortDramaPipeline
 from douyin_user_monitor.web.short_drama import create_short_drama_router
 
 
+class RecordingHistoryWorker:
+    def __init__(self) -> None:
+        self.wake_calls = 0
+
+    def wake(self) -> None:
+        self.wake_calls += 1
+
+    def health_status(self) -> str:
+        return "ok"
+
+
 class ShortDramaWebTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
         self.temp_dir = tempfile.TemporaryDirectory()
@@ -44,12 +55,20 @@ class ShortDramaWebTests(unittest.IsolatedAsyncioTestCase):
         pipeline = ShortDramaPipeline(repository=repository, provider=provider)
         account, _ = await pipeline.add_account(provider_account.homepage_url)
         await pipeline.sync_account(account["id"])
+        history_worker = RecordingHistoryWorker()
         app = FastAPI()
-        app.include_router(create_short_drama_router(repository=repository, pipeline=pipeline))
+        app.include_router(
+            create_short_drama_router(
+                repository=repository,
+                pipeline=pipeline,
+                history_backfill_worker=history_worker,
+            )
+        )
         self.client = TestClient(app)
         self.repository = repository
         self.provider = provider
         self.pipeline = pipeline
+        self.history_worker = history_worker
 
     async def asyncTearDown(self) -> None:
         self.temp_dir.cleanup()
@@ -288,6 +307,8 @@ class ShortDramaWebTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(paused.status_code, 200)
         self.assertEqual(paused.json()["account"]["history_sync_status"], "paused")
         self.assertEqual(resumed.status_code, 200)
+        self.assertEqual(resumed.json()["account"]["history_sync_status"], "pending")
+        self.assertEqual(self.history_worker.wake_calls, 2)
         self.assertEqual(page.status_code, 200)
         self.assertEqual(page.json()["result"]["new_videos"], 1)
         self.assertEqual(page.json()["result"]["history_sync"]["status"], "completed")

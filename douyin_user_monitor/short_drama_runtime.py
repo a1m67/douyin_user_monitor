@@ -12,6 +12,10 @@ from douyin_user_monitor.parsers.llm import LLMParser, OpenAICompatibleLLMClient
 from douyin_user_monitor.providers.builtin_douyin import BuiltinDouyinProvider
 from douyin_user_monitor.repositories.sqlite import ShortDramaRepository
 from douyin_user_monitor.services.episode_pipeline import ShortDramaPipeline
+from douyin_user_monitor.services.history_backfill_worker import (
+    HistoryBackfillWorker,
+    HistoryBackfillWorkerConfig,
+)
 from douyin_user_monitor.services.scheduler import AccountScheduler, SchedulerConfig
 from douyin_user_monitor.short_drama_settings import (
     ShortDramaSettings,
@@ -28,12 +32,15 @@ class ShortDramaRuntime:
     dispatcher: NotificationDispatcher
     pipeline: ShortDramaPipeline
     scheduler: AccountScheduler
+    history_backfill_worker: HistoryBackfillWorker
 
     async def start(self) -> None:
+        await self.history_backfill_worker.start()
         await self.scheduler.start()
 
     async def shutdown(self) -> None:
         await self.scheduler.stop()
+        await self.history_backfill_worker.stop()
         await self.dispatcher.aclose()
         await self.provider.aclose()
 
@@ -97,6 +104,15 @@ def build_short_drama_runtime(settings: ShortDramaSettings | None = None) -> Sho
             poll_seconds=resolved_settings.scheduler_poll_seconds,
         ),
     )
+    history_backfill_worker = HistoryBackfillWorker(
+        repository=repository,
+        pipeline=pipeline,
+        config=HistoryBackfillWorkerConfig(
+            max_concurrent_backfills=resolved_settings.max_concurrent_history_backfills,
+            delay_min_seconds=resolved_settings.history_backfill_delay_min_seconds,
+            delay_max_seconds=resolved_settings.history_backfill_delay_max_seconds,
+        ),
+    )
     return ShortDramaRuntime(
         settings=resolved_settings,
         repository=repository,
@@ -104,4 +120,5 @@ def build_short_drama_runtime(settings: ShortDramaSettings | None = None) -> Sho
         dispatcher=dispatcher,
         pipeline=pipeline,
         scheduler=scheduler,
+        history_backfill_worker=history_backfill_worker,
     )

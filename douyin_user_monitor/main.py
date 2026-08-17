@@ -17,6 +17,7 @@ app.include_router(
         pipeline=SHORT_DRAMA_RUNTIME.pipeline,
         dispatcher=SHORT_DRAMA_RUNTIME.dispatcher,
         scheduler=SHORT_DRAMA_RUNTIME.scheduler,
+        history_backfill_worker=SHORT_DRAMA_RUNTIME.history_backfill_worker,
         default_check_interval_minutes=SHORT_DRAMA_RUNTIME.settings.check_interval_minutes,
     )
 )

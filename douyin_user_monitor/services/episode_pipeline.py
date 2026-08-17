@@ -8,18 +8,14 @@ from dataclasses import dataclass
 from typing import Any, Protocol, Sequence
 
 from douyin_user_monitor.monitor.history_sync import (
-    HISTORY_SYNC_STATUS_FAILED,
     HISTORY_SYNC_STATUS_PENDING,
     HISTORY_SYNC_STATUS_RUNNING,
-    build_history_sync_state,
-    complete_history_sync,
-    update_history_sync_progress,
 )
 from douyin_user_monitor.parsers.base import IGNORED, MATCHED, REVIEW
 from douyin_user_monitor.parsers.episode_parser import EpisodeParser
 from douyin_user_monitor.parsers.regex import normalize_title
 from douyin_user_monitor.providers.base import DouyinProvider, ProviderAccount, ProviderVideo
-from douyin_user_monitor.repositories.sqlite import EpisodeWriteResult, ShortDramaRepository, utc_now
+from douyin_user_monitor.repositories.sqlite import EpisodeWriteResult, ShortDramaRepository
 from douyin_user_monitor.video_text import build_video_text_metadata
 
 logger = logging.getLogger(__name__)
@@ -221,7 +217,13 @@ class ShortDramaPipeline:
         self._require_account(account_id)
         return self._repository.resume_history_backfill(account_id)
 
-    async def run_history_backfill_page(self, account_id: str) -> HistoryBackfillResult:
+    async def run_history_backfill_page(
+        self,
+        account_id: str,
+        *,
+        seen_cursors: set[int] | None = None,
+        mark_failed_on_error: bool = True,
+    ) -> HistoryBackfillResult:
         """Process exactly one persisted cursor page without dispatching notifications."""
         account = self._require_account(account_id)
         history = account["history_sync"]
@@ -237,34 +239,41 @@ class ShortDramaPipeline:
                 cursor=cursor,
                 limit=self._history_backfill_page_size,
             )
-            if page.has_more and page.next_cursor <= cursor:
-                raise ValueError("历史分页游标未推进")
+            next_cursor = int(page.next_cursor)
+            effective_has_more = bool(page.has_more and page.videos)
+            known_cursors = set(history.get("cursor_history") or ())
+            if seen_cursors is not None:
+                known_cursors.update(seen_cursors)
+            if effective_has_more and next_cursor == cursor:
+                raise ValueError("历史分页游标重复")
+            if effective_has_more and next_cursor in known_cursors:
+                raise ValueError("检测到历史分页游标循环")
 
             batch = await self._ingest_videos(
                 account=account,
                 provider_videos=page.videos,
                 collect_updates=False,
             )
-            state = _legacy_history_state(
-                history,
-                page_size=self._history_backfill_page_size,
+            cursor_history = list(history.get("cursor_history") or [cursor])
+            if next_cursor not in cursor_history:
+                cursor_history.append(next_cursor)
+            account = self._repository.advance_history_backfill_page(
+                account_id,
+                expected_cursor=cursor,
+                next_cursor=next_cursor,
+                has_more=effective_has_more,
+                scanned_count=len(page.videos),
+                new_video_count=batch.new_videos,
+                cursor_history=cursor_history,
             )
-            now = utc_now()
-            if not page.videos:
-                complete_history_sync(state, now=now)
-            else:
-                update_history_sync_progress(
-                    history_sync=state,
-                    page={"next_cursor": page.next_cursor, "has_more": page.has_more},
-                    scanned_count=len(page.videos),
-                    downloaded_count=batch.new_videos,
-                    errors=[],
-                    now=now,
-                )
-            account = self._store_history_state(account_id, state)
         except Exception as exc:
-            self._store_history_failure(account_id, history, exc)
-            raise RuntimeError("历史补全失败，请恢复后重试") from exc
+            if mark_failed_on_error:
+                self._repository.fail_history_backfill(
+                    account_id,
+                    error=_safe_history_error(exc),
+                )
+                raise RuntimeError("历史补全失败，请恢复后重试") from exc
+            raise
 
         logger.info(
             "[history] account_id=%s cursor=%s fetched_videos=%s new_videos=%s status=%s",
@@ -493,35 +502,6 @@ class ShortDramaPipeline:
             updates=tuple(updates),
         )
 
-    def _store_history_state(self, account_id: str, state: dict[str, Any]) -> dict[str, Any]:
-        return self._repository.update_history_sync_state(
-            account_id,
-            status=str(state["status"]),
-            next_cursor=int(state["next_cursor"]),
-            has_more=bool(state["has_more"]),
-            processed_pages=int(state["processed_pages"]),
-            scanned_items=int(state["scanned_items"]),
-            new_videos=int(state["downloaded_items"]),
-            started_at=state.get("started_at"),
-            updated_at=state.get("updated_at"),
-            completed_at=state.get("completed_at"),
-            last_error=state.get("last_error"),
-        )
-
-    def _store_history_failure(
-        self,
-        account_id: str,
-        history: dict[str, Any],
-        exc: Exception,
-    ) -> None:
-        state = _legacy_history_state(history, page_size=self._history_backfill_page_size)
-        state["status"] = HISTORY_SYNC_STATUS_FAILED
-        state["updated_at"] = utc_now()
-        state["completed_at"] = None
-        state["last_error"] = _safe_history_error(exc)
-        self._store_history_state(account_id, state)
-        logger.warning("[history] failed account_id=%s reason=%s", account_id, state["last_error"])
-
     def _process_video(
         self,
         *,
@@ -702,23 +682,6 @@ def _provider_account(account: dict[str, Any]) -> ProviderAccount:
         id=str(account["id"]),
         sec_uid=str(account["sec_uid"]),
         homepage_url=str(account.get("homepage_url") or ""),
-    )
-
-
-def _legacy_history_state(history: dict[str, Any], *, page_size: int) -> dict[str, Any]:
-    """Adapt persisted short-drama fields to the proven cursor state transition helper."""
-    return build_history_sync_state(
-        status=str(history["status"]),
-        next_cursor=int(history["next_cursor"]),
-        page_size=page_size,
-        processed_pages=int(history["processed_pages"]),
-        scanned_items=int(history["scanned_items"]),
-        downloaded_items=int(history["new_videos"]),
-        has_more=bool(history["has_more"]),
-        started_at=history.get("started_at"),
-        updated_at=history.get("updated_at"),
-        completed_at=history.get("completed_at"),
-        last_error=history.get("last_error"),
     )
 
 

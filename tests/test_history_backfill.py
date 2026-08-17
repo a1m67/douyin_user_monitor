@@ -136,7 +136,7 @@ class MonitorServiceHistoryBackfillTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(result["status"], "created")
             history_sync = result["user"]["history_sync"]
             self.assertEqual(history_sync["status"], HISTORY_SYNC_STATUS_PENDING)
-            self.assertEqual(history_sync["page_size"], 50)
+            self.assertEqual(history_sync["page_size"], 20)
             self.assertTrue(history_sync["has_more"])
 
 

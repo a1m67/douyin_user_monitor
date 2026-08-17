@@ -224,4 +224,4 @@ def _extract_has_more(payload: Mapping[str, Any], *, current_cursor: int, next_c
             return int(value) > 0
         except (TypeError, ValueError):
             return False
-    return next_cursor > current_cursor
+    return next_cursor != current_cursor
