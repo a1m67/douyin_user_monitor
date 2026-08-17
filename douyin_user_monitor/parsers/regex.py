@@ -140,7 +140,7 @@ class RegexParser:
         explicit = _find_explicit_episode_match(sources)
         if explicit is not None:
             episode_number = _parse_episode_number(explicit.match.group(1))
-            if episode_number is None or episode_number <= 0:
+            if episode_number is None or episode_number < 0:
                 return EpisodeParseResult(
                     status=REVIEW,
                     show_title=None,
@@ -380,7 +380,7 @@ def _find_bare_episode_candidate(sources: Sequence[_TextSource]) -> _EpisodeSign
     for source in sources:
         for match in _BARE_NUMBER_RE.finditer(source.text):
             number = _parse_episode_number(match.group(1))
-            if number is None or number <= 0:
+            if number is None or number < 0:
                 continue
             score = _bare_episode_score(source.text, match)
             if score is None:

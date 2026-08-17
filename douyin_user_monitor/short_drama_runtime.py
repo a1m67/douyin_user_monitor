@@ -7,6 +7,8 @@ from douyin_user_monitor.crawler.inprocess_client import InProcessDouyinClient
 from douyin_user_monitor.notifiers.dispatcher import NotificationDispatcher
 from douyin_user_monitor.notifiers.feishu import FeishuNotifier
 from douyin_user_monitor.notifiers.telegram import TelegramNotifier
+from douyin_user_monitor.parsers.episode_parser import EpisodeParser
+from douyin_user_monitor.parsers.llm import LLMParser, OpenAICompatibleLLMClient
 from douyin_user_monitor.providers.builtin_douyin import BuiltinDouyinProvider
 from douyin_user_monitor.repositories.sqlite import ShortDramaRepository
 from douyin_user_monitor.services.episode_pipeline import ShortDramaPipeline
@@ -58,9 +60,25 @@ def build_short_drama_runtime(settings: ShortDramaSettings | None = None) -> Sho
     if resolved_settings.feishu_webhook_url:
         notifiers.append(FeishuNotifier(webhook_url=resolved_settings.feishu_webhook_url))
     dispatcher = NotificationDispatcher(repository=repository, notifiers=notifiers)
+    llm_backend = None
+    if resolved_settings.llm_enabled:
+        llm_backend = LLMParser(
+            OpenAICompatibleLLMClient(
+                api_key=resolved_settings.llm_api_key,
+                base_url=resolved_settings.llm_base_url,
+                model=resolved_settings.llm_model,
+                timeout_seconds=resolved_settings.llm_timeout_seconds,
+            ),
+            auto_accept_confidence=resolved_settings.llm_auto_accept_confidence,
+        )
+    parser = EpisodeParser(
+        llm_backend=llm_backend,
+        auto_accept_confidence=resolved_settings.auto_accept_confidence,
+    )
     pipeline = ShortDramaPipeline(
         repository=repository,
         provider=provider,
+        parser=parser,
         auto_accept_confidence=resolved_settings.auto_accept_confidence,
         initial_sync_limit=resolved_settings.initial_sync_limit,
         incremental_fetch_limit=resolved_settings.incremental_fetch_limit,

@@ -30,8 +30,12 @@ class ContextParser:
         if base_result.status == MATCHED:
             return base_result
 
-        candidate = base_result.episode_candidate or base_result.episode_number
-        if candidate is None or candidate <= 0:
+        candidate = (
+            base_result.episode_candidate
+            if base_result.episode_candidate is not None
+            else base_result.episode_number
+        )
+        if candidate is None or candidate < 0:
             return base_result
 
         known = _find_referenced_show(request, base_result)

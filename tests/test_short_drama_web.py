@@ -72,6 +72,9 @@ class ShortDramaWebTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("videoDescription", response.text)
         self.assertIn("parserEvidence", response.text)
         self.assertIn("解析证据", response.text)
+        self.assertIn("reviewJudgements", response.text)
+        self.assertIn("接受 AI 建议", response.text)
+        self.assertIn('type="number" min="0"', response.text)
         self.assertIn("重新解析历史作品", response.text)
         self.assertIn("缺失集数", response.text)
         self.assertIn("合并短剧", response.text)
@@ -174,6 +177,41 @@ class ShortDramaWebTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(response.json()["new_episode"])
         self.assertFalse(self.repository.get_video(video["id"])["needs_review"])
         self.assertEqual(self.repository.get_video(video["id"])["classification_status"], "matched")
+
+    async def test_review_endpoint_accepts_episode_zero_and_rejects_negative(self):
+        account = self.repository.list_accounts()[0]
+        show = self.repository.list_shows()[0]
+        video, _ = self.repository.create_video(
+            aweme_id="review-zero",
+            account_id=account["id"],
+            description="《末日重生》第0集",
+            hashtags=[],
+            publish_time=None,
+            video_url="https://www.douyin.com/video/review-zero",
+            cover_url=None,
+            raw={},
+        )
+        self.repository.update_video_processing(
+            video["id"],
+            is_processed=False,
+            needs_review=True,
+            parser_confidence=0.7,
+            classification_status="review",
+            parser_reason="manual_zero_review",
+        )
+
+        accepted = self.client.post(
+            f"/api/short-drama/reviews/{video['id']}",
+            json={"show_id": show["id"], "episode_number": 0},
+        )
+        negative = self.client.post(
+            f"/api/short-drama/reviews/{video['id']}",
+            json={"show_id": show["id"], "episode_number": -1},
+        )
+
+        self.assertEqual(accepted.status_code, 200)
+        self.assertEqual(accepted.json()["episode"]["episode_number"], 0)
+        self.assertEqual(negative.status_code, 422)
 
     async def test_review_ignore_endpoints_only_return_real_review_videos(self):
         account = self.repository.list_accounts()[0]

@@ -14,6 +14,7 @@ CONTENT_TYPES = frozenset({"episode", "trailer", "show_content", "unknown", "non
 
 @dataclass(frozen=True)
 class EpisodeParseInput:
+    display_title: str
     description: str
     hashtags: tuple[str, ...]
     account_nickname: str
@@ -40,14 +41,19 @@ class EpisodeParseResult:
     content_type: str = "unknown"
     episode_evidence: Mapping[str, Any] | None = None
     show_evidence: Mapping[str, Any] | None = None
+    regex_result: Mapping[str, Any] | None = None
+    llm_result: Mapping[str, Any] | None = None
+    llm_raw_result: Any | None = None
 
     def __post_init__(self) -> None:
         if self.status not in PARSE_STATUSES:
             raise ValueError(f"无效的解析状态: {self.status}")
         if self.content_type not in CONTENT_TYPES:
             raise ValueError(f"无效的内容类型: {self.content_type}")
-        if self.episode_candidate is not None and self.episode_candidate <= 0:
-            raise ValueError("候选集数必须大于 0")
+        if self.episode_number is not None and self.episode_number < 0:
+            raise ValueError("集数不能小于 0")
+        if self.episode_candidate is not None and self.episode_candidate < 0:
+            raise ValueError("候选集数不能小于 0")
 
     @property
     def is_episode(self) -> bool:
@@ -68,6 +74,9 @@ class EpisodeParseResult:
             "content_type": self.content_type,
             "episode_evidence": dict(self.episode_evidence or {}),
             "show_evidence": dict(self.show_evidence or {}),
+            "regex_result": dict(self.regex_result or {}),
+            "llm_result": dict(self.llm_result or {}),
+            "llm_raw_result": self.llm_raw_result,
         }
 
     @property
@@ -75,6 +84,8 @@ class EpisodeParseResult:
         return {
             "episode": dict(self.episode_evidence or {}),
             "show": dict(self.show_evidence or {}),
+            "regex_result": dict(self.regex_result or {}),
+            "llm_result": dict(self.llm_result or {}),
         }
 
 

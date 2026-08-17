@@ -1,6 +1,7 @@
 """Crawler-independent new-video to Show/Episode processing pipeline."""
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from dataclasses import dataclass
@@ -175,7 +176,7 @@ class ShortDramaPipeline:
         logger.info("[account] start check nickname=%s account_id=%s", account["nickname"], account_id)
         videos = await self._provider.get_latest_videos(_provider_account(account), limit=fetch_limit)
         logger.info("[fetch] account_id=%s fetched_videos=%s", account_id, len(videos))
-        batch = self._ingest_videos(
+        batch = await self._ingest_videos(
             account=account,
             provider_videos=videos,
             collect_updates=not initial_sync or self._notify_on_initial_sync,
@@ -239,7 +240,7 @@ class ShortDramaPipeline:
             if page.has_more and page.next_cursor <= cursor:
                 raise ValueError("历史分页游标未推进")
 
-            batch = self._ingest_videos(
+            batch = await self._ingest_videos(
                 account=account,
                 provider_videos=page.videos,
                 collect_updates=False,
@@ -290,8 +291,8 @@ class ShortDramaPipeline:
         show_id: int | None = None,
         new_show_title: str | None = None,
     ) -> ManualReviewResult:
-        if episode_number <= 0:
-            raise ValueError("集数必须大于 0")
+        if episode_number < 0:
+            raise ValueError("集数不能小于 0")
         if (show_id is None) == (not bool((new_show_title or "").strip())):
             raise ValueError("请选择已有短剧，或提供一个新短剧名称（二者只能选一个）")
         video = self._repository.get_video(video_id)
@@ -410,7 +411,7 @@ class ShortDramaPipeline:
             new_episode_count=new_episode_count,
         )
 
-    def _ingest_videos(
+    async def _ingest_videos(
         self,
         *,
         account: dict[str, Any],
@@ -462,14 +463,19 @@ class ShortDramaPipeline:
                     continue
                 # Rehydration recovers historical records. It may create an
                 # EpisodeSource, but it never enters the notification batch.
-                outcome = self._process_video(account=account, video=refreshed_video)
+                outcome = await asyncio.to_thread(
+                    self._process_video,
+                    account=account,
+                    video=refreshed_video,
+                )
                 if outcome.status == REVIEW:
                     review_videos += 1
                 elif outcome.status == IGNORED:
                     ignored_videos += 1
                 continue
             new_videos += 1
-            outcome = self._process_video(
+            outcome = await asyncio.to_thread(
+                self._process_video,
                 account=account,
                 video=video,
             )
@@ -538,6 +544,7 @@ class ShortDramaPipeline:
                 text_sources=text_metadata.text_sources,
             )
         parsed = self._parser.parse(
+            display_title=text_metadata.display_title or "",
             description=str(video.get("description") or ""),
             hashtags=video.get("hashtags") or (),
             account_nickname=str(account["nickname"]),
@@ -575,6 +582,7 @@ class ShortDramaPipeline:
                 episode_candidate=parsed.episode_candidate,
                 content_type=parsed.content_type,
                 parser_evidence=parsed.evidence,
+                llm_raw_result=parsed.llm_raw_result,
             )
             return _VideoProcessingOutcome(status=IGNORED, update=None)
 
@@ -608,6 +616,7 @@ class ShortDramaPipeline:
                 episode_candidate=parsed.episode_candidate,
                 content_type=parsed.content_type,
                 parser_evidence=parsed.evidence,
+                llm_raw_result=parsed.llm_raw_result,
             )
             return _VideoProcessingOutcome(status=REVIEW, update=None)
 
@@ -641,6 +650,7 @@ class ShortDramaPipeline:
             episode_candidate=parsed.episode_candidate,
             content_type=parsed.content_type,
             parser_evidence=parsed.evidence,
+            llm_raw_result=parsed.llm_raw_result,
         )
         return _VideoProcessingOutcome(
             status=MATCHED,

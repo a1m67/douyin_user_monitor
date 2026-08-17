@@ -103,6 +103,12 @@ PowerShell 下可将 `.venv/Scripts/python` 替换为 `.venv\Scripts\python.exe`
 | `HISTORY_BACKFILL_PAGE_SIZE` | `50` | 手动历史补全每页扫描作品数。 |
 | `NOTIFY_ON_INITIAL_SYNC` | `false` | 是否为历史基线发送通知。 |
 | `AUTO_ACCEPT_CONFIDENCE` | `0.8` | 自动归档最低解析置信度。 |
+| `LLM_ENABLED` | `false` | 是否启用 OpenAI-compatible AI fallback。 |
+| `LLM_API_KEY` | 空 | LLM API key；不会写入数据库或日志。 |
+| `LLM_BASE_URL` | 空 | OpenAI-compatible API 根地址。 |
+| `LLM_MODEL` | 空 | 模型名称，不绑定具体厂商。 |
+| `LLM_TIMEOUT_SECONDS` | `20` | 单次 LLM 请求超时秒数。 |
+| `LLM_AUTO_ACCEPT_CONFIDENCE` | `0.90` | AI 建议自动归档最低置信度。 |
 | `DOUYIN_COOKIE_FILE` | `data/cookies.json` | Cookie 文件路径。 |
 | `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` | 空 | 两者都配置后启用 Telegram。 |
 | `FEISHU_WEBHOOK_URL` | 空 | 配置后启用飞书通知。 |

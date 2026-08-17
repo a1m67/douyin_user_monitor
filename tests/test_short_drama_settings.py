@@ -30,6 +30,12 @@ class ShortDramaSettingsTests(unittest.TestCase):
                 "HISTORY_BACKFILL_PAGE_SIZE": "51",
                 "NOTIFY_ON_INITIAL_SYNC": "true",
                 "AUTO_ACCEPT_CONFIDENCE": "0.85",
+                "LLM_ENABLED": "true",
+                "LLM_API_KEY": "test-key",
+                "LLM_BASE_URL": "https://llm.example/v1",
+                "LLM_MODEL": "episode-model",
+                "LLM_TIMEOUT_SECONDS": "12",
+                "LLM_AUTO_ACCEPT_CONFIDENCE": "0.92",
             },
         )
         self.assertEqual(settings.database_path, (self.root / "data" / "custom.db").resolve())
@@ -40,6 +46,18 @@ class ShortDramaSettingsTests(unittest.TestCase):
         self.assertEqual(settings.history_backfill_page_size, 51)
         self.assertTrue(settings.notify_on_initial_sync)
         self.assertEqual(settings.auto_accept_confidence, 0.85)
+        self.assertTrue(settings.llm_enabled)
+        self.assertEqual(settings.llm_base_url, "https://llm.example/v1")
+        self.assertEqual(settings.llm_model, "episode-model")
+        self.assertEqual(settings.llm_timeout_seconds, 12.0)
+        self.assertEqual(settings.llm_auto_accept_confidence, 0.92)
+
+    def test_enabled_llm_requires_connection_settings(self):
+        with self.assertRaisesRegex(ValueError, "LLM_API_KEY"):
+            load_short_drama_settings(
+                project_root=self.root,
+                environ={"LLM_ENABLED": "true"},
+            )
 
     def test_cookie_reader_supports_browser_export_list_and_plain_header(self):
         json_path = self.root / "cookies.json"

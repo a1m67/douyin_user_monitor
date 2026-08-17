@@ -1,6 +1,7 @@
 """FastAPI routes for the server-rendered short-drama dashboard."""
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -50,7 +51,7 @@ class MergeShowPayload(BaseModel):
 class ReviewPayload(BaseModel):
     show_id: int | None = None
     new_show_title: str | None = Field(default=None, max_length=120)
-    episode_number: int = Field(ge=1, le=100000)
+    episode_number: int = Field(ge=0, le=100000)
 
 
 class BatchIgnoreReviewPayload(BaseModel):
@@ -241,7 +242,8 @@ def create_short_drama_router(
         payload: ReparseAccountPayload | None = None,
     ) -> dict[str, Any]:
         try:
-            result = pipeline.reparse_account(
+            result = await asyncio.to_thread(
+                pipeline.reparse_account,
                 account_id,
                 scope=payload.scope if payload is not None else "legacy_ignored",
             )
@@ -266,7 +268,7 @@ def create_short_drama_router(
     @api.post("/videos/{video_id}/reparse")
     async def reparse_video(video_id: int) -> dict[str, Any]:
         try:
-            result = pipeline.reparse_video(video_id)
+            result = await asyncio.to_thread(pipeline.reparse_video, video_id)
         except (ValueError, KeyError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {

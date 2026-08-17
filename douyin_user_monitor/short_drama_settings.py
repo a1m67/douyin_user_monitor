@@ -22,6 +22,12 @@ class ShortDramaSettings:
     history_backfill_page_size: int
     notify_on_initial_sync: bool
     auto_accept_confidence: float
+    llm_enabled: bool
+    llm_api_key: str
+    llm_base_url: str
+    llm_model: str
+    llm_timeout_seconds: float
+    llm_auto_accept_confidence: float
     max_backoff_minutes: int
     scheduler_poll_seconds: float
     telegram_bot_token: str
@@ -49,7 +55,7 @@ def load_short_drama_settings(
     if not crawler_config.is_file():
         raise ValueError(f"找不到抖音 crawler 配置文件: {crawler_config}")
 
-    return ShortDramaSettings(
+    settings = ShortDramaSettings(
         project_root=root,
         database_url=database_url,
         database_path=database_path,
@@ -62,12 +68,33 @@ def load_short_drama_settings(
         history_backfill_page_size=_positive_int(values, "HISTORY_BACKFILL_PAGE_SIZE", 50),
         notify_on_initial_sync=_boolean(values, "NOTIFY_ON_INITIAL_SYNC", False),
         auto_accept_confidence=_confidence(values, "AUTO_ACCEPT_CONFIDENCE", 0.8),
+        llm_enabled=_boolean(values, "LLM_ENABLED", False),
+        llm_api_key=_value(values, "LLM_API_KEY", ""),
+        llm_base_url=_value(values, "LLM_BASE_URL", ""),
+        llm_model=_value(values, "LLM_MODEL", ""),
+        llm_timeout_seconds=_positive_float(values, "LLM_TIMEOUT_SECONDS", 20.0),
+        llm_auto_accept_confidence=_confidence(
+            values, "LLM_AUTO_ACCEPT_CONFIDENCE", 0.90
+        ),
         max_backoff_minutes=_positive_int(values, "MAX_BACKOFF_MINUTES", 60),
         scheduler_poll_seconds=_positive_float(values, "SCHEDULER_POLL_SECONDS", 15.0),
         telegram_bot_token=_value(values, "TELEGRAM_BOT_TOKEN", ""),
         telegram_chat_id=_value(values, "TELEGRAM_CHAT_ID", ""),
         feishu_webhook_url=_value(values, "FEISHU_WEBHOOK_URL", ""),
     )
+    if settings.llm_enabled:
+        missing = [
+            name
+            for name, value in (
+                ("LLM_API_KEY", settings.llm_api_key),
+                ("LLM_BASE_URL", settings.llm_base_url),
+                ("LLM_MODEL", settings.llm_model),
+            )
+            if not value
+        ]
+        if missing:
+            raise ValueError(f"启用 LLM 时必须设置: {', '.join(missing)}")
+    return settings
 
 
 def load_cookie_header(cookie_file: Path) -> str | None:

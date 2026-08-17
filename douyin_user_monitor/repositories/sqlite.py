@@ -14,7 +14,7 @@ from typing import Any, Iterator, Mapping, Sequence
 from douyin_user_monitor.parsers.regex import normalize_title
 
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 SHOW_STATUSES = frozenset({"updating", "completed", "paused"})
 VIDEO_CLASSIFICATIONS = frozenset({"matched", "ignored", "review"})
 VIDEO_CONTENT_TYPES = frozenset({"episode", "trailer", "show_content", "unknown", "non_drama"})
@@ -143,6 +143,7 @@ class ShortDramaRepository:
                 content_type TEXT NOT NULL DEFAULT 'unknown'
                     CHECK (content_type IN ('episode', 'trailer', 'show_content', 'unknown', 'non_drama')),
                 parser_evidence TEXT NOT NULL DEFAULT '{}',
+                llm_raw_result TEXT,
                 created_at TEXT NOT NULL,
                 processed_at TEXT
             );
@@ -169,7 +170,7 @@ class ShortDramaRepository:
                 published_at TEXT,
                 created_at TEXT NOT NULL,
                 UNIQUE(show_id, episode_number),
-                CHECK (episode_number > 0)
+                CHECK (episode_number >= 0)
             );
 
             CREATE TABLE IF NOT EXISTS episode_sources (
@@ -207,6 +208,8 @@ class ShortDramaRepository:
 
     def _migrate_schema(self, connection: sqlite3.Connection, previous_version: int) -> None:
         """Apply additive migrations without requiring users to recreate SQLite data."""
+        if not _episodes_allow_zero(connection):
+            _migrate_episodes_allow_zero(connection)
         if not _table_has_column(connection, "videos", "classification_status"):
             connection.execute(
                 "ALTER TABLE videos ADD COLUMN classification_status TEXT NOT NULL DEFAULT 'ignored'"
@@ -220,6 +223,7 @@ class ShortDramaRepository:
             "display_title": "TEXT",
             "text_sources": "TEXT NOT NULL DEFAULT '{}'",
             "parser_evidence": "TEXT NOT NULL DEFAULT '{}'",
+            "llm_raw_result": "TEXT",
         }.items():
             if not _table_has_column(connection, "videos", column):
                 connection.execute(f"ALTER TABLE videos ADD COLUMN {column} {definition}")
@@ -890,6 +894,7 @@ class ShortDramaRepository:
         episode_candidate: int | None = None,
         content_type: str = "unknown",
         parser_evidence: Mapping[str, Any] | None = None,
+        llm_raw_result: Any | None = None,
     ) -> dict[str, Any]:
         resolved_status = classification_status or _classification_from_legacy_fields(
             needs_review=needs_review,
@@ -898,8 +903,10 @@ class ShortDramaRepository:
         )
         _validate_video_classification(resolved_status)
         _validate_video_content_type(content_type)
-        if episode_candidate is not None and int(episode_candidate) <= 0:
-            raise ValueError("候选集数必须大于 0")
+        if parsed_episode_number is not None and int(parsed_episode_number) < 0:
+            raise ValueError("集数不能小于 0")
+        if episode_candidate is not None and int(episode_candidate) < 0:
+            raise ValueError("候选集数不能小于 0")
         if bool(needs_review) != (resolved_status == "review"):
             raise ValueError("needs_review 必须与分类状态一致")
         if bool(is_processed) == (resolved_status == "review"):
@@ -912,6 +919,7 @@ class ShortDramaRepository:
                     parsed_show_title = ?, parsed_episode_number = ?, parser_method = ?,
                     parser_reason = ?, show_title_candidate = ?, episode_candidate = ?, content_type = ?,
                     parser_evidence = COALESCE(?, parser_evidence),
+                    llm_raw_result = COALESCE(?, llm_raw_result),
                     processed_at = ?
                 WHERE id = ?
                 """,
@@ -928,6 +936,9 @@ class ShortDramaRepository:
                     episode_candidate,
                     content_type,
                     _json_mapping(parser_evidence) if parser_evidence is not None else None,
+                    json.dumps(llm_raw_result, ensure_ascii=False, separators=(",", ":"))
+                    if llm_raw_result is not None
+                    else None,
                     utc_now() if is_processed else None,
                     video_id,
                 ),
@@ -1386,8 +1397,8 @@ class ShortDramaRepository:
         account_id: str,
         published_at: str | None,
     ) -> EpisodeWriteResult:
-        if episode_number <= 0:
-            raise ValueError("集数必须大于 0")
+        if episode_number < 0:
+            raise ValueError("集数不能小于 0")
         now = utc_now()
         with self._transaction() as connection:
             if connection.execute("SELECT 1 FROM shows WHERE id = ?", (show_id,)).fetchone() is None:
@@ -1620,6 +1631,51 @@ def _table_has_column(connection: sqlite3.Connection, table: str, column: str) -
     return any(str(row["name"]) == column for row in connection.execute(f"PRAGMA table_info({table})"))
 
 
+def _episodes_allow_zero(connection: sqlite3.Connection) -> bool:
+    row = connection.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'episodes'"
+    ).fetchone()
+    sql = str(row["sql"] or "").replace(" ", "") if row else ""
+    return "CHECK(episode_number>=0)" in sql
+
+
+def _migrate_episodes_allow_zero(connection: sqlite3.Connection) -> None:
+    """Rebuild the table because SQLite cannot alter an existing CHECK constraint."""
+    connection.execute("PRAGMA foreign_keys = OFF")
+    connection.execute("PRAGMA legacy_alter_table = ON")
+    connection.execute("ALTER TABLE episodes RENAME TO episodes_before_v6")
+    connection.execute(
+        """
+        CREATE TABLE episodes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            show_id INTEGER NOT NULL REFERENCES shows(id) ON DELETE CASCADE,
+            episode_number INTEGER NOT NULL,
+            first_video_id INTEGER NOT NULL REFERENCES videos(id) ON DELETE RESTRICT,
+            first_account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
+            published_at TEXT,
+            created_at TEXT NOT NULL,
+            UNIQUE(show_id, episode_number),
+            CHECK (episode_number >= 0)
+        )
+        """
+    )
+    connection.execute(
+        """
+        INSERT INTO episodes(
+            id, show_id, episode_number, first_video_id, first_account_id, published_at, created_at
+        )
+        SELECT id, show_id, episode_number, first_video_id, first_account_id, published_at, created_at
+        FROM episodes_before_v6
+        """
+    )
+    connection.execute("DROP TABLE episodes_before_v6")
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_episodes_show_number "
+        "ON episodes(show_id, episode_number DESC)"
+    )
+    connection.execute("PRAGMA legacy_alter_table = OFF")
+
+
 def _safe_account_nickname(value: Any, sec_uid: str) -> str:
     text = str(value or "").strip()
     return _fallback_account_nickname(sec_uid) if _is_placeholder_nickname(text) else text
@@ -1790,6 +1846,15 @@ def _json_object(value: Any) -> dict[str, Any]:
     return dict(parsed) if isinstance(parsed, Mapping) else {}
 
 
+def _json_value(value: Any) -> Any:
+    if value is None or not isinstance(value, str):
+        return value
+    try:
+        return json.loads(value)
+    except json.JSONDecodeError:
+        return value
+
+
 def _prefer_non_empty(existing: Any, incoming: Any) -> str | None:
     current = _optional_text(existing)
     candidate = _optional_text(incoming)
@@ -1912,6 +1977,7 @@ def _video_row(row: sqlite3.Row) -> dict[str, Any]:
     result["hashtags"] = _json_list(result.get("hashtags"))
     result["text_sources"] = _json_object(result.get("text_sources"))
     result["parser_evidence"] = _json_object(result.get("parser_evidence"))
+    result["llm_raw_result"] = _json_value(result.get("llm_raw_result"))
     result["is_processed"] = bool(result["is_processed"])
     result["needs_review"] = bool(result["needs_review"])
     return result
