@@ -103,6 +103,8 @@ class ShortDramaWebTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("永久忽略", response.text)
         self.assertIn("移除此集", response.text)
         self.assertIn("移除来源", response.text)
+        self.assertIn("role=\"link\"", response.text)
+        self.assertIn("!event.target.closest('.show-menu')", response.text)
 
         payload = self.client.get("/api/short-drama/shows").json()
         self.assertEqual(payload["shows"][0]["title"], "末日重生")
