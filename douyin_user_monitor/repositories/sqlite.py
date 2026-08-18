@@ -14,12 +14,13 @@ from typing import Any, Iterator, Mapping, Sequence
 from douyin_user_monitor.parsers.regex import normalize_title
 
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 SHOW_STATUSES = frozenset({"updating", "completed", "paused"})
 VIDEO_CLASSIFICATIONS = frozenset({"matched", "ignored", "review"})
 VIDEO_CONTENT_TYPES = frozenset({"episode", "trailer", "show_content", "unknown", "non_drama"})
 HISTORY_SYNC_STATUSES = frozenset({"idle", "pending", "running", "paused", "completed", "failed"})
 _PLACEHOLDER_NICKNAMES = frozenset({"", "nan", "none", "null", "undefined", "n/a"})
+_UNSET = object()
 
 
 def utc_now() -> str:
@@ -156,10 +157,16 @@ class ShortDramaRepository:
                 aliases TEXT NOT NULL DEFAULT '[]',
                 latest_episode INTEGER,
                 latest_update_at TEXT,
+                expected_episode_count INTEGER,
+                is_ignored INTEGER NOT NULL DEFAULT 0,
+                ignored_at TEXT,
+                ignore_reason TEXT,
                 status TEXT NOT NULL DEFAULT 'updating',
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
-                CHECK (status IN ('updating', 'completed', 'paused'))
+                CHECK (status IN ('updating', 'completed', 'paused')),
+                CHECK (expected_episode_count IS NULL OR expected_episode_count > 0),
+                CHECK (is_ignored IN (0, 1))
             );
 
             CREATE TABLE IF NOT EXISTS episodes (
@@ -243,6 +250,14 @@ class ShortDramaRepository:
         }.items():
             if not _table_has_column(connection, "accounts", column):
                 connection.execute(f"ALTER TABLE accounts ADD COLUMN {column} {definition}")
+        for column, definition in {
+            "expected_episode_count": "INTEGER",
+            "is_ignored": "INTEGER NOT NULL DEFAULT 0",
+            "ignored_at": "TEXT",
+            "ignore_reason": "TEXT",
+        }.items():
+            if not _table_has_column(connection, "shows", column):
+                connection.execute(f"ALTER TABLE shows ADD COLUMN {column} {definition}")
         connection.execute(
             "CREATE INDEX IF NOT EXISTS idx_videos_classification "
             "ON videos(classification_status, created_at DESC)"
@@ -1284,6 +1299,19 @@ class ShortDramaRepository:
             ).fetchone()
             return _show_row(row) if row else None
 
+    def get_show_by_title_or_alias(self, title: str) -> dict[str, Any] | None:
+        normalized = normalize_title(title)
+        if not normalized:
+            return None
+        with self._transaction() as connection:
+            rows = connection.execute("SELECT * FROM shows ORDER BY id").fetchall()
+            for row in rows:
+                show = _show_row(row)
+                candidates = [show["title"], *show["aliases"]]
+                if any(normalize_title(str(candidate)) == normalized for candidate in candidates):
+                    return show
+        return None
+
     def list_shows(self, *, limit: int = 100) -> list[dict[str, Any]]:
         safe_limit = max(1, min(int(limit), 500))
         with self._transaction() as connection:
@@ -1292,35 +1320,139 @@ class ShortDramaRepository:
             ).fetchall()
             return [_show_row(row) for row in rows]
 
-    def list_show_summaries(self, *, limit: int = 100) -> list[dict[str, Any]]:
-        """Return dashboard rows with the first source of each latest episode."""
+    def list_show_summaries(
+        self,
+        *,
+        account_id: str | None = None,
+        ignored: str = "normal",
+        include_empty: bool = False,
+        q: str | None = None,
+        sort: str = "recent",
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        """Return filterable library rows derived from persisted episodes and sources."""
+        if ignored not in {"normal", "ignored", "all"}:
+            raise ValueError("短剧忽略状态筛选无效")
+        order_by = {
+            "recent": "shows.latest_update_at DESC, shows.updated_at DESC",
+            "title": "shows.title COLLATE NOCASE ASC, shows.id ASC",
+            "episode_count": "episode_count DESC, shows.latest_update_at DESC",
+            "latest_episode": "shows.latest_episode DESC, shows.latest_update_at DESC",
+        }.get(sort)
+        if order_by is None:
+            raise ValueError("短剧排序方式无效")
         safe_limit = max(1, min(int(limit), 500))
+        conditions: list[str] = []
+        params: list[Any] = []
+        if ignored != "all":
+            conditions.append("shows.is_ignored = ?")
+            params.append(1 if ignored == "ignored" else 0)
+        if not include_empty:
+            conditions.append("EXISTS (SELECT 1 FROM episodes e0 WHERE e0.show_id = shows.id)")
+        if account_id:
+            conditions.append(
+                """
+                EXISTS (
+                    SELECT 1
+                    FROM episodes filtered_episodes
+                    JOIN episode_sources filtered_sources
+                      ON filtered_sources.episode_id = filtered_episodes.id
+                    WHERE filtered_episodes.show_id = shows.id
+                      AND filtered_sources.account_id = ?
+                )
+                """
+            )
+            params.append(account_id)
+        search = str(q or "").strip()
+        if search:
+            conditions.append(
+                "(shows.title LIKE ? COLLATE NOCASE OR shows.normalized_title LIKE ? "
+                "COLLATE NOCASE OR shows.aliases LIKE ? COLLATE NOCASE)"
+            )
+            params.extend((f"%{search}%", f"%{normalize_title(search)}%", f"%{search}%"))
+        where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
         with self._transaction() as connection:
             rows = connection.execute(
-                """
+                f"""
                 SELECT
                     shows.*,
-                    latest_episode.first_account_id AS latest_account_id,
+                    COUNT(DISTINCT episodes.id) AS episode_count,
+                    COUNT(DISTINCT CASE WHEN episodes.episode_number > 0 THEN episodes.id END)
+                        AS regular_episode_count,
+                    COUNT(DISTINCT CASE WHEN episodes.episode_number = 0 THEN episodes.id END)
+                        AS special_episode_count,
+                    MIN(episodes.episode_number) AS min_episode,
+                    MAX(episodes.episode_number) AS max_episode,
+                    CASE
+                        WHEN MAX(CASE WHEN episodes.episode_number > 0
+                                      THEN episodes.episode_number END) IS NULL THEN 0
+                        ELSE MAX(CASE WHEN episodes.episode_number > 0
+                                      THEN episodes.episode_number END)
+                             - COUNT(DISTINCT CASE WHEN episodes.episode_number > 0
+                                                   THEN episodes.id END)
+                    END AS missing_episode_count,
+                    latest_source.account_id AS latest_account_id,
                     accounts.nickname AS latest_account_nickname,
                     latest_video.video_url AS latest_video_url,
-                    latest_video.cover_url AS latest_cover_url
+                    latest_video.cover_url AS latest_cover_url,
+                    COUNT(DISTINCT episode_sources.account_id) AS source_account_count
                 FROM shows
-                LEFT JOIN episodes AS latest_episode
-                    ON latest_episode.id = (
-                        SELECT episodes_inner.id
-                        FROM episodes AS episodes_inner
+                LEFT JOIN episodes ON episodes.show_id = shows.id
+                LEFT JOIN episode_sources ON episode_sources.episode_id = episodes.id
+                LEFT JOIN episode_sources AS latest_source
+                    ON latest_source.id = (
+                        SELECT sources_inner.id
+                        FROM episode_sources AS sources_inner
+                        JOIN episodes AS episodes_inner
+                          ON episodes_inner.id = sources_inner.episode_id
                         WHERE episodes_inner.show_id = shows.id
-                        ORDER BY episodes_inner.episode_number DESC
+                        ORDER BY COALESCE(sources_inner.published_at, sources_inner.created_at) DESC,
+                                 sources_inner.id DESC
                         LIMIT 1
                     )
-                LEFT JOIN accounts ON accounts.id = latest_episode.first_account_id
-                LEFT JOIN videos AS latest_video ON latest_video.id = latest_episode.first_video_id
-                ORDER BY shows.latest_update_at DESC, shows.updated_at DESC
+                LEFT JOIN accounts ON accounts.id = latest_source.account_id
+                LEFT JOIN videos AS latest_video ON latest_video.id = latest_source.video_id
+                {where_clause}
+                GROUP BY shows.id
+                ORDER BY {order_by}
                 LIMIT ?
                 """,
-                (safe_limit,),
+                (*params, safe_limit),
             ).fetchall()
-            return [_show_row(row) for row in rows]
+            result = [_show_row(row) for row in rows]
+            source_accounts = self._source_accounts_for_shows(
+                connection, [int(show["id"]) for show in result]
+            )
+            for show in result:
+                show["source_accounts"] = source_accounts.get(int(show["id"]), [])
+            return result
+
+    def _source_accounts_for_shows(
+        self, connection: sqlite3.Connection, show_ids: Sequence[int]
+    ) -> dict[int, list[dict[str, Any]]]:
+        if not show_ids:
+            return {}
+        placeholders = ",".join("?" for _ in show_ids)
+        rows = connection.execute(
+            f"""
+            SELECT episodes.show_id, accounts.id, accounts.nickname,
+                   MAX(COALESCE(episode_sources.published_at, episode_sources.created_at))
+                       AS latest_source_at
+            FROM episodes
+            JOIN episode_sources ON episode_sources.episode_id = episodes.id
+            JOIN accounts ON accounts.id = episode_sources.account_id
+            WHERE episodes.show_id IN ({placeholders})
+            GROUP BY episodes.show_id, accounts.id, accounts.nickname
+            ORDER BY latest_source_at DESC, accounts.nickname COLLATE NOCASE
+            """,
+            tuple(show_ids),
+        ).fetchall()
+        result: dict[int, list[dict[str, Any]]] = {}
+        for row in rows:
+            result.setdefault(int(row["show_id"]), []).append(
+                {"id": str(row["id"]), "nickname": str(row["nickname"])}
+            )
+        return result
 
     def get_show_detail(self, show_id: int) -> dict[str, Any] | None:
         show = self.get_show(show_id)
@@ -1335,11 +1467,27 @@ class ShortDramaRepository:
         show["missing_episode_numbers"] = [
             number for number in range(1, latest_episode + 1) if number not in known_numbers
         ]
+        show["episode_count"] = len(episodes)
+        show["regular_episode_count"] = sum(
+            1 for episode in episodes if int(episode["episode_number"]) > 0
+        )
+        show["special_episode_count"] = sum(
+            1 for episode in episodes if int(episode["episode_number"]) == 0
+        )
+        show["min_episode"] = min(known_numbers) if known_numbers else None
+        show["max_episode"] = max(known_numbers) if known_numbers else None
+        show["missing_episode_count"] = len(show["missing_episode_numbers"])
+        with self._transaction() as connection:
+            source_accounts = self._source_accounts_for_shows(connection, [show_id])
+        show["source_accounts"] = source_accounts.get(show_id, [])
+        show["source_account_count"] = len(show["source_accounts"])
         return show
 
     def list_show_candidates(self) -> list[dict[str, Any]]:
         with self._transaction() as connection:
-            rows = connection.execute("SELECT * FROM shows ORDER BY title COLLATE NOCASE").fetchall()
+            rows = connection.execute(
+                "SELECT * FROM shows WHERE is_ignored = 0 ORDER BY title COLLATE NOCASE"
+            ).fetchall()
             return [_show_row(row) for row in rows]
 
     def update_show(
@@ -1349,6 +1497,7 @@ class ShortDramaRepository:
         title: str | None = None,
         aliases: Sequence[str] | None = None,
         status: str | None = None,
+        expected_episode_count: int | None | object = _UNSET,
     ) -> dict[str, Any]:
         changes: dict[str, Any] = {}
         if title is not None:
@@ -1366,6 +1515,12 @@ class ShortDramaRepository:
             if status not in SHOW_STATUSES:
                 raise ValueError("短剧状态无效")
             changes["status"] = status
+        if expected_episode_count is not _UNSET:
+            if expected_episode_count is not None and int(expected_episode_count) <= 0:
+                raise ValueError("预计总集数必须是正整数或留空")
+            changes["expected_episode_count"] = (
+                None if expected_episode_count is None else int(expected_episode_count)
+            )
         if not changes:
             existing = self.get_show(show_id)
             if existing is None:
@@ -1389,6 +1544,38 @@ class ShortDramaRepository:
                     )
             cursor = connection.execute(
                 f"UPDATE shows SET {assignments} WHERE id = ?", (*changes.values(), show_id)
+            )
+            if cursor.rowcount == 0:
+                raise KeyError("短剧不存在")
+            row = connection.execute("SELECT * FROM shows WHERE id = ?", (show_id,)).fetchone()
+            return _show_row(row)
+
+    def ignore_show(self, show_id: int, *, reason: str | None = None) -> dict[str, Any]:
+        now = utc_now()
+        with self._transaction() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE shows
+                SET is_ignored = 1, ignored_at = ?, ignore_reason = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (now, _optional_text(reason), now, show_id),
+            )
+            if cursor.rowcount == 0:
+                raise KeyError("短剧不存在")
+            row = connection.execute("SELECT * FROM shows WHERE id = ?", (show_id,)).fetchone()
+            return _show_row(row)
+
+    def restore_show(self, show_id: int) -> dict[str, Any]:
+        now = utc_now()
+        with self._transaction() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE shows
+                SET is_ignored = 0, ignored_at = NULL, ignore_reason = NULL, updated_at = ?
+                WHERE id = ?
+                """,
+                (now, show_id),
             )
             if cursor.rowcount == 0:
                 raise KeyError("短剧不存在")
@@ -1528,8 +1715,13 @@ class ShortDramaRepository:
             raise ValueError("集数不能小于 0")
         now = utc_now()
         with self._transaction() as connection:
-            if connection.execute("SELECT 1 FROM shows WHERE id = ?", (show_id,)).fetchone() is None:
+            show = connection.execute(
+                "SELECT is_ignored FROM shows WHERE id = ?", (show_id,)
+            ).fetchone()
+            if show is None:
                 raise KeyError("短剧不存在")
+            if bool(show["is_ignored"]):
+                raise ValueError("短剧已永久忽略")
             existing_episode = connection.execute(
                 "SELECT * FROM episodes WHERE show_id = ? AND episode_number = ?",
                 (show_id, episode_number),
@@ -1595,6 +1787,92 @@ class ShortDramaRepository:
                 (episode_id,),
             ).fetchall()
             return [_episode_source_row(row) for row in rows]
+
+    def remove_episode(self, show_id: int, episode_id: int) -> dict[str, Any]:
+        with self._transaction() as connection:
+            episode = connection.execute(
+                "SELECT * FROM episodes WHERE id = ? AND show_id = ?",
+                (episode_id, show_id),
+            ).fetchone()
+            if episode is None:
+                raise KeyError("剧集不存在")
+            source_rows = connection.execute(
+                "SELECT video_id FROM episode_sources WHERE episode_id = ?",
+                (episode_id,),
+            ).fetchall()
+            video_ids = [int(row["video_id"]) for row in source_rows]
+            connection.execute("DELETE FROM episodes WHERE id = ?", (episode_id,))
+            self._mark_removed_videos(
+                connection,
+                video_ids,
+                parser_reason="manual_remove_episode",
+            )
+            self._refresh_show_latest(connection, {show_id})
+        return {
+            "removed_episode_id": episode_id,
+            "removed_source_count": len(video_ids),
+            "show": self.get_show_detail(show_id),
+        }
+
+    def remove_episode_source(
+        self, show_id: int, episode_id: int, source_id: int
+    ) -> dict[str, Any]:
+        with self._transaction() as connection:
+            source = connection.execute(
+                """
+                SELECT episode_sources.video_id
+                FROM episode_sources
+                JOIN episodes ON episodes.id = episode_sources.episode_id
+                WHERE episode_sources.id = ? AND episodes.id = ? AND episodes.show_id = ?
+                """,
+                (source_id, episode_id, show_id),
+            ).fetchone()
+            if source is None:
+                raise KeyError("剧集来源不存在")
+            video_id = int(source["video_id"])
+            connection.execute("DELETE FROM episode_sources WHERE id = ?", (source_id,))
+            self._mark_removed_videos(
+                connection,
+                [video_id],
+                parser_reason="manual_remove_source",
+            )
+            remaining = connection.execute(
+                "SELECT COUNT(*) AS count FROM episode_sources WHERE episode_id = ?",
+                (episode_id,),
+            ).fetchone()
+            episode_removed = int(remaining["count"]) == 0
+            if episode_removed:
+                connection.execute("DELETE FROM episodes WHERE id = ?", (episode_id,))
+            else:
+                self._repair_episode_first_source(connection, episode_id)
+            self._refresh_show_latest(connection, {show_id})
+        return {
+            "removed_source_id": source_id,
+            "episode_removed": episode_removed,
+            "show": self.get_show_detail(show_id),
+        }
+
+    def _mark_removed_videos(
+        self,
+        connection: sqlite3.Connection,
+        video_ids: Sequence[int],
+        *,
+        parser_reason: str,
+    ) -> None:
+        if not video_ids:
+            return
+        placeholders = ",".join("?" for _ in video_ids)
+        connection.execute(
+            f"""
+            UPDATE videos
+            SET is_processed = 1, needs_review = 0, classification_status = 'ignored',
+                parser_confidence = 1.0, parsed_show_title = NULL,
+                parsed_episode_number = NULL, parser_method = 'manual_remove',
+                parser_reason = ?, processed_at = ?
+            WHERE id IN ({placeholders})
+            """,
+            (parser_reason, utc_now(), *video_ids),
+        )
 
     def record_notification(
         self,
@@ -2142,6 +2420,9 @@ def _video_row(row: sqlite3.Row) -> dict[str, Any]:
 def _show_row(row: sqlite3.Row) -> dict[str, Any]:
     result = _row_to_dict(row)
     result["aliases"] = _json_list(result.get("aliases"))
+    result["is_ignored"] = bool(result.get("is_ignored", 0))
+    if result.get("expected_episode_count") is not None:
+        result["expected_episode_count"] = int(result["expected_episode_count"])
     return result
 
 

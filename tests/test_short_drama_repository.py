@@ -628,6 +628,150 @@ class ShortDramaRepositoryTests(unittest.TestCase):
 
         self.assertEqual(detail["missing_episode_numbers"], [4, 7])
 
+    def test_show_library_summaries_report_real_progress_and_filter_by_any_source(self):
+        first = self.create_account("library-a")
+        second = self.create_account("library-b")
+        show = self.repository.create_show(
+            title="归墟", normalized_title="归墟", aliases=["归墟系列"]
+        )
+        for number, account in ((0, first), (1, first), (3, second)):
+            video = self.create_video(account["id"], f"library-{number}")
+            self.repository.record_episode_source(
+                show_id=show["id"],
+                episode_number=number,
+                video_id=video["id"],
+                account_id=account["id"],
+                published_at=video["publish_time"],
+            )
+
+        summary = self.repository.list_show_summaries()[0]
+        self.assertEqual(summary["episode_count"], 3)
+        self.assertEqual(summary["regular_episode_count"], 2)
+        self.assertEqual(summary["special_episode_count"], 1)
+        self.assertEqual(summary["min_episode"], 0)
+        self.assertEqual(summary["max_episode"], 3)
+        self.assertEqual(summary["missing_episode_count"], 1)
+        self.assertEqual(summary["source_account_count"], 2)
+        self.assertEqual({item["id"] for item in summary["source_accounts"]}, {first["id"], second["id"]})
+        self.assertEqual(
+            [item["id"] for item in self.repository.list_show_summaries(account_id=first["id"])],
+            [show["id"]],
+        )
+        self.assertEqual(
+            [item["id"] for item in self.repository.list_show_summaries(account_id=second["id"])],
+            [show["id"]],
+        )
+        self.assertEqual(
+            [item["id"] for item in self.repository.list_show_summaries(q="归墟系列")],
+            [show["id"]],
+        )
+
+    def test_expected_episode_count_can_be_set_and_cleared(self):
+        show = self.repository.create_show(title="总集数", normalized_title="总集数")
+        updated = self.repository.update_show(show["id"], expected_episode_count=30)
+        cleared = self.repository.update_show(show["id"], expected_episode_count=None)
+
+        self.assertEqual(updated["expected_episode_count"], 30)
+        self.assertIsNone(cleared["expected_episode_count"])
+        with self.assertRaisesRegex(ValueError, "正整数"):
+            self.repository.update_show(show["id"], expected_episode_count=0)
+
+    def test_ignored_shows_are_hidden_from_library_and_parser_candidates_until_restored(self):
+        account = self.create_account("ignored-library")
+        show = self.repository.create_show(title="活动名称", normalized_title="活动名称")
+        video = self.create_video(account["id"], "ignored-library-video")
+        self.repository.record_episode_source(
+            show_id=show["id"], episode_number=1, video_id=video["id"],
+            account_id=account["id"], published_at=video["publish_time"],
+        )
+
+        ignored = self.repository.ignore_show(show["id"], reason="不是短剧")
+        self.assertTrue(ignored["is_ignored"])
+        self.assertEqual(self.repository.list_show_summaries(), [])
+        self.assertEqual(self.repository.list_show_candidates(), [])
+        self.assertEqual(
+            self.repository.list_show_summaries(ignored="ignored")[0]["id"], show["id"]
+        )
+        with self.assertRaisesRegex(ValueError, "永久忽略"):
+            another = self.create_video(account["id"], "ignored-library-video-2")
+            self.repository.record_episode_source(
+                show_id=show["id"], episode_number=2, video_id=another["id"],
+                account_id=account["id"], published_at=another["publish_time"],
+            )
+
+        restored = self.repository.restore_show(show["id"])
+        self.assertFalse(restored["is_ignored"])
+        self.assertEqual(self.repository.list_show_candidates()[0]["id"], show["id"])
+
+    def test_remove_episode_and_source_preserve_videos_and_refresh_show(self):
+        first = self.create_account("remove-a")
+        second = self.create_account("remove-b")
+        show = self.repository.create_show(title="归墟", normalized_title="归墟")
+        first_video = self.create_video(first["id"], "remove-source-a")
+        second_video = self.create_video(second["id"], "remove-source-b")
+        final_video = self.create_video(first["id"], "remove-episode")
+        first_write = self.repository.record_episode_source(
+            show_id=show["id"], episode_number=1, video_id=first_video["id"],
+            account_id=first["id"], published_at=first_video["publish_time"],
+        )
+        self.repository.record_episode_source(
+            show_id=show["id"], episode_number=1, video_id=second_video["id"],
+            account_id=second["id"], published_at=second_video["publish_time"],
+        )
+        final_write = self.repository.record_episode_source(
+            show_id=show["id"], episode_number=9, video_id=final_video["id"],
+            account_id=first["id"], published_at=final_video["publish_time"],
+        )
+
+        sources = self.repository.get_episode_sources(first_write.episode["id"])
+        removed_source = self.repository.remove_episode_source(
+            show["id"], first_write.episode["id"], sources[1]["id"]
+        )
+        self.assertFalse(removed_source["episode_removed"])
+        self.assertEqual(
+            self.repository.get_video(second_video["id"])["parser_reason"],
+            "manual_remove_source",
+        )
+        removed_episode = self.repository.remove_episode(show["id"], final_write.episode["id"])
+        self.assertEqual(removed_episode["show"]["latest_episode"], 1)
+        self.assertEqual(
+            self.repository.get_video(final_video["id"])["parser_reason"],
+            "manual_remove_episode",
+        )
+        self.assertIsNotNone(self.repository.get_video(final_video["id"]))
+
+    def test_v7_database_migrates_show_library_columns(self):
+        database_path = self.root / "v7.db"
+        connection = sqlite3.connect(database_path)
+        try:
+            connection.executescript(
+                """
+                CREATE TABLE app_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+                INSERT INTO app_meta(key, value) VALUES ('schema_version', '7');
+                CREATE TABLE shows (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    title TEXT NOT NULL,
+                    normalized_title TEXT NOT NULL UNIQUE,
+                    aliases TEXT NOT NULL DEFAULT '[]',
+                    latest_episode INTEGER,
+                    latest_update_at TEXT,
+                    status TEXT NOT NULL DEFAULT 'updating',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                INSERT INTO shows(title, normalized_title, created_at, updated_at)
+                VALUES ('旧短剧', '旧短剧', '2026-01-01', '2026-01-01');
+                """
+            )
+            connection.commit()
+        finally:
+            connection.close()
+
+        migrated = ShortDramaRepository(database_path)
+        show = migrated.get_show(1)
+        self.assertIsNone(show["expected_episode_count"])
+        self.assertFalse(show["is_ignored"])
+
     def test_batch_ignore_only_changes_review_videos(self):
         account = self.create_account()
         review_video = self.create_video(account["id"], "review-1")

@@ -76,7 +76,7 @@ class ShortDramaWebTests(unittest.IsolatedAsyncioTestCase):
     async def test_dashboard_pages_and_show_api(self):
         response = self.client.get("/shows")
         self.assertEqual(response.status_code, 200)
-        self.assertIn("最近更新短剧", response.text)
+        self.assertIn("短剧库", response.text)
         self.assertIn("人工审核", response.text)
         self.assertIn("startEditAccount", response.text)
         self.assertIn("batchIgnoreReviews", response.text)
@@ -98,6 +98,11 @@ class ShortDramaWebTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("缺失集数", response.text)
         self.assertIn("合并短剧", response.text)
         self.assertIn("mergeShow(", response.text)
+        self.assertIn("全部作者", response.text)
+        self.assertIn("预计总集数", response.text)
+        self.assertIn("永久忽略", response.text)
+        self.assertIn("移除此集", response.text)
+        self.assertIn("移除来源", response.text)
 
         payload = self.client.get("/api/short-drama/shows").json()
         self.assertEqual(payload["shows"][0]["title"], "末日重生")
@@ -111,6 +116,58 @@ class ShortDramaWebTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("display_title", videos[0])
         self.assertIn("text_sources", videos[0])
         self.assertIn("parser_evidence", videos[0])
+
+    async def test_show_library_management_endpoints(self):
+        show = self.repository.list_show_summaries()[0]
+        show_id = show["id"]
+        episode = self.repository.get_show_episodes(show_id)[0]
+        source = self.repository.get_episode_sources(episode["id"])[0]
+
+        updated = self.client.patch(
+            f"/api/short-drama/shows/{show_id}",
+            json={"expected_episode_count": 30, "aliases": ["末日归来"]},
+        )
+        self.assertEqual(updated.status_code, 200)
+        self.assertEqual(updated.json()["show"]["expected_episode_count"], 30)
+        searched = self.client.get("/api/short-drama/shows", params={"q": "末日归来"})
+        self.assertEqual([item["id"] for item in searched.json()["shows"]], [show_id])
+
+        ignored = self.client.post(
+            f"/api/short-drama/shows/{show_id}/ignore",
+            json={"reason": "误识别"},
+        )
+        self.assertEqual(ignored.status_code, 200)
+        self.assertTrue(ignored.json()["show"]["is_ignored"])
+        self.assertEqual(self.client.get("/api/short-drama/shows").json()["shows"], [])
+        ignored_items = self.client.get(
+            "/api/short-drama/shows", params={"ignored": "ignored"}
+        ).json()["shows"]
+        self.assertEqual(ignored_items[0]["id"], show_id)
+        restored = self.client.post(f"/api/short-drama/shows/{show_id}/restore")
+        self.assertEqual(restored.status_code, 200)
+        self.assertFalse(restored.json()["show"]["is_ignored"])
+
+        cleared = self.client.patch(
+            f"/api/short-drama/shows/{show_id}",
+            json={"expected_episode_count": None},
+        )
+        self.assertEqual(cleared.status_code, 200)
+        self.assertIsNone(cleared.json()["show"]["expected_episode_count"])
+
+        removed = self.client.delete(
+            f"/api/short-drama/shows/{show_id}/episodes/{episode['id']}"
+            f"/sources/{source['id']}"
+        )
+        self.assertEqual(removed.status_code, 200)
+        self.assertTrue(removed.json()["result"]["episode_removed"])
+        stored_video = self.repository.get_video(source["video_id"])
+        self.assertEqual(stored_video["parser_reason"], "manual_remove_source")
+        self.assertEqual(self.repository.get_show_episodes(show_id), [])
+        self.assertEqual(self.client.get("/api/short-drama/shows").json()["shows"], [])
+        empty = self.client.get(
+            "/api/short-drama/shows", params={"include_empty": True}
+        ).json()["shows"]
+        self.assertEqual(empty[0]["id"], show_id)
 
     async def test_show_merge_and_consistency_repair_endpoints(self):
         target = self.client.get("/api/short-drama/shows").json()["shows"][0]

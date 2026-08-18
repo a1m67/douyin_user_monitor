@@ -19,8 +19,8 @@
 - 规则解析器支持书名号、`第 27 集`、`27集`、`EP27`、`EP.27`、`Episode 27`、`27/100`、`27-100` 和中文数字。
 - 三态分类：明确短剧名和集数为 `matched`；没有短剧 / 剧集信号的普通视频为 `ignored`；仅有短剧或集数线索但无法可靠归档的作品才进入 `/review`。
 - 首次添加账号同步最近作品作为历史基线，默认不通知；后续新剧集才通知。
-- 历史补全使用独立 cursor 状态，每次只执行一页，支持暂停、继续、失败恢复和重复页幂等；历史补全不发送旧集通知。
-- 账号页展示历史扫描状态、页数、扫描作品数和新增作品数；短剧详情根据已入库集数提示数据库缺集，不推断作者是否发布过缺失集。
+- 历史补全由独立后台 worker 连续分页，使用持久化 opaque cursor，支持暂停、继续、失败重试、服务重启恢复和重复页幂等；历史补全不发送旧集通知。
+- 短剧库展示实际收录数、正片/特殊集、缺集、来源作者，可按作者、剧名和忽略状态筛选；支持设置预计总集数、永久忽略错误 Show，以及移除误归档 Episode 或单个来源。
 - Telegram 和飞书 Webhook 通知；每个渠道的成功或失败都会记录，失败不会回滚 Video / Episode。
 - 按账号的 `next_check_at` 错峰巡检，有限并发和指数退避避免单个账号错误影响其他账号。
 - Dashboard：`/shows`、`/shows/{id}`、`/accounts`、`/videos`、`/review`、`/status`，以及 JSON 健康检查 `/health`。
@@ -88,7 +88,7 @@ PowerShell 下可将 `.venv/Scripts/python` 替换为 `.venv\Scripts\python.exe`
 3. 如果需要补全更早作品，在账号行点击“开始补全历史”。后台会按持久化 cursor 自动连续扫描，可随时暂停、继续或在失败后重试，关闭浏览器不影响任务。
 4. 后续巡检只抓取最新一页作品，系统根据规则识别短剧和集数。
 5. 无法可靠识别的作品在 `/review` 中选择已有短剧或新建短剧，再确认集数。
-6. 在 `/shows` 查看最近更新；点击短剧可查看每一集、全部来源账号和数据库缺集提示。
+6. 在 `/shows` 管理短剧库：查看实际收录进度，按作者或剧名筛选，永久忽略误识别 Show，并在详情页维护预计总集数或移除错误归档。
 
 ## 配置
 
@@ -128,17 +128,17 @@ Episode 1 --- * Notification
 - `Account` 是抖音作者，保存启用状态、单账号检查间隔、最近检查、错误和退避状态。
 - `Account` 还保存历史补全状态、opaque cursor、已访问 cursor、扫描页数、扫描数量、新增数量及失败恢复时间点。服务重启会从已保存 cursor 自动恢复未完成任务。
 - `Video` 以 `aweme_id` 唯一保存原始作品和解析结果。
-- `Show` 表示一部短剧，`normalized_title` 和 aliases 用于匹配。
+- `Show` 表示一部短剧，`normalized_title` 和 aliases 用于匹配；可保存人工确认的预计总集数和可恢复的永久忽略状态。
 - `Episode` 是某一部剧的某一集；`EpisodeSource` 记录不同账号的同集来源。
 - `Notification` 记录每次渠道发送的结果。
 
-已有 `data/monitor_users.json` 会在新 SQLite 数据库首次创建时自动迁移账号及已下载 aweme ID 基线，避免升级后重复解析和通知旧作品。历史补全状态通过 SQLite v3 增量字段迁移，不需要删除数据库；旧账号默认处于 `idle`，由用户主动开始补全。
+已有 `data/monitor_users.json` 会在新 SQLite 数据库首次创建时自动迁移账号及已下载 aweme ID 基线，避免升级后重复解析和通知旧作品。SQLite 会原地增量迁移历史补全、Episode 0、LLM 解析证据和短剧库管理字段，不需要删除数据库。
 
 ## Provider 和解析器
 
 `BuiltinDouyinProvider` 包装现有进程内 crawler。现有 `get_latest_videos()` 仍负责日常最新一页；新增 `get_video_page()` 只为用户主动历史补全提供 cursor 分页。以后可新增 `PlaywrightDouyinProvider`、`ApiDouyinProvider` 或第三方 Provider，而不用更改短剧业务服务。
 
-`EpisodeParser` 当前只启用 `RegexParser`，并预留 `EpisodeParserBackend` 接口给未来的 LLM、OCR 或 ASR 后端。当前不会下载视频、抽帧、OCR、Whisper 或绕过验证码。
+`EpisodeParser` 先运行 `RegexParser`；仅在规则结果需要审核或置信度不足等受控条件下，才调用 OpenAI-compatible LLM fallback。高置信度且能匹配已有 Show 的完整集数建议可自动归档，其余进入人工审核。当前不会下载视频、抽帧、OCR、Whisper 或绕过验证码。
 
 ## 测试
 

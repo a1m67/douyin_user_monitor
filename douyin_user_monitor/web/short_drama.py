@@ -50,6 +50,11 @@ class UpdateShowPayload(BaseModel):
     title: str | None = Field(default=None, min_length=1)
     aliases: list[str] | None = None
     status: str | None = None
+    expected_episode_count: int | None = Field(default=None, ge=1, le=100000)
+
+
+class IgnoreShowPayload(BaseModel):
+    reason: str | None = Field(default=None, max_length=500)
 
 
 class MergeShowPayload(BaseModel):
@@ -141,8 +146,26 @@ def create_short_drama_router(
     api = APIRouter(prefix="/api/short-drama", tags=["Short drama"])
 
     @api.get("/shows")
-    async def list_shows(limit: int = Query(default=100, ge=1, le=500)) -> dict[str, Any]:
-        return {"shows": repository.list_show_summaries(limit=limit)}
+    async def list_shows(
+        account_id: str | None = None,
+        include_ignored: bool = False,
+        ignored: str | None = Query(default=None, pattern="^(normal|ignored|all)$"),
+        include_empty: bool = False,
+        q: str | None = Query(default=None, max_length=120),
+        sort: str = Query(default="recent", pattern="^(recent|title|episode_count|latest_episode)$"),
+        limit: int = Query(default=100, ge=1, le=500),
+    ) -> dict[str, Any]:
+        ignored_filter = ignored or ("all" if include_ignored else "normal")
+        return {
+            "shows": repository.list_show_summaries(
+                account_id=account_id,
+                ignored=ignored_filter,
+                include_empty=include_empty,
+                q=q,
+                sort=sort,
+                limit=limit,
+            )
+        }
 
     @api.get("/shows/{show_id}")
     async def get_show(show_id: int) -> dict[str, Any]:
@@ -166,6 +189,42 @@ def create_short_drama_router(
         except (ValueError, KeyError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"show": show}
+
+    @api.post("/shows/{show_id}/ignore")
+    async def ignore_show(
+        show_id: int, payload: IgnoreShowPayload | None = None
+    ) -> dict[str, Any]:
+        try:
+            show = pipeline.ignore_show(show_id, reason=payload.reason if payload else None)
+        except (ValueError, KeyError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"show": show}
+
+    @api.post("/shows/{show_id}/restore")
+    async def restore_show(show_id: int) -> dict[str, Any]:
+        try:
+            show = pipeline.restore_show(show_id)
+        except (ValueError, KeyError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"show": show}
+
+    @api.delete("/shows/{show_id}/episodes/{episode_id}")
+    async def remove_episode(show_id: int, episode_id: int) -> dict[str, Any]:
+        try:
+            return {"result": pipeline.remove_episode(show_id, episode_id)}
+        except (ValueError, KeyError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @api.delete("/shows/{show_id}/episodes/{episode_id}/sources/{source_id}")
+    async def remove_episode_source(
+        show_id: int, episode_id: int, source_id: int
+    ) -> dict[str, Any]:
+        try:
+            return {
+                "result": pipeline.remove_episode_source(show_id, episode_id, source_id)
+            }
+        except (ValueError, KeyError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @api.post("/repair-consistency")
     async def repair_consistency() -> dict[str, Any]:

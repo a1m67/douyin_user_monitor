@@ -323,6 +323,53 @@ class ShortDramaPipelineTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(review_video["aweme_id"], "3002")
         self.assertTrue(review_video["needs_review"])
 
+    async def test_ignored_show_alias_blocks_new_episodes_until_restored(self):
+        dispatcher = RecordingDispatcher()
+        self.pipeline = ShortDramaPipeline(
+            repository=self.repository,
+            provider=self.provider,
+            dispatcher=dispatcher,
+            notify_on_initial_sync=False,
+        )
+        ignored_show = self.repository.create_show(
+            title="活动名称",
+            normalized_title="活动名称",
+            aliases=["废片别名"],
+        )
+        self.repository.ignore_show(ignored_show["id"], reason="不是短剧")
+        self.provider.videos_by_sec_uid["sec-one"] = [
+            make_video("ignored-alias-2", "《废片别名》第2集", 2)
+        ]
+        account, _ = await self.pipeline.add_account(self.account_one_provider.homepage_url)
+
+        initial = await self.pipeline.sync_account(account["id"])
+        ignored_video = self.repository.get_video_by_aweme_id("ignored-alias-2")
+
+        self.assertEqual(initial.ignored_videos, 1)
+        self.assertEqual(initial.new_episode_updates, ())
+        self.assertEqual(dispatcher.updates, [])
+        self.assertEqual(ignored_video["classification_status"], "ignored")
+        self.assertEqual(ignored_video["parser_reason"], "ignored_show")
+        self.assertEqual(self.repository.get_show_episodes(ignored_show["id"]), [])
+
+        self.pipeline.restore_show(ignored_show["id"])
+        self.provider.videos_by_sec_uid["sec-one"] = [
+            make_video("ignored-alias-3", "《废片别名》第3集", 3),
+            *self.provider.videos_by_sec_uid["sec-one"],
+        ]
+        resumed = await self.pipeline.sync_account(account["id"])
+
+        self.assertEqual(resumed.new_videos, 1)
+        self.assertEqual(len(resumed.new_episode_updates), 1)
+        self.assertEqual(
+            [episode["episode_number"] for episode in self.repository.get_show_episodes(ignored_show["id"])],
+            [3],
+        )
+        self.assertEqual(
+            self.repository.get_video_by_aweme_id("ignored-alias-2")["parser_reason"],
+            "ignored_show",
+        )
+
     async def test_manual_ignore_marks_review_video_as_ignored(self):
         account, _ = await self.pipeline.add_account(self.account_one_provider.homepage_url)
         self.provider.videos_by_sec_uid["sec-one"] = [make_video("4002", "第十二集", 11)]

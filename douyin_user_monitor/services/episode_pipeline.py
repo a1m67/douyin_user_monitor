@@ -318,13 +318,15 @@ class ShortDramaPipeline:
             normalized = normalize_title(title)
             if not normalized:
                 raise ValueError("新短剧名称无效")
-            show = self._repository.get_show_by_normalized_title(normalized)
+            show = self._repository.get_show_by_title_or_alias(title)
             if show is None:
                 show = self._repository.create_show(
                     title=title,
                     normalized_title=normalized,
                     aliases=[],
                 )
+        if show["is_ignored"]:
+            raise ValueError("短剧已永久忽略，请先恢复追踪")
 
         write = self._repository.record_episode_source(
             show_id=int(show["id"]),
@@ -369,6 +371,20 @@ class ShortDramaPipeline:
 
     def ignore_reviews(self, video_ids: list[int]) -> int:
         return self._repository.ignore_review_videos(video_ids)
+
+    def ignore_show(self, show_id: int, *, reason: str | None = None) -> dict[str, Any]:
+        return self._repository.ignore_show(show_id, reason=reason)
+
+    def restore_show(self, show_id: int) -> dict[str, Any]:
+        return self._repository.restore_show(show_id)
+
+    def remove_episode(self, show_id: int, episode_id: int) -> dict[str, Any]:
+        return self._repository.remove_episode(show_id, episode_id)
+
+    def remove_episode_source(
+        self, show_id: int, episode_id: int, source_id: int
+    ) -> dict[str, Any]:
+        return self._repository.remove_episode_source(show_id, episode_id, source_id)
 
     def reparse_video(self, video_id: int) -> ReparseVideoResult:
         """Reparse one existing ignored/review video without notification."""
@@ -541,6 +557,19 @@ class ShortDramaPipeline:
             text_sources=text_metadata.text_sources,
         )
         candidate_title = parsed.show_title_candidate or parsed.show_title
+        ignored_show = (
+            self._repository.get_show_by_title_or_alias(candidate_title)
+            if candidate_title
+            else None
+        )
+        if ignored_show is not None and ignored_show["is_ignored"]:
+            self._store_ignored_show_video(
+                video=video,
+                parsed=parsed,
+                ignored_show=ignored_show,
+                candidate_title=candidate_title,
+            )
+            return _VideoProcessingOutcome(status=IGNORED, update=None)
         if parsed.status == IGNORED:
             logger.info(
                 "[parse] ignored aweme_id=%s reason=%s method=%s",
@@ -609,13 +638,41 @@ class ShortDramaPipeline:
             parsed.confidence,
         )
         show = self._find_or_create_show(parsed.show_title, parsed.matched_show_id)
-        write = self._repository.record_episode_source(
-            show_id=int(show["id"]),
-            episode_number=parsed.episode_number,
-            video_id=int(video["id"]),
-            account_id=str(account["id"]),
-            published_at=video.get("publish_time"),
-        )
+        if show["is_ignored"]:
+            self._store_ignored_show_video(
+                video=video,
+                parsed=parsed,
+                ignored_show=show,
+                candidate_title=candidate_title,
+            )
+            return _VideoProcessingOutcome(status=IGNORED, update=None)
+        try:
+            write = self._repository.record_episode_source(
+                show_id=int(show["id"]),
+                episode_number=parsed.episode_number,
+                video_id=int(video["id"]),
+                account_id=str(account["id"]),
+                published_at=video.get("publish_time"),
+            )
+        except ValueError as exc:
+            # A user may ignore the Show between matching and the write
+            # transaction. Treat that race as the requested ignored state.
+            refreshed_show = self._repository.get_show(int(show["id"]))
+            if refreshed_show is None or not refreshed_show["is_ignored"]:
+                raise
+            logger.info(
+                "[parse] show ignored during archive aweme_id=%s show_id=%s error=%s",
+                video["aweme_id"],
+                show["id"],
+                exc,
+            )
+            self._store_ignored_show_video(
+                video=video,
+                parsed=parsed,
+                ignored_show=refreshed_show,
+                candidate_title=candidate_title,
+            )
+            return _VideoProcessingOutcome(status=IGNORED, update=None)
         processed_video = self._repository.update_video_processing(
             int(video["id"]),
             is_processed=True,
@@ -643,13 +700,43 @@ class ShortDramaPipeline:
             if existing is not None:
                 return existing
         normalized = normalize_title(title)
-        existing = self._repository.get_show_by_normalized_title(normalized)
+        existing = self._repository.get_show_by_title_or_alias(title)
         if existing is not None:
             logger.info("[show] matched show_id=%s", existing["id"])
             return existing
         created = self._repository.create_show(title=title, normalized_title=normalized, aliases=[])
         logger.info("[show] created show_id=%s", created["id"])
         return created
+
+    def _store_ignored_show_video(
+        self,
+        *,
+        video: dict[str, Any],
+        parsed: Any,
+        ignored_show: dict[str, Any],
+        candidate_title: str | None,
+    ) -> None:
+        logger.info(
+            "[parse] ignored_show aweme_id=%s show_id=%s",
+            video["aweme_id"],
+            ignored_show["id"],
+        )
+        self._repository.update_video_processing(
+            int(video["id"]),
+            is_processed=True,
+            needs_review=False,
+            parser_confidence=parsed.confidence,
+            parsed_show_title=str(ignored_show["title"]),
+            parsed_episode_number=parsed.episode_number,
+            parser_method=parsed.method,
+            classification_status=IGNORED,
+            parser_reason="ignored_show",
+            show_title_candidate=candidate_title or str(ignored_show["title"]),
+            episode_candidate=parsed.episode_candidate,
+            content_type=parsed.content_type,
+            parser_evidence=parsed.evidence,
+            llm_raw_result=parsed.llm_raw_result,
+        )
 
     def _require_account(self, account_id: str) -> dict[str, Any]:
         account = self._repository.get_account(account_id)
