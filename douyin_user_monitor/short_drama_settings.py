@@ -41,6 +41,7 @@ class ShortDramaSettings:
     crawler_circuit_failure_threshold: int
     crawler_circuit_open_minutes: int
     legacy_monitor_enabled: bool
+    scan_run_retention_days: int
 
 
 def load_short_drama_settings(
@@ -109,6 +110,7 @@ def load_short_drama_settings(
             values, "CRAWLER_CIRCUIT_OPEN_MINUTES", 20
         ),
         legacy_monitor_enabled=_boolean(values, "LEGACY_MONITOR_ENABLED", False),
+        scan_run_retention_days=_positive_int(values, "SCAN_RUN_RETENTION_DAYS", 30),
     )
     if settings.llm_enabled:
         missing = [

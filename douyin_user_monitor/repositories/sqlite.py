@@ -14,7 +14,7 @@ from typing import Any, Iterator, Mapping, Sequence
 from douyin_user_monitor.parsers.regex import normalize_title
 
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 SHOW_STATUSES = frozenset({"updating", "completed", "paused"})
 VIDEO_CLASSIFICATIONS = frozenset({"matched", "ignored", "review"})
 VIDEO_CONTENT_TYPES = frozenset({"episode", "trailer", "show_content", "unknown", "non_drama"})
@@ -206,6 +206,19 @@ class ShortDramaRepository:
                 sent_at TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS scan_runs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+                started_at TEXT NOT NULL, finished_at TEXT NOT NULL,
+                duration_ms INTEGER NOT NULL DEFAULT 0, trigger_type TEXT NOT NULL,
+                success INTEGER NOT NULL, error_type TEXT, error_message TEXT,
+                fetched_videos INTEGER NOT NULL DEFAULT 0, new_videos INTEGER NOT NULL DEFAULT 0,
+                duplicate_videos INTEGER NOT NULL DEFAULT 0, matched_videos INTEGER NOT NULL DEFAULT 0,
+                review_videos INTEGER NOT NULL DEFAULT 0, ignored_videos INTEGER NOT NULL DEFAULT 0,
+                new_episodes INTEGER NOT NULL DEFAULT 0, llm_calls INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL
+            );
+
             CREATE INDEX IF NOT EXISTS idx_accounts_due
                 ON accounts(enabled, next_check_at);
             CREATE INDEX IF NOT EXISTS idx_videos_account_created
@@ -216,6 +229,9 @@ class ShortDramaRepository:
                 ON episodes(show_id, episode_number DESC);
             CREATE INDEX IF NOT EXISTS idx_notifications_episode
                 ON notifications(episode_id, sent_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_scan_runs_account_started
+                ON scan_runs(account_id, started_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_scan_runs_started ON scan_runs(started_at DESC);
             """
         )
 
@@ -721,7 +737,38 @@ class ShortDramaRepository:
                 """,
                 (safe_limit,),
             ).fetchall()
-            return [_account_row(row) for row in rows]
+            results = [_account_row(row) for row in rows]
+            for result in results:
+                result["recent_scan_runs"] = self._list_scan_runs(connection, str(result["id"]), 20)
+            return results
+
+    def record_scan_run(self, account_id: str, **values: Any) -> dict[str, Any]:
+        now = utc_now()
+        fields = ("started_at", "finished_at", "duration_ms", "trigger_type", "success", "error_type", "error_message", "fetched_videos", "new_videos", "duplicate_videos", "matched_videos", "review_videos", "ignored_videos", "new_episodes", "llm_calls")
+        data: dict[str, Any] = {key: 0 for key in fields}
+        data.update(started_at=now, finished_at=now, trigger_type="scheduler", success=0)
+        data.update(values)
+        data["error_message"] = str(data.get("error_message") or "")[:2000] or None
+        with self._transaction() as connection:
+            cursor = connection.execute(
+                f"INSERT INTO scan_runs(account_id,{','.join(fields)},created_at) VALUES ({','.join('?' for _ in range(len(fields)+2))})",
+                (account_id, *(data[key] for key in fields), now),
+            )
+            return dict(connection.execute("SELECT * FROM scan_runs WHERE id=?", (cursor.lastrowid,)).fetchone())
+
+    def _list_scan_runs(self, connection: sqlite3.Connection, account_id: str, limit: int) -> list[dict[str, Any]]:
+        rows = connection.execute("SELECT * FROM scan_runs WHERE account_id=? ORDER BY started_at DESC,id DESC LIMIT ?", (account_id, max(1, min(int(limit), 100)))).fetchall()
+        return [dict(row) for row in rows]
+
+    def list_scan_runs(self, account_id: str, *, limit: int = 20) -> list[dict[str, Any]]:
+        with self._transaction() as connection:
+            return self._list_scan_runs(connection, account_id, limit)
+
+    def prune_scan_runs(self, *, retention_days: int) -> int:
+        cutoff = datetime.fromtimestamp(datetime.now(timezone.utc).timestamp() - max(1, retention_days) * 86400, timezone.utc).isoformat(timespec="seconds")
+        with self._transaction() as connection:
+            cursor = connection.execute("DELETE FROM scan_runs WHERE created_at < ?", (cutoff,))
+            return int(cursor.rowcount)
 
     def delete_account(self, account_id: str) -> dict[str, Any]:
         with self._transaction() as connection:
@@ -2069,10 +2116,16 @@ class ShortDramaRepository:
                 LIMIT 10
                 """
             ).fetchall()
+            since = datetime.fromtimestamp(datetime.now(timezone.utc).timestamp() - 86400, timezone.utc).isoformat(timespec="seconds")
+            scan = connection.execute("""SELECT COUNT(*) runs, COALESCE(SUM(success),0) successes,
+                COALESCE(SUM(CASE WHEN success=0 THEN 1 ELSE 0 END),0) failures,
+                COALESCE(SUM(new_videos),0) new_videos, COALESCE(SUM(new_episodes),0) new_episodes,
+                COALESCE(SUM(review_videos),0) review_videos FROM scan_runs WHERE started_at >= ?""", (since,)).fetchone()
             return {
                 **counts,
                 "last_check_at": last_checked,
                 "recent_errors": [_account_row(row) for row in errors],
+                "scan_runs_24h": dict(scan),
             }
 
     def _require_account(self, connection: sqlite3.Connection, account_id: str) -> dict[str, Any]:

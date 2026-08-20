@@ -9,7 +9,7 @@ short-drama episode monitor. Phases are implemented and committed in order.
 - [x] Phase 2: VPS and web security defaults
 - [x] Phase 3: Global Douyin crawler circuit breaker
 - [x] Phase 4: Disable the legacy monitor by default
-- [ ] Phase 5: Scan-run history and observability
+- [x] Phase 5: Scan-run history and observability
 - [ ] Phase 6: SQLite backup, doctor, and GitHub CI
 - [ ] Phase 7: Video pagination and filters
 - [ ] Phase 8: Learn show aliases from manual review
@@ -53,12 +53,17 @@ commit SHA, and anything not verified in a real deployment.
 - Main design: the SQLite short-drama runtime remains the sole default scheduler; the legacy JSON monitor starts and shuts down only when `LEGACY_MONITOR_ENABLED=true`, while its compatibility routes remain registered.
 - Schema changes: none.
 - Tests: focused lifecycle/settings suite and full suite.
-- Commit: pending
+- Commit: `f9a1fea`
 - Not yet verified: intentional dual-runtime migration mode on a production VPS.
 
 ### Phase 5
 
-- Status: pending
+- Status: complete
+- Main design: scheduled/manual checks persist non-blocking structured runs; account responses include 20 recent runs, status aggregates 24 hours, and startup retention bounds growth.
+- Schema changes: schema v10 adds `scan_runs` and account/time indexes.
+- Tests: focused repository/scheduler/settings tests and full suite.
+- Commit: pending
+- Not yet verified: long-term scan volume and production UI readability.
 
 ### Phase 6
 

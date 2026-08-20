@@ -5,6 +5,7 @@ import asyncio
 import logging
 import random
 import re
+import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Awaitable, Callable
@@ -99,13 +100,13 @@ class AccountScheduler:
 
             async def check(account_id: str) -> AccountCheckResult:
                 async with semaphore:
-                    return await self._check_account(account_id)
+                    return await self._check_account(account_id, trigger_type="scheduler")
 
             return tuple(await asyncio.gather(*(check(str(account["id"])) for account in accounts)))
 
     async def run_account_once(self, account_id: str, *, force: bool = False) -> AccountCheckResult:
         async with self._run_lock:
-            return await self._check_account(account_id, force=force)
+            return await self._check_account(account_id, force=force, trigger_type="manual")
 
     def crawler_status(self) -> dict[str, object]:
         if self._circuit_breaker is None:
@@ -124,11 +125,12 @@ class AccountScheduler:
                 pass
             await asyncio.sleep(self._config.poll_seconds)
 
-    async def _check_account(self, account_id: str, *, force: bool = False) -> AccountCheckResult:
+    async def _check_account(self, account_id: str, *, force: bool = False, trigger_type: str = "scheduler") -> AccountCheckResult:
         account = self._repository.get_account(account_id)
         if account is None:
             raise KeyError("账号不存在")
         now = _as_utc(self._now())
+        started_at, started_clock = now.isoformat(timespec="seconds"), time.monotonic()
         if self._circuit_breaker is not None:
             decision = self._circuit_breaker.before_request(force=force)
             if not decision.allowed:
@@ -163,6 +165,7 @@ class AccountScheduler:
                 _safe_error(exc),
                 backoff_minutes,
             )
+            self._record_scan(account_id, started_at, started_clock, trigger_type, False, error_type=error_type, error_message=_safe_error(exc))
             return AccountCheckResult(
                 account_id=account_id,
                 success=False,
@@ -183,6 +186,8 @@ class AccountScheduler:
             account_id,
             next_check_at=next_check_at.isoformat(timespec="seconds"),
         )
+        actual_trigger = "initial_sync" if getattr(sync_result, "initial_sync", False) else trigger_type
+        self._record_scan(account_id, started_at, started_clock, actual_trigger, True, result=sync_result)
         logger.info("[account] complete account_id=%s next_check_at=%s", account_id, stored["next_check_at"])
         return AccountCheckResult(
             account_id=account_id,
@@ -190,6 +195,20 @@ class AccountScheduler:
             next_check_at=str(stored["next_check_at"]),
             sync_result=sync_result,
         )
+
+    def _record_scan(self, account_id: str, started_at: str, started_clock: float, trigger_type: str, success: bool, *, result: SyncResult | None = None, error_type: str | None = None, error_message: str | None = None) -> None:
+        try:
+            self._repository.record_scan_run(
+                account_id, started_at=started_at, finished_at=_as_utc(self._now()).isoformat(timespec="seconds"),
+                duration_ms=max(0, int((time.monotonic() - started_clock) * 1000)), trigger_type=trigger_type,
+                success=int(success), error_type=error_type, error_message=error_message,
+                fetched_videos=getattr(result, "fetched_videos", 0), new_videos=getattr(result, "new_videos", 0),
+                duplicate_videos=getattr(result, "duplicate_videos", 0), matched_videos=getattr(result, "matched_videos", 0),
+                review_videos=getattr(result, "review_videos", 0), ignored_videos=getattr(result, "ignored_videos", 0),
+                new_episodes=len(getattr(result, "new_episode_updates", ())), llm_calls=getattr(result, "llm_calls", 0),
+            )
+        except Exception:
+            logger.exception("scan run persistence failed account_id=%s", account_id)
 
 
 def calculate_next_check_at(

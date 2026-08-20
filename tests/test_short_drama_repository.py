@@ -692,6 +692,15 @@ class ShortDramaRepositoryTests(unittest.TestCase):
         self.assertEqual(resumed["history_sync_status"], "pending")
         self.assertEqual(resumed["history_sync"]["scanned_items"], 50)
 
+    def test_scan_runs_are_listed_summarized_and_pruned(self):
+        account = self.create_account("scan-run")
+        self.repository.record_scan_run(account["id"], success=1, trigger_type="manual", new_videos=2, new_episodes=1)
+        with self.repository._transaction() as connection:
+            connection.execute("UPDATE scan_runs SET created_at='2020-01-01', started_at='2020-01-01'")
+        self.assertEqual(len(self.repository.list_scan_runs(account["id"])), 1)
+        self.assertEqual(self.repository.prune_scan_runs(retention_days=30), 1)
+        self.assertEqual(self.repository.system_status()["scan_runs_24h"]["runs"], 0)
+
     def test_show_detail_reports_database_episode_gaps(self):
         account = self.create_account("gap-sec")
         show = self.repository.create_show(title="缺集短剧", normalized_title="缺集短剧")

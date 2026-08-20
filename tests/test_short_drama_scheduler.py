@@ -104,6 +104,14 @@ class AccountSchedulerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(failed_account["consecutive_failures"], 1)
         self.assertEqual(failed_account["next_check_at"], "2026-08-15T12:10:00+00:00")
         self.assertEqual(calculate_backoff_minutes(interval_minutes=10, consecutive_failures=1, max_backoff_minutes=60), 20)
+        self.assertEqual(self.repository.list_scan_runs(failing["id"])[0]["success"], 0)
+        self.assertEqual(self.repository.list_scan_runs(healthy["id"])[0]["trigger_type"], "scheduler")
+
+    async def test_manual_run_is_recorded_with_manual_trigger(self):
+        account = self.add_account("manual")
+        scheduler = AccountScheduler(repository=self.repository, pipeline=StubPipeline(), config=SchedulerConfig(), now=lambda: self.now)
+        await scheduler.run_account_once(account["id"])
+        self.assertEqual(self.repository.list_scan_runs(account["id"])[0]["trigger_type"], "manual")
 
     async def test_open_circuit_skips_pipeline_until_half_open_probe_succeeds(self):
         accounts = [self.add_account(name) for name in ("one", "two", "three", "four")]

@@ -110,6 +110,7 @@ PowerShell 下可将 `.venv/Scripts/python` 替换为 `.venv\Scripts\python.exe`
 | `DATABASE_URL` | `sqlite:///data/app.db` | 当前仅支持 SQLite URL。 |
 | `ADMIN_API_TOKEN` | 空 | 可选；保护修改型短剧 API。空值保持现有兼容行为。 |
 | `LEGACY_MONITOR_ENABLED` | `false` | 仅迁移兼容时启动旧 JSON Monitor；新 SQLite 短剧调度器始终启用。 |
+| `SCAN_RUN_RETENTION_DAYS` | `30` | 巡检历史保留天数；启动时清理过期记录。 |
 | `CHECK_INTERVAL_MINUTES` | `10` | 新账号默认检查间隔，可按账号覆盖。 |
 | `MAX_CONCURRENT_CHECKS` | `3` | 同时请求的账号上限。 |
 | `MAX_BACKOFF_MINUTES` | `60` | 连续失败时的退避上限。 |
@@ -149,6 +150,7 @@ Episode 1 --- * Notification
 - `Show` 表示一部短剧，`normalized_title` 和 aliases 用于匹配；可保存人工确认的预计总集数和可恢复的永久忽略状态。
 - `Episode` 以 `(show_id, season_number, episode_number)` 唯一表示某一季某一集；`EpisodeSource` 记录不同账号的同集来源。旧数据升级时自动归入第一季。
 - `Notification` 记录每次渠道发送的结果。
+- `ScanRun` 记录 scheduler、manual、initial_sync 和 history 巡检结果，账号 API 返回最近 20 条，状态 API 汇总最近 24 小时。
 
 已有 `data/monitor_users.json` 会在新 SQLite 数据库首次创建时自动迁移账号及已下载 aweme ID 基线，避免升级后重复解析和通知旧作品。SQLite 会原地增量迁移历史补全、Episode 0、多季、LLM 解析证据和短剧库管理字段，不需要删除数据库。
 

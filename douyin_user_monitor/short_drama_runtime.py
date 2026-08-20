@@ -36,6 +36,7 @@ class ShortDramaRuntime:
     history_backfill_worker: HistoryBackfillWorker
 
     async def start(self) -> None:
+        self.repository.prune_scan_runs(retention_days=self.settings.scan_run_retention_days)
         await self.history_backfill_worker.start()
         await self.scheduler.start()
 

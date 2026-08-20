@@ -63,6 +63,7 @@ class ShortDramaSettingsTests(unittest.TestCase):
         self.assertEqual(settings.crawler_circuit_failure_threshold, 3)
         self.assertEqual(settings.crawler_circuit_open_minutes, 20)
         self.assertFalse(settings.legacy_monitor_enabled)
+        self.assertEqual(settings.scan_run_retention_days, 30)
 
     def test_security_defaults_are_disabled_and_compose_binds_localhost(self):
         settings = load_short_drama_settings(project_root=self.root, environ={})

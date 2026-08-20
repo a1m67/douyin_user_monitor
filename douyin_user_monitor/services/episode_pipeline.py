@@ -42,6 +42,14 @@ class SyncResult:
     ignored_videos: int
     new_episode_updates: tuple[EpisodeUpdate, ...]
 
+    @property
+    def matched_videos(self) -> int:
+        return max(0, self.new_videos - self.review_videos - self.ignored_videos)
+
+    @property
+    def llm_calls(self) -> int:
+        return 0
+
 
 @dataclass(frozen=True)
 class HistoryBackfillResult:
