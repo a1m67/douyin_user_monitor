@@ -8,7 +8,7 @@ short-drama episode monitor. Phases are implemented and committed in order.
 - [x] Phase 1: Season / multi-season episode support
 - [x] Phase 2: VPS and web security defaults
 - [x] Phase 3: Global Douyin crawler circuit breaker
-- [ ] Phase 4: Disable the legacy monitor by default
+- [x] Phase 4: Disable the legacy monitor by default
 - [ ] Phase 5: Scan-run history and observability
 - [ ] Phase 6: SQLite backup, doctor, and GitHub CI
 - [ ] Phase 7: Video pagination and filters
@@ -44,12 +44,17 @@ commit SHA, and anything not verified in a real deployment.
 - Main design: in-memory closed/open/half-open breaker with centralized error classification, distinct-account thresholds, a single recovery probe, scheduler short-circuiting, manual `force=true`, and structured status output.
 - Schema changes: none.
 - Tests: focused circuit/scheduler/settings/web suite - 23 passed; full suite - 161 passed.
-- Commit: pending
+- Commit: `1e65f89`
 - Not yet verified: real Douyin 403/429/login failure signatures and recovery timing on the VPS.
 
 ### Phase 4
 
-- Status: pending
+- Status: complete
+- Main design: the SQLite short-drama runtime remains the sole default scheduler; the legacy JSON monitor starts and shuts down only when `LEGACY_MONITOR_ENABLED=true`, while its compatibility routes remain registered.
+- Schema changes: none.
+- Tests: focused lifecycle/settings suite and full suite.
+- Commit: pending
+- Not yet verified: intentional dual-runtime migration mode on a production VPS.
 
 ### Phase 5
 

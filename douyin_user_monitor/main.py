@@ -31,11 +31,13 @@ async def index() -> RedirectResponse:
 
 @app.on_event("startup")
 async def startup_monitor() -> None:
-    await monitor_service.auto_resume()
+    if SHORT_DRAMA_RUNTIME.settings.legacy_monitor_enabled:
+        await monitor_service.auto_resume()
     await SHORT_DRAMA_RUNTIME.start()
 
 
 @app.on_event("shutdown")
 async def shutdown_monitor() -> None:
     await SHORT_DRAMA_RUNTIME.shutdown()
-    await monitor_service.shutdown()
+    if SHORT_DRAMA_RUNTIME.settings.legacy_monitor_enabled:
+        await monitor_service.shutdown()

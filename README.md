@@ -109,6 +109,7 @@ PowerShell 下可将 `.venv/Scripts/python` 替换为 `.venv\Scripts\python.exe`
 | --- | --- | --- |
 | `DATABASE_URL` | `sqlite:///data/app.db` | 当前仅支持 SQLite URL。 |
 | `ADMIN_API_TOKEN` | 空 | 可选；保护修改型短剧 API。空值保持现有兼容行为。 |
+| `LEGACY_MONITOR_ENABLED` | `false` | 仅迁移兼容时启动旧 JSON Monitor；新 SQLite 短剧调度器始终启用。 |
 | `CHECK_INTERVAL_MINUTES` | `10` | 新账号默认检查间隔，可按账号覆盖。 |
 | `MAX_CONCURRENT_CHECKS` | `3` | 同时请求的账号上限。 |
 | `MAX_BACKOFF_MINUTES` | `60` | 连续失败时的退避上限。 |
@@ -150,6 +151,8 @@ Episode 1 --- * Notification
 - `Notification` 记录每次渠道发送的结果。
 
 已有 `data/monitor_users.json` 会在新 SQLite 数据库首次创建时自动迁移账号及已下载 aweme ID 基线，避免升级后重复解析和通知旧作品。SQLite 会原地增量迁移历史补全、Episode 0、多季、LLM 解析证据和短剧库管理字段，不需要删除数据库。
+
+旧 `/api/monitor` 路由暂时保留用于读取和迁移兼容，但旧 Monitor 的后台循环默认禁用。只有显式设置 `LEGACY_MONITOR_ENABLED=true` 时才会恢复旧调度；生产追更默认只由新 SQLite 短剧 scheduler 执行。
 
 ## Provider 和解析器
 
