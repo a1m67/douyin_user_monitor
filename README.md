@@ -111,6 +111,7 @@ PowerShell 下可将 `.venv/Scripts/python` 替换为 `.venv\Scripts\python.exe`
 | `ADMIN_API_TOKEN` | 空 | 可选；保护修改型短剧 API。空值保持现有兼容行为。 |
 | `LEGACY_MONITOR_ENABLED` | `false` | 仅迁移兼容时启动旧 JSON Monitor；新 SQLite 短剧调度器始终启用。 |
 | `SCAN_RUN_RETENTION_DAYS` | `30` | 巡检历史保留天数；启动时清理过期记录。 |
+| `BACKUP_RETENTION_COUNT` | `14` | `data/backups/app-*.db` 在线备份保留数量。 |
 | `CHECK_INTERVAL_MINUTES` | `10` | 新账号默认检查间隔，可按账号覆盖。 |
 | `MAX_CONCURRENT_CHECKS` | `3` | 同时请求的账号上限。 |
 | `MAX_BACKOFF_MINUTES` | `60` | 连续失败时的退避上限。 |
@@ -163,6 +164,14 @@ Episode 1 --- * Notification
 `EpisodeParser` 先运行 `RegexParser`；支持“第二季 / 第2季 / S2 / Season 2”以及 `S2E12` 等组合格式。仅在规则结果需要审核或置信度不足等受控条件下，才调用 OpenAI-compatible LLM fallback。高置信度且能匹配已有 Show 的完整集数建议可自动归档，其余进入人工审核。当前不会下载视频、抽帧、OCR、Whisper 或绕过验证码。
 
 ## 测试
+
+生产维护命令使用 SQLite 在线备份 API，`doctor` 默认只读；schema 升级前也会自动在数据库同级 `backups/` 创建快照：
+
+```bash
+python -m douyin_user_monitor backup
+python -m douyin_user_monitor doctor
+python -m douyin_user_monitor doctor --repair
+```
 
 ```bash
 .venv/Scripts/python -m unittest discover -s tests -v

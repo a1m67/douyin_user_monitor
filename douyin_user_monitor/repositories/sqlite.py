@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, Iterator, Mapping, Sequence
 
 from douyin_user_monitor.parsers.regex import normalize_title
+from douyin_user_monitor.maintenance import backup_database
 
 
 SCHEMA_VERSION = 10
@@ -54,6 +55,17 @@ class ShortDramaRepository:
         self.initialize()
 
     def initialize(self) -> None:
+        if self.database_path.is_file() and self.database_path.stat().st_size:
+            probe = sqlite3.connect(self.database_path)
+            try:
+                row = probe.execute("SELECT value FROM app_meta WHERE key='schema_version'").fetchone()
+                existing_version = _schema_version(str(row[0]) if row else None)
+            except sqlite3.Error:
+                existing_version = 0
+            finally:
+                probe.close()
+            if 0 < existing_version < SCHEMA_VERSION:
+                backup_database(self.database_path)
         with self._transaction() as connection:
             self._create_schema(connection)
             previous_schema_version = _schema_version(self._get_meta(connection, "schema_version"))

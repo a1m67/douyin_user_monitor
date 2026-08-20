@@ -10,7 +10,7 @@ short-drama episode monitor. Phases are implemented and committed in order.
 - [x] Phase 3: Global Douyin crawler circuit breaker
 - [x] Phase 4: Disable the legacy monitor by default
 - [x] Phase 5: Scan-run history and observability
-- [ ] Phase 6: SQLite backup, doctor, and GitHub CI
+- [x] Phase 6: SQLite backup, doctor, and GitHub CI
 - [ ] Phase 7: Video pagination and filters
 - [ ] Phase 8: Learn show aliases from manual review
 - [ ] Phase 9: Cover OCR fallback framework
@@ -62,12 +62,17 @@ commit SHA, and anything not verified in a real deployment.
 - Main design: scheduled/manual checks persist non-blocking structured runs; account responses include 20 recent runs, status aggregates 24 hours, and startup retention bounds growth.
 - Schema changes: schema v10 adds `scan_runs` and account/time indexes.
 - Tests: focused repository/scheduler/settings tests and full suite.
-- Commit: pending
+- Commit: `c9549f3`
 - Not yet verified: long-term scan volume and production UI readability.
 
 ### Phase 6
 
-- Status: pending
+- Status: complete
+- Main design: SQLite online backups with strict filename retention, pre-migration snapshots, read-only doctor plus deterministic repair, and CI for unit, health smoke, and Docker build.
+- Schema changes: none beyond the preceding v10 migration.
+- Tests: focused maintenance/settings tests and full suite.
+- Commit: pending
+- Not yet verified: GitHub-hosted CI and backup retention on the production filesystem.
 
 ### Phase 7
 
