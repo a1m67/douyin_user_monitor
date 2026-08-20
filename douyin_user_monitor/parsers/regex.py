@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Iterable, Sequence
 
 from douyin_user_monitor.parsers.base import (
@@ -16,6 +16,10 @@ from douyin_user_monitor.parsers.base import (
 
 
 _CHINESE_NUMERALS = "零〇一二三四五六七八九十百千万两"
+_SEASON_RE = re.compile(
+    rf"(?:第\s*([{_CHINESE_NUMERALS}\d]+)\s*季|\bS\s*0*(\d+)(?=\D|$)|\bseason\s*0*(\d+)(?=\D|$))",
+    re.IGNORECASE,
+)
 _BRACKETED_TITLE_RE = re.compile(r"《\s*([^》]{2,80}?)\s*》")
 _HASHTAG_RE = re.compile(r"#([\w\u4e00-\u9fff]{2,80})")
 _BARE_NUMBER_RE = re.compile(r"(?<!\d)(\d{1,3})(?!\d)")
@@ -59,7 +63,7 @@ _TRAILING_TITLE_NOISE_RE = re.compile(
     re.IGNORECASE,
 )
 _SHORT_DRAMA_CONTEXT_RE = re.compile(
-    r"(?:短剧|剧场|追剧|全集|剧情|连续剧|漫剧|新剧|预告(?:片)?|先行)",
+    r"(?:短剧|剧场|追剧|全集|剧情|连续剧|漫剧|新剧|预告(?:片)?|先行|先导(?:片)?)",
     re.IGNORECASE,
 )
 _DELIMITED_TITLE_SPLIT_RE = re.compile(r"[丨|｜]")
@@ -121,6 +125,7 @@ class _ShowSignal:
 
 
 _EPISODE_PATTERNS = (
+    _EpisodePattern("season_episode", re.compile(r"\bS\s*0*\d+\s*E(?:P(?:ISODE)?)?\s*0*(\d+)\b", re.IGNORECASE), 110),
     _EpisodePattern(
         "chapter",
         re.compile(rf"第\s*([{_CHINESE_NUMERALS}\d]+)\s*集", re.IGNORECASE),
@@ -137,6 +142,7 @@ class RegexParser:
 
     def parse(self, request: EpisodeParseInput) -> EpisodeParseResult:
         sources = _text_sources(request)
+        season_number = _find_season_number(sources)
         explicit = _find_explicit_episode_match(sources)
         if explicit is not None:
             episode_number = _parse_episode_number(explicit.match.group(1))
@@ -152,12 +158,30 @@ class RegexParser:
                     episode_evidence=_invalid_episode_evidence(explicit),
                 )
             signal = _explicit_episode_signal(explicit, episode_number)
-            return _explicit_episode_result(request, sources, signal)
+            return replace(
+                _explicit_episode_result(request, sources, signal),
+                season_number=season_number,
+            )
 
         bare_episode = _find_bare_episode_candidate(sources)
         if bare_episode is not None:
-            return _bare_episode_result(request, sources, bare_episode)
-        return _without_episode_number(request, sources)
+            return replace(
+                _bare_episode_result(request, sources, bare_episode),
+                season_number=season_number,
+            )
+        return replace(_without_episode_number(request, sources), season_number=season_number)
+
+
+def _find_season_number(sources: Sequence[_TextSource]) -> int:
+    for source in sources:
+        match = _SEASON_RE.search(source.text)
+        if match is None:
+            continue
+        raw = next((value for value in match.groups() if value is not None), None)
+        parsed = chinese_number_to_int(raw or "")
+        if parsed is not None and parsed >= 1:
+            return parsed
+    return 1
 
 
 def normalize_title(value: str) -> str:
@@ -749,7 +773,7 @@ def _show_candidate_without_episode(
 
 def _content_type(sources: Sequence[_TextSource], hashtags: Iterable[str]) -> str:
     text = " ".join([*(source.text for source in sources), *(str(tag or "") for tag in hashtags)])
-    return "trailer" if re.search(r"(?:预告|先行)", text, re.IGNORECASE) else "show_content"
+    return "trailer" if re.search(r"(?:预告|先行|先导)", text, re.IGNORECASE) else "show_content"
 
 
 def _has_short_drama_context(request: EpisodeParseInput, sources: Sequence[_TextSource]) -> bool:

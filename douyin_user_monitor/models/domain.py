@@ -54,6 +54,7 @@ class Show:
     title: str
     normalized_title: str
     aliases: tuple[str, ...]
+    latest_season: int | None
     latest_episode: int | None
     latest_update_at: str | None
     status: str
@@ -65,6 +66,7 @@ class Show:
 class Episode:
     id: int
     show_id: int
+    season_number: int
     episode_number: int
     first_video_id: int
     first_account_id: str

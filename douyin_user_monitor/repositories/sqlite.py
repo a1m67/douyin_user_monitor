@@ -14,7 +14,7 @@ from typing import Any, Iterator, Mapping, Sequence
 from douyin_user_monitor.parsers.regex import normalize_title
 
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 SHOW_STATUSES = frozenset({"updating", "completed", "paused"})
 VIDEO_CLASSIFICATIONS = frozenset({"matched", "ignored", "review"})
 VIDEO_CONTENT_TYPES = frozenset({"episode", "trailer", "show_content", "unknown", "non_drama"})
@@ -137,10 +137,12 @@ class ShortDramaRepository:
                     CHECK (classification_status IN ('matched', 'ignored', 'review')),
                 parser_confidence REAL,
                 parsed_show_title TEXT,
+                parsed_season_number INTEGER NOT NULL DEFAULT 1,
                 parsed_episode_number INTEGER,
                 parser_method TEXT,
                 parser_reason TEXT,
                 show_title_candidate TEXT,
+                season_candidate INTEGER NOT NULL DEFAULT 1,
                 episode_candidate INTEGER,
                 content_type TEXT NOT NULL DEFAULT 'unknown'
                     CHECK (content_type IN ('episode', 'trailer', 'show_content', 'unknown', 'non_drama')),
@@ -155,6 +157,7 @@ class ShortDramaRepository:
                 title TEXT NOT NULL,
                 normalized_title TEXT NOT NULL UNIQUE,
                 aliases TEXT NOT NULL DEFAULT '[]',
+                latest_season INTEGER,
                 latest_episode INTEGER,
                 latest_update_at TEXT,
                 expected_episode_count INTEGER,
@@ -172,12 +175,14 @@ class ShortDramaRepository:
             CREATE TABLE IF NOT EXISTS episodes (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 show_id INTEGER NOT NULL REFERENCES shows(id) ON DELETE CASCADE,
+                season_number INTEGER NOT NULL DEFAULT 1,
                 episode_number INTEGER NOT NULL,
                 first_video_id INTEGER NOT NULL REFERENCES videos(id) ON DELETE RESTRICT,
                 first_account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
                 published_at TEXT,
                 created_at TEXT NOT NULL,
-                UNIQUE(show_id, episode_number),
+                UNIQUE(show_id, season_number, episode_number),
+                CHECK (season_number >= 1),
                 CHECK (episode_number >= 0)
             );
 
@@ -216,8 +221,15 @@ class ShortDramaRepository:
 
     def _migrate_schema(self, connection: sqlite3.Connection, previous_version: int) -> None:
         """Apply additive migrations without requiring users to recreate SQLite data."""
-        if not _episodes_allow_zero(connection):
+        if not _table_has_column(connection, "episodes", "season_number"):
+            _migrate_episode_seasons(connection)
+        elif not _episodes_allow_zero(connection):
             _migrate_episodes_allow_zero(connection)
+        connection.execute("DROP INDEX IF EXISTS idx_episodes_show_number")
+        connection.execute(
+            "CREATE INDEX idx_episodes_show_number "
+            "ON episodes(show_id, season_number DESC, episode_number DESC)"
+        )
         if not _table_has_column(connection, "videos", "classification_status"):
             connection.execute(
                 "ALTER TABLE videos ADD COLUMN classification_status TEXT NOT NULL DEFAULT 'ignored'"
@@ -232,6 +244,8 @@ class ShortDramaRepository:
             "text_sources": "TEXT NOT NULL DEFAULT '{}'",
             "parser_evidence": "TEXT NOT NULL DEFAULT '{}'",
             "llm_raw_result": "TEXT",
+            "parsed_season_number": "INTEGER NOT NULL DEFAULT 1",
+            "season_candidate": "INTEGER NOT NULL DEFAULT 1",
         }.items():
             if not _table_has_column(connection, "videos", column):
                 connection.execute(f"ALTER TABLE videos ADD COLUMN {column} {definition}")
@@ -255,6 +269,7 @@ class ShortDramaRepository:
             "is_ignored": "INTEGER NOT NULL DEFAULT 0",
             "ignored_at": "TEXT",
             "ignore_reason": "TEXT",
+            "latest_season": "INTEGER",
         }.items():
             if not _table_has_column(connection, "shows", column):
                 connection.execute(f"ALTER TABLE shows ADD COLUMN {column} {definition}")
@@ -779,46 +794,51 @@ class ShortDramaRepository:
         for show_id in show_ids:
             latest = connection.execute(
                 """
-                SELECT episode_number, COALESCE(published_at, created_at) AS latest_update_at
+                SELECT season_number, episode_number,
+                       COALESCE(published_at, created_at) AS latest_update_at
                 FROM episodes
                 WHERE show_id = ?
-                ORDER BY episode_number DESC, COALESCE(published_at, created_at) DESC, id DESC
+                ORDER BY season_number DESC, episode_number DESC,
+                         COALESCE(published_at, created_at) DESC, id DESC
                 LIMIT 1
                 """,
                 (show_id,),
             ).fetchone()
             current = connection.execute(
-                "SELECT latest_episode, latest_update_at FROM shows WHERE id = ?", (show_id,)
+                "SELECT latest_season, latest_episode, latest_update_at FROM shows WHERE id = ?", (show_id,)
             ).fetchone()
             if current is None:
                 continue
             if latest is None:
-                if current["latest_episode"] is None and current["latest_update_at"] is None:
+                if current["latest_season"] is None and current["latest_episode"] is None and current["latest_update_at"] is None:
                     continue
                 connection.execute(
                     """
                     UPDATE shows
-                    SET latest_episode = NULL, latest_update_at = NULL, updated_at = ?
+                    SET latest_season = NULL, latest_episode = NULL,
+                        latest_update_at = NULL, updated_at = ?
                     WHERE id = ?
                     """,
                     (now, show_id),
                 )
                 refreshed += 1
                 continue
+            latest_season = int(latest["season_number"])
             latest_episode = int(latest["episode_number"])
             latest_update_at = latest["latest_update_at"]
             if (
-                current["latest_episode"] == latest_episode
+                current["latest_season"] == latest_season
+                and current["latest_episode"] == latest_episode
                 and current["latest_update_at"] == latest_update_at
             ):
                 continue
             connection.execute(
                 """
                 UPDATE shows
-                SET latest_episode = ?, latest_update_at = ?, updated_at = ?
+                SET latest_season = ?, latest_episode = ?, latest_update_at = ?, updated_at = ?
                 WHERE id = ?
                 """,
-                (latest_episode, latest_update_at, now, show_id),
+                (latest_season, latest_episode, latest_update_at, now, show_id),
             )
             refreshed += 1
         return refreshed
@@ -1028,11 +1048,13 @@ class ShortDramaRepository:
         needs_review: bool,
         parser_confidence: float | None,
         parsed_show_title: str | None = None,
+        parsed_season_number: int = 1,
         parsed_episode_number: int | None = None,
         parser_method: str | None = None,
         classification_status: str | None = None,
         parser_reason: str | None = None,
         show_title_candidate: str | None = None,
+        season_candidate: int = 1,
         episode_candidate: int | None = None,
         content_type: str = "unknown",
         parser_evidence: Mapping[str, Any] | None = None,
@@ -1047,6 +1069,8 @@ class ShortDramaRepository:
         _validate_video_content_type(content_type)
         if parsed_episode_number is not None and int(parsed_episode_number) < 0:
             raise ValueError("集数不能小于 0")
+        if int(parsed_season_number) < 1 or int(season_candidate) < 1:
+            raise ValueError("季数不能小于 1")
         if episode_candidate is not None and int(episode_candidate) < 0:
             raise ValueError("候选集数不能小于 0")
         if bool(needs_review) != (resolved_status == "review"):
@@ -1058,8 +1082,8 @@ class ShortDramaRepository:
                 """
                 UPDATE videos SET
                     is_processed = ?, needs_review = ?, classification_status = ?, parser_confidence = ?,
-                    parsed_show_title = ?, parsed_episode_number = ?, parser_method = ?,
-                    parser_reason = ?, show_title_candidate = ?, episode_candidate = ?, content_type = ?,
+                    parsed_show_title = ?, parsed_season_number = ?, parsed_episode_number = ?, parser_method = ?,
+                    parser_reason = ?, show_title_candidate = ?, season_candidate = ?, episode_candidate = ?, content_type = ?,
                     parser_evidence = COALESCE(?, parser_evidence),
                     llm_raw_result = COALESCE(?, llm_raw_result),
                     processed_at = ?
@@ -1071,10 +1095,12 @@ class ShortDramaRepository:
                     resolved_status,
                     parser_confidence,
                     _optional_text(parsed_show_title),
+                    parsed_season_number,
                     parsed_episode_number,
                     _optional_text(parser_method),
                     _optional_text(parser_reason),
                     _optional_text(show_title_candidate),
+                    season_candidate,
                     episode_candidate,
                     content_type,
                     _json_mapping(parser_evidence) if parser_evidence is not None else None,
@@ -1337,7 +1363,7 @@ class ShortDramaRepository:
             "recent": "shows.latest_update_at DESC, shows.updated_at DESC",
             "title": "shows.title COLLATE NOCASE ASC, shows.id ASC",
             "episode_count": "episode_count DESC, shows.latest_update_at DESC",
-            "latest_episode": "shows.latest_episode DESC, shows.latest_update_at DESC",
+            "latest_episode": "shows.latest_season DESC, shows.latest_episode DESC, shows.latest_update_at DESC",
         }.get(sort)
         if order_by is None:
             raise ValueError("短剧排序方式无效")
@@ -1377,18 +1403,25 @@ class ShortDramaRepository:
                 SELECT
                     shows.*,
                     COUNT(DISTINCT episodes.id) AS episode_count,
-                    COUNT(DISTINCT CASE WHEN episodes.episode_number > 0 THEN episodes.id END)
+                    COUNT(DISTINCT CASE WHEN episodes.season_number = shows.latest_season
+                                              AND episodes.episode_number > 0 THEN episodes.id END)
                         AS regular_episode_count,
-                    COUNT(DISTINCT CASE WHEN episodes.episode_number = 0 THEN episodes.id END)
+                    COUNT(DISTINCT CASE WHEN episodes.season_number = shows.latest_season
+                                              AND episodes.episode_number = 0 THEN episodes.id END)
                         AS special_episode_count,
-                    MIN(episodes.episode_number) AS min_episode,
-                    MAX(episodes.episode_number) AS max_episode,
+                    MIN(CASE WHEN episodes.season_number = shows.latest_season
+                             THEN episodes.episode_number END) AS min_episode,
+                    MAX(CASE WHEN episodes.season_number = shows.latest_season
+                             THEN episodes.episode_number END) AS max_episode,
                     CASE
-                        WHEN MAX(CASE WHEN episodes.episode_number > 0
+                        WHEN MAX(CASE WHEN episodes.season_number = shows.latest_season
+                                           AND episodes.episode_number > 0
                                       THEN episodes.episode_number END) IS NULL THEN 0
-                        ELSE MAX(CASE WHEN episodes.episode_number > 0
+                        ELSE MAX(CASE WHEN episodes.season_number = shows.latest_season
+                                          AND episodes.episode_number > 0
                                       THEN episodes.episode_number END)
-                             - COUNT(DISTINCT CASE WHEN episodes.episode_number > 0
+                             - COUNT(DISTINCT CASE WHEN episodes.season_number = shows.latest_season
+                                                       AND episodes.episode_number > 0
                                                    THEN episodes.id END)
                     END AS missing_episode_count,
                     latest_source.account_id AS latest_account_id,
@@ -1462,8 +1495,13 @@ class ShortDramaRepository:
         for episode in episodes:
             episode["sources"] = self.get_episode_sources(int(episode["id"]))
         show["episodes"] = episodes
+        latest_season = int(show.get("latest_season") or 1)
         latest_episode = int(show["latest_episode"] or 0)
-        known_numbers = {int(episode["episode_number"]) for episode in episodes}
+        known_numbers = {
+            int(episode["episode_number"])
+            for episode in episodes
+            if int(episode["season_number"]) == latest_season
+        }
         show["missing_episode_numbers"] = [
             number for number in range(1, latest_episode + 1) if number not in known_numbers
         ]
@@ -1477,6 +1515,29 @@ class ShortDramaRepository:
         show["min_episode"] = min(known_numbers) if known_numbers else None
         show["max_episode"] = max(known_numbers) if known_numbers else None
         show["missing_episode_count"] = len(show["missing_episode_numbers"])
+        seasons: dict[int, list[dict[str, Any]]] = {}
+        for episode in episodes:
+            seasons.setdefault(int(episode["season_number"]), []).append(episode)
+        show["seasons"] = [
+            {
+                "season_number": season_number,
+                "episodes": season_episodes,
+                "missing_episode_numbers": [
+                    number
+                    for number in range(
+                        1,
+                        max(
+                            (int(item["episode_number"]) for item in season_episodes),
+                            default=0,
+                        ) + 1,
+                    )
+                    if number not in {
+                        int(item["episode_number"]) for item in season_episodes
+                    }
+                ],
+            }
+            for season_number, season_episodes in sorted(seasons.items(), reverse=True)
+        ]
         with self._transaction() as connection:
             source_accounts = self._source_accounts_for_shows(connection, [show_id])
         show["source_accounts"] = source_accounts.get(show_id, [])
@@ -1616,24 +1677,26 @@ class ShortDramaRepository:
             )
 
             target_episodes = {
-                int(row["episode_number"]): int(row["id"])
+                (int(row["season_number"]), int(row["episode_number"])): int(row["id"])
                 for row in connection.execute(
-                    "SELECT id, episode_number FROM episodes WHERE show_id = ?", (target_show_id,)
+                    "SELECT id, season_number, episode_number FROM episodes WHERE show_id = ?", (target_show_id,)
                 ).fetchall()
             }
             source_episodes = connection.execute(
-                "SELECT id, episode_number FROM episodes WHERE show_id = ?", (source_show_id,)
+                "SELECT id, season_number, episode_number FROM episodes WHERE show_id = ?", (source_show_id,)
             ).fetchall()
             for source_episode in source_episodes:
                 source_episode_id = int(source_episode["id"])
+                season_number = int(source_episode["season_number"])
                 episode_number = int(source_episode["episode_number"])
-                target_episode_id = target_episodes.get(episode_number)
+                episode_key = (season_number, episode_number)
+                target_episode_id = target_episodes.get(episode_key)
                 if target_episode_id is None:
                     connection.execute(
                         "UPDATE episodes SET show_id = ? WHERE id = ?",
                         (target_show_id, source_episode_id),
                     )
-                    target_episodes[episode_number] = source_episode_id
+                    target_episodes[episode_key] = source_episode_id
                     continue
 
                 connection.execute(
@@ -1710,9 +1773,12 @@ class ShortDramaRepository:
         video_id: int,
         account_id: str,
         published_at: str | None,
+        season_number: int = 1,
     ) -> EpisodeWriteResult:
         if episode_number < 0:
             raise ValueError("集数不能小于 0")
+        if season_number < 1:
+            raise ValueError("季数不能小于 1")
         now = utc_now()
         with self._transaction() as connection:
             show = connection.execute(
@@ -1723,18 +1789,19 @@ class ShortDramaRepository:
             if bool(show["is_ignored"]):
                 raise ValueError("短剧已永久忽略")
             existing_episode = connection.execute(
-                "SELECT * FROM episodes WHERE show_id = ? AND episode_number = ?",
-                (show_id, episode_number),
+                "SELECT * FROM episodes WHERE show_id = ? AND season_number = ? AND episode_number = ?",
+                (show_id, season_number, episode_number),
             ).fetchone()
             is_new_episode = existing_episode is None
             if existing_episode is None:
                 cursor = connection.execute(
                     """
                     INSERT INTO episodes(
-                        show_id, episode_number, first_video_id, first_account_id, published_at, created_at
-                    ) VALUES (?, ?, ?, ?, ?, ?)
+                        show_id, season_number, episode_number, first_video_id,
+                        first_account_id, published_at, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
                     """,
-                    (show_id, episode_number, video_id, account_id, _optional_text(published_at), now),
+                    (show_id, season_number, episode_number, video_id, account_id, _optional_text(published_at), now),
                 )
                 episode_id = int(cursor.lastrowid)
             else:
@@ -1768,7 +1835,8 @@ class ShortDramaRepository:
     def get_show_episodes(self, show_id: int) -> list[dict[str, Any]]:
         with self._transaction() as connection:
             rows = connection.execute(
-                "SELECT * FROM episodes WHERE show_id = ? ORDER BY episode_number DESC", (show_id,)
+                "SELECT * FROM episodes WHERE show_id = ? "
+                "ORDER BY season_number DESC, episode_number DESC", (show_id,)
             ).fetchall()
             return [_episode_row(row) for row in rows]
 
@@ -2044,6 +2112,48 @@ def _episodes_allow_zero(connection: sqlite3.Connection) -> bool:
     return "CHECK(episode_number>=0)" in sql
 
 
+def _migrate_episode_seasons(connection: sqlite3.Connection) -> None:
+    """Rebuild episodes in place while preserving ids used by child tables."""
+    connection.execute("PRAGMA foreign_keys = OFF")
+    connection.execute("PRAGMA legacy_alter_table = ON")
+    connection.execute("ALTER TABLE episodes RENAME TO episodes_before_v9")
+    connection.execute(
+        """
+        CREATE TABLE episodes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            show_id INTEGER NOT NULL REFERENCES shows(id) ON DELETE CASCADE,
+            season_number INTEGER NOT NULL DEFAULT 1,
+            episode_number INTEGER NOT NULL,
+            first_video_id INTEGER NOT NULL REFERENCES videos(id) ON DELETE RESTRICT,
+            first_account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
+            published_at TEXT,
+            created_at TEXT NOT NULL,
+            UNIQUE(show_id, season_number, episode_number),
+            CHECK (season_number >= 1),
+            CHECK (episode_number >= 0)
+        )
+        """
+    )
+    connection.execute(
+        """
+        INSERT INTO episodes(
+            id, show_id, season_number, episode_number, first_video_id,
+            first_account_id, published_at, created_at
+        )
+        SELECT id, show_id, 1, episode_number, first_video_id,
+               first_account_id, published_at, created_at
+        FROM episodes_before_v9
+        """
+    )
+    connection.execute("DROP TABLE episodes_before_v9")
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_episodes_show_number "
+        "ON episodes(show_id, season_number DESC, episode_number DESC)"
+    )
+    connection.execute("PRAGMA legacy_alter_table = OFF")
+    connection.execute("PRAGMA foreign_keys = ON")
+
+
 def _migrate_episodes_allow_zero(connection: sqlite3.Connection) -> None:
     """Rebuild the table because SQLite cannot alter an existing CHECK constraint."""
     connection.execute("PRAGMA foreign_keys = OFF")
@@ -2054,12 +2164,14 @@ def _migrate_episodes_allow_zero(connection: sqlite3.Connection) -> None:
         CREATE TABLE episodes (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             show_id INTEGER NOT NULL REFERENCES shows(id) ON DELETE CASCADE,
+            season_number INTEGER NOT NULL DEFAULT 1,
             episode_number INTEGER NOT NULL,
             first_video_id INTEGER NOT NULL REFERENCES videos(id) ON DELETE RESTRICT,
             first_account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
             published_at TEXT,
             created_at TEXT NOT NULL,
-            UNIQUE(show_id, episode_number),
+            UNIQUE(show_id, season_number, episode_number),
+            CHECK (season_number >= 1),
             CHECK (episode_number >= 0)
         )
         """
@@ -2067,16 +2179,16 @@ def _migrate_episodes_allow_zero(connection: sqlite3.Connection) -> None:
     connection.execute(
         """
         INSERT INTO episodes(
-            id, show_id, episode_number, first_video_id, first_account_id, published_at, created_at
+            id, show_id, season_number, episode_number, first_video_id, first_account_id, published_at, created_at
         )
-        SELECT id, show_id, episode_number, first_video_id, first_account_id, published_at, created_at
+        SELECT id, show_id, season_number, episode_number, first_video_id, first_account_id, published_at, created_at
         FROM episodes_before_v6
         """
     )
     connection.execute("DROP TABLE episodes_before_v6")
     connection.execute(
         "CREATE INDEX IF NOT EXISTS idx_episodes_show_number "
-        "ON episodes(show_id, episode_number DESC)"
+        "ON episodes(show_id, season_number DESC, episode_number DESC)"
     )
     connection.execute("PRAGMA legacy_alter_table = OFF")
 

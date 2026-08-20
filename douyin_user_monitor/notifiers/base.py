@@ -12,6 +12,7 @@ class EpisodeNotification:
     show_id: int
     episode_id: int
     show_title: str
+    season_number: int
     episode_number: int
     account_nickname: str
     published_at: str | None
@@ -24,6 +25,7 @@ class EpisodeNotification:
             show_id=int(update.show["id"]),
             episode_id=int(update.episode["id"]),
             show_title=str(update.show["title"]),
+            season_number=int(update.episode.get("season_number") or 1),
             episode_number=int(update.episode["episode_number"]),
             account_nickname=str(update.account["nickname"]),
             published_at=update.video.get("publish_time"),

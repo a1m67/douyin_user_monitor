@@ -44,6 +44,7 @@ class EpisodeParseResult:
     regex_result: Mapping[str, Any] | None = None
     llm_result: Mapping[str, Any] | None = None
     llm_raw_result: Any | None = None
+    season_number: int = 1
 
     def __post_init__(self) -> None:
         if self.status not in PARSE_STATUSES:
@@ -54,6 +55,8 @@ class EpisodeParseResult:
             raise ValueError("集数不能小于 0")
         if self.episode_candidate is not None and self.episode_candidate < 0:
             raise ValueError("候选集数不能小于 0")
+        if self.season_number < 1:
+            raise ValueError("季数不能小于 1")
 
     @property
     def is_episode(self) -> bool:
@@ -65,6 +68,7 @@ class EpisodeParseResult:
             "status": self.status,
             "show_title": self.show_title,
             "episode_number": self.episode_number,
+            "season_number": self.season_number,
             "confidence": self.confidence,
             "reason": self.reason,
             "method": self.method,

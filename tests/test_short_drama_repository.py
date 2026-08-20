@@ -218,6 +218,87 @@ class ShortDramaRepositoryTests(unittest.TestCase):
         self.assertEqual(len(self.repository.get_episode_sources(first_result.episode["id"])), 2)
         self.assertEqual(self.repository.get_show(show["id"])["latest_episode"], 27)
 
+    def test_same_episode_number_in_two_seasons_creates_two_episodes(self):
+        account = self.create_account("season-account")
+        show = self.repository.create_show(title="归墟", normalized_title="归墟")
+        first = self.create_video(account["id"], "season-1-episode-1")
+        second = self.create_video(account["id"], "season-2-episode-1")
+        for season, video in ((1, first), (2, second)):
+            self.repository.record_episode_source(
+                show_id=show["id"], season_number=season, episode_number=1,
+                video_id=video["id"], account_id=account["id"],
+                published_at=video["publish_time"],
+            )
+
+        episodes = self.repository.get_show_episodes(show["id"])
+        self.assertEqual(
+            [(item["season_number"], item["episode_number"]) for item in episodes],
+            [(2, 1), (1, 1)],
+        )
+        detail = self.repository.get_show_detail(show["id"])
+        self.assertEqual(detail["latest_season"], 2)
+
+    def test_v8_episode_migration_preserves_sources_and_defaults_season_one(self):
+        account = self.create_account("migration-season")
+        show = self.repository.create_show(title="旧剧", normalized_title="旧剧")
+        video = self.create_video(account["id"], "migration-season-video")
+        write = self.repository.record_episode_source(
+            show_id=show["id"], episode_number=7, video_id=video["id"],
+            account_id=account["id"], published_at=video["publish_time"],
+        )
+        database_path = self.root / "app.db"
+        connection = sqlite3.connect(database_path)
+        try:
+            connection.executescript(
+                """
+                PRAGMA foreign_keys = OFF;
+                PRAGMA legacy_alter_table = ON;
+                ALTER TABLE episodes RENAME TO episodes_v9_source;
+                ALTER TABLE episode_sources RENAME TO episode_sources_v9_source;
+                CREATE TABLE episodes (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    show_id INTEGER NOT NULL REFERENCES shows(id) ON DELETE CASCADE,
+                    episode_number INTEGER NOT NULL,
+                    first_video_id INTEGER NOT NULL REFERENCES videos(id) ON DELETE RESTRICT,
+                    first_account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
+                    published_at TEXT,
+                    created_at TEXT NOT NULL,
+                    UNIQUE(show_id, episode_number),
+                    CHECK (episode_number >= 0)
+                );
+                INSERT INTO episodes(id, show_id, episode_number, first_video_id,
+                                     first_account_id, published_at, created_at)
+                SELECT id, show_id, episode_number, first_video_id,
+                       first_account_id, published_at, created_at
+                FROM episodes_v9_source;
+                CREATE TABLE episode_sources (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    episode_id INTEGER NOT NULL REFERENCES episodes(id) ON DELETE CASCADE,
+                    video_id INTEGER NOT NULL UNIQUE REFERENCES videos(id) ON DELETE CASCADE,
+                    account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
+                    published_at TEXT,
+                    created_at TEXT NOT NULL,
+                    UNIQUE(episode_id, video_id)
+                );
+                INSERT INTO episode_sources
+                SELECT * FROM episode_sources_v9_source;
+                DROP TABLE episode_sources_v9_source;
+                DROP TABLE episodes_v9_source;
+                UPDATE app_meta SET value = '8' WHERE key = 'schema_version';
+                """
+            )
+            connection.commit()
+        finally:
+            connection.close()
+
+        migrated = ShortDramaRepository(database_path)
+        episode = migrated.get_show_episodes(show["id"])[0]
+        self.assertEqual(episode["season_number"], 1)
+        self.assertEqual(episode["id"], write.episode["id"])
+        self.assertEqual(
+            migrated.get_episode_sources(episode["id"])[0]["video_id"], video["id"]
+        )
+
     def test_deleting_account_reassigns_shared_episode_and_removes_orphaned_episodes(self):
         first_account = self.create_account("sec-1")
         second_account = self.create_account("sec-2")

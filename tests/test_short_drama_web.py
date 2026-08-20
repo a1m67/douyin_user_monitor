@@ -291,6 +291,37 @@ class ShortDramaWebTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(accepted.json()["episode"]["episode_number"], 0)
         self.assertEqual(negative.status_code, 422)
 
+    async def test_review_accepts_second_season_episode_zero(self):
+        account = self.repository.list_accounts()[0]
+        show = self.repository.list_shows()[0]
+        video, _ = self.repository.create_video(
+            aweme_id="review-season-two-zero",
+            account_id=account["id"],
+            description="《末日重生》第二季先导片",
+            hashtags=[],
+            publish_time=None,
+            video_url="https://www.douyin.com/video/review-season-two-zero",
+            cover_url=None,
+            raw={},
+        )
+        self.repository.update_video_processing(
+            video["id"],
+            is_processed=False,
+            needs_review=True,
+            parser_confidence=0.7,
+            classification_status="review",
+            parser_reason="trailer_requires_review",
+            parsed_season_number=2,
+            season_candidate=2,
+        )
+        accepted = self.client.post(
+            f"/api/short-drama/reviews/{video['id']}",
+            json={"show_id": show["id"], "season_number": 2, "episode_number": 0},
+        )
+        self.assertEqual(accepted.status_code, 200)
+        self.assertEqual(accepted.json()["episode"]["season_number"], 2)
+        self.assertEqual(accepted.json()["episode"]["episode_number"], 0)
+
     async def test_review_ignore_endpoints_only_return_real_review_videos(self):
         account = self.repository.list_accounts()[0]
         review_videos = []

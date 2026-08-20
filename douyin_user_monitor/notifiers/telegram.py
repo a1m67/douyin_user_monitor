@@ -59,7 +59,11 @@ def format_episode_update(notification: EpisodeNotification) -> str:
         "",
         f"《{notification.show_title}》",
         "",
-        f"更新至：第 {notification.episode_number} 集",
+        (
+            f"更新至：第 {notification.season_number} 季 · 第 {notification.episode_number} 集"
+            if notification.season_number > 1
+            else f"更新至：第 {notification.episode_number} 集"
+        ),
         "",
         f"作者：{notification.account_nickname}",
         "发布时间：",

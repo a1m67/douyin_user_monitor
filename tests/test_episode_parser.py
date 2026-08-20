@@ -51,6 +51,30 @@ class EpisodeParserTests(unittest.TestCase):
         self.assertEqual(result.episode_number, 28)
         self.assertEqual(result.method, "regex:bracketed")
 
+    def test_multi_season_formats(self):
+        cases = [
+            ("《归墟》第二季第12集", 2, 12),
+            ("《归墟》第 2 季 第12集", 2, 12),
+            ("《归墟》S2E12", 2, 12),
+            ("《归墟》S02 EP12", 2, 12),
+            ("《归墟》Season 2 Episode 12", 2, 12),
+        ]
+        for description, season, episode in cases:
+            with self.subTest(description=description):
+                result = self.parse(description)
+                self.assertEqual(result.status, MATCHED, result)
+                self.assertEqual(result.show_title, "归墟")
+                self.assertEqual(result.season_number, season)
+                self.assertEqual(result.episode_number, episode)
+
+    def test_second_season_trailer_does_not_become_episode_zero(self):
+        result = self.parse("《归墟》第二季先导片")
+        self.assertEqual(result.status, REVIEW)
+        self.assertEqual(result.show_title, "归墟")
+        self.assertEqual(result.season_number, 2)
+        self.assertIsNone(result.episode_number)
+        self.assertEqual(result.content_type, "trailer")
+
     def test_known_alias_returns_canonical_show(self):
         result = self.parse(
             "重生首富 第27集",

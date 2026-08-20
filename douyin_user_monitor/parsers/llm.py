@@ -40,6 +40,7 @@ class LLMDecision:
     show_title: str | None
     show_id: int | None
     episode_number: int | None
+    season_number: int
     content_type: str
     confidence: float
     reason: str
@@ -50,6 +51,7 @@ class LLMDecision:
             "show_title": self.show_title,
             "show_id": self.show_id,
             "episode_number": self.episode_number,
+            "season_number": self.season_number,
             "content_type": self.content_type,
             "confidence": self.confidence,
             "reason": self.reason,
@@ -90,6 +92,7 @@ class OpenAICompatibleLLMClient:
                 "show_title": "string|null",
                 "show_id": "integer|null",
                 "episode_number": "integer|null (>=0)",
+                "season_number": "integer (>=1; default 1 when omitted in the text)",
                 "content_type": sorted(CONTENT_TYPES),
                 "confidence": "number 0..1",
                 "reason": "non-empty string",
@@ -196,6 +199,7 @@ class LLMParser:
             status=MATCHED if can_auto_accept else REVIEW,
             show_title=canonical_title,
             episode_number=decision.episode_number,
+            season_number=decision.season_number,
             confidence=decision.confidence,
             reason=decision.reason,
             method="llm",
@@ -254,6 +258,7 @@ def _compact_parse_result(result: EpisodeParseResult) -> dict[str, Any]:
         "status": result.status,
         "show_title": result.show_title,
         "episode_number": result.episode_number,
+        "season_number": result.season_number,
         "show_title_candidate": result.show_title_candidate,
         "episode_candidate": result.episode_candidate,
         "content_type": result.content_type,
@@ -270,11 +275,15 @@ def _validate_decision(raw: str) -> LLMDecision:
     value = json.loads(raw)
     if not isinstance(value, dict):
         raise LLMResponseError("LLM output must be an object")
+    # Accept responses from older compatible prompts while treating an omitted
+    # season as the established first-season default.
+    value.setdefault("season_number", 1)
     required = {
         "is_episode",
         "show_title",
         "show_id",
         "episode_number",
+        "season_number",
         "content_type",
         "confidence",
         "reason",
@@ -292,6 +301,9 @@ def _validate_decision(raw: str) -> LLMDecision:
     episode_number = value["episode_number"]
     if episode_number is not None and (type(episode_number) is not int or episode_number < 0):
         raise LLMResponseError("episode_number must be a non-negative integer or null")
+    season_number = value["season_number"]
+    if type(season_number) is not int or season_number < 1:
+        raise LLMResponseError("season_number must be a positive integer")
     content_type = value["content_type"]
     if content_type not in CONTENT_TYPES:
         raise LLMResponseError("content_type is invalid")
@@ -312,6 +324,7 @@ def _validate_decision(raw: str) -> LLMDecision:
         show_title=show_title.strip() if isinstance(show_title, str) else None,
         show_id=show_id,
         episode_number=episode_number,
+        season_number=season_number,
         content_type=content_type,
         confidence=float(confidence),
         reason=reason.strip(),
@@ -387,6 +400,7 @@ def _failed_result(base: EpisodeParseResult, reason: str) -> EpisodeParseResult:
         status=REVIEW,
         show_title=base.show_title,
         episode_number=base.episode_number,
+        season_number=base.season_number,
         confidence=base.confidence,
         reason=reason,
         method="llm",

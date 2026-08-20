@@ -14,7 +14,7 @@
 ## 功能
 
 - 保留仓库内置的抖音 Web 抓取能力，业务层通过可替换的 `DouyinProvider` 调用。
-- SQLite 数据模型：`Account`、`Video`、`Show`、`Episode`、`EpisodeSource`、`Notification`。
+- SQLite 数据模型：`Account`、`Video`、`Show`、`Episode`、`EpisodeSource`、`Notification`；Episode 支持多季。
 - 数据库级 `UNIQUE(aweme_id)`；同一短剧同一集只创建一个 Episode，多账号发布保存为多个 EpisodeSource。
 - 规则解析器支持书名号、`第 27 集`、`27集`、`EP27`、`EP.27`、`Episode 27`、`27/100`、`27-100` 和中文数字。
 - 三态分类：明确短剧名和集数为 `matched`；没有短剧 / 剧集信号的普通视频为 `ignored`；仅有短剧或集数线索但无法可靠归档的作品才进入 `/review`。
@@ -129,16 +129,16 @@ Episode 1 --- * Notification
 - `Account` 还保存历史补全状态、opaque cursor、已访问 cursor、扫描页数、扫描数量、新增数量及失败恢复时间点。服务重启会从已保存 cursor 自动恢复未完成任务。
 - `Video` 以 `aweme_id` 唯一保存原始作品和解析结果。
 - `Show` 表示一部短剧，`normalized_title` 和 aliases 用于匹配；可保存人工确认的预计总集数和可恢复的永久忽略状态。
-- `Episode` 是某一部剧的某一集；`EpisodeSource` 记录不同账号的同集来源。
+- `Episode` 以 `(show_id, season_number, episode_number)` 唯一表示某一季某一集；`EpisodeSource` 记录不同账号的同集来源。旧数据升级时自动归入第一季。
 - `Notification` 记录每次渠道发送的结果。
 
-已有 `data/monitor_users.json` 会在新 SQLite 数据库首次创建时自动迁移账号及已下载 aweme ID 基线，避免升级后重复解析和通知旧作品。SQLite 会原地增量迁移历史补全、Episode 0、LLM 解析证据和短剧库管理字段，不需要删除数据库。
+已有 `data/monitor_users.json` 会在新 SQLite 数据库首次创建时自动迁移账号及已下载 aweme ID 基线，避免升级后重复解析和通知旧作品。SQLite 会原地增量迁移历史补全、Episode 0、多季、LLM 解析证据和短剧库管理字段，不需要删除数据库。
 
 ## Provider 和解析器
 
 `BuiltinDouyinProvider` 包装现有进程内 crawler。现有 `get_latest_videos()` 仍负责日常最新一页；新增 `get_video_page()` 只为用户主动历史补全提供 cursor 分页。以后可新增 `PlaywrightDouyinProvider`、`ApiDouyinProvider` 或第三方 Provider，而不用更改短剧业务服务。
 
-`EpisodeParser` 先运行 `RegexParser`；仅在规则结果需要审核或置信度不足等受控条件下，才调用 OpenAI-compatible LLM fallback。高置信度且能匹配已有 Show 的完整集数建议可自动归档，其余进入人工审核。当前不会下载视频、抽帧、OCR、Whisper 或绕过验证码。
+`EpisodeParser` 先运行 `RegexParser`；支持“第二季 / 第2季 / S2 / Season 2”以及 `S2E12` 等组合格式。仅在规则结果需要审核或置信度不足等受控条件下，才调用 OpenAI-compatible LLM fallback。高置信度且能匹配已有 Show 的完整集数建议可自动归档，其余进入人工审核。当前不会下载视频、抽帧、OCR、Whisper 或绕过验证码。
 
 ## 测试
 

@@ -65,6 +65,7 @@ class ReviewPayload(BaseModel):
     show_id: int | None = None
     new_show_title: str | None = Field(default=None, max_length=120)
     episode_number: int = Field(ge=0, le=100000)
+    season_number: int = Field(default=1, ge=1, le=1000)
 
 
 class BatchIgnoreReviewPayload(BaseModel):
@@ -375,6 +376,7 @@ def create_short_drama_router(
                 show_id=payload.show_id,
                 new_show_title=payload.new_show_title,
                 episode_number=payload.episode_number,
+                season_number=payload.season_number,
             )
         except (ValueError, KeyError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
