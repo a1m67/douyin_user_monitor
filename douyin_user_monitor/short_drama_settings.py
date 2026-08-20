@@ -36,6 +36,7 @@ class ShortDramaSettings:
     telegram_bot_token: str
     telegram_chat_id: str
     feishu_webhook_url: str
+    admin_api_token: str
 
 
 def load_short_drama_settings(
@@ -93,6 +94,7 @@ def load_short_drama_settings(
         telegram_bot_token=_value(values, "TELEGRAM_BOT_TOKEN", ""),
         telegram_chat_id=_value(values, "TELEGRAM_CHAT_ID", ""),
         feishu_webhook_url=_value(values, "FEISHU_WEBHOOK_URL", ""),
+        admin_api_token=_value(values, "ADMIN_API_TOKEN", ""),
     )
     if settings.llm_enabled:
         missing = [

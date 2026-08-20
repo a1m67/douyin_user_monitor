@@ -4,7 +4,7 @@ services:
     container_name: douyin-short-drama-tracker
     restart: unless-stopped
     ports:
-      - "8900:8900"
+      - "127.0.0.1:8900:8900"
     env_file:
       - .env
     volumes:

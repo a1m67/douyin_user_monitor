@@ -2,10 +2,11 @@
 from __future__ import annotations
 
 import asyncio
+import secrets
 from pathlib import Path
 from typing import Any, Protocol
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
@@ -88,6 +89,7 @@ def create_short_drama_router(
     history_backfill_worker: HistoryBackfillWorkerControl | None = None,
     page_path: Path | None = None,
     default_check_interval_minutes: int = 10,
+    admin_api_token: str = "",
 ) -> APIRouter:
     router = APIRouter()
     html_path = page_path or Path(__file__).with_name("short_drama.html")
@@ -144,7 +146,25 @@ def create_short_drama_router(
     async def root_health() -> dict[str, str]:
         return health_payload()
 
-    api = APIRouter(prefix="/api/short-drama", tags=["Short drama"])
+    configured_admin_token = admin_api_token.strip()
+
+    async def require_admin_token(request: Request) -> None:
+        if not configured_admin_token or request.method in {"GET", "HEAD", "OPTIONS"}:
+            return
+        authorization = request.headers.get("authorization", "")
+        scheme, separator, credential = authorization.partition(" ")
+        if (
+            not separator
+            or scheme.casefold() != "bearer"
+            or not secrets.compare_digest(credential, configured_admin_token)
+        ):
+            raise HTTPException(status_code=401, detail="管理 API 需要有效的 Bearer token")
+
+    api = APIRouter(
+        prefix="/api/short-drama",
+        tags=["Short drama"],
+        dependencies=[Depends(require_admin_token)],
+    )
 
     @api.get("/shows")
     async def list_shows(

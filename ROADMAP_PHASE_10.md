@@ -26,12 +26,17 @@ commit SHA, and anything not verified in a real deployment.
 - Main design: Season-aware parser and pipeline, first-season compatibility defaults, season-grouped show detail, latest-season summaries, and season-local missing-episode calculation.
 - Schema changes: schema v9; episodes rebuilt with `season_number` and `UNIQUE(show_id, season_number, episode_number)` while preserving ids and child rows; existing episodes migrate to season 1; shows cache `latest_season`; videos persist parsed/candidate season values.
 - Tests: `python -m unittest discover -s tests -v` - 154 passed.
-- Commit: pending
+- Commit: `7212190`
 - Not yet verified: migration against the production VPS database and live multi-season Douyin posts.
 
 ### Phase 2
 
-- Status: pending
+- Status: complete
+- Main design: Compose binds only to localhost; optional constant-time Bearer authentication protects modifying short-drama API requests while reads and health remain public to the local/reverse-proxy boundary.
+- Schema changes: none.
+- Tests: `python -m unittest discover -s tests -q` - 156 passed; focused settings/web suite - 16 passed.
+- Commit: pending
+- Not yet verified: real reverse-proxy, HTTPS, Cloudflare Access, and VPS firewall configuration.
 
 ### Phase 3
 

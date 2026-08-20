@@ -39,6 +39,7 @@ class ShortDramaSettingsTests(unittest.TestCase):
                 "LLM_MODEL": "episode-model",
                 "LLM_TIMEOUT_SECONDS": "12",
                 "LLM_AUTO_ACCEPT_CONFIDENCE": "0.92",
+                "ADMIN_API_TOKEN": "test-admin-token",
             },
         )
         self.assertEqual(settings.database_path, (self.root / "data" / "custom.db").resolve())
@@ -57,6 +58,15 @@ class ShortDramaSettingsTests(unittest.TestCase):
         self.assertEqual(settings.llm_model, "episode-model")
         self.assertEqual(settings.llm_timeout_seconds, 12.0)
         self.assertEqual(settings.llm_auto_accept_confidence, 0.92)
+        self.assertEqual(settings.admin_api_token, "test-admin-token")
+
+    def test_security_defaults_are_disabled_and_compose_binds_localhost(self):
+        settings = load_short_drama_settings(project_root=self.root, environ={})
+        self.assertEqual(settings.admin_api_token, "")
+        compose = (Path(__file__).resolve().parents[1] / "docker-compose.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('"127.0.0.1:8900:8900"', compose)
 
     def test_enabled_llm_requires_connection_settings(self):
         with self.assertRaisesRegex(ValueError, "LLM_API_KEY"):

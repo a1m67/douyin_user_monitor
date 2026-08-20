@@ -227,6 +227,33 @@ class ShortDramaWebTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(updated["homepage_url"], "https://www.douyin.com/user/updated-sec-1")
         self.assertEqual(updated["check_interval_minutes"], 15)
 
+    async def test_optional_admin_token_protects_writes_but_not_reads_or_health(self):
+        protected_app = FastAPI()
+        protected_app.include_router(
+            create_short_drama_router(
+                repository=self.repository,
+                pipeline=self.pipeline,
+                admin_api_token="phase-two-secret",
+            )
+        )
+        client = TestClient(protected_app)
+        account = self.repository.list_accounts()[0]
+
+        self.assertEqual(client.get("/health").status_code, 200)
+        self.assertEqual(client.get("/api/short-drama/accounts").status_code, 200)
+        denied = client.patch(
+            f"/api/short-drama/accounts/{account['id']}",
+            json={"nickname": "不应保存"},
+        )
+        allowed = client.patch(
+            f"/api/short-drama/accounts/{account['id']}",
+            headers={"Authorization": "Bearer phase-two-secret"},
+            json={"nickname": "已授权"},
+        )
+        self.assertEqual(denied.status_code, 401)
+        self.assertEqual(allowed.status_code, 200)
+        self.assertEqual(allowed.json()["account"]["nickname"], "已授权")
+
     async def test_review_endpoint_confirms_a_video(self):
         account = self.repository.list_accounts()[0]
         video, _ = self.repository.create_video(

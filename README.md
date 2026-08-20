@@ -59,6 +59,19 @@ docker compose up -d --build
 
 `./data` 挂载到容器的 `/app/data`。数据库、账号、视频、短剧、剧集、通知记录和 Cookie 文件会在容器重启后保留。
 
+### 生产部署安全
+
+Compose 默认只将服务绑定到 `127.0.0.1:8900`。不要将 8900 端口直接暴露到公网。推荐部署链路：
+
+```text
+Internet
+  -> Cloudflare Access / Nginx / Caddy
+  -> HTTPS + Access policy or Basic Auth
+  -> 127.0.0.1:8900
+```
+
+面向浏览器使用时，优先在反向代理层保护整个 Dashboard。也可以设置 `ADMIN_API_TOKEN`，此时所有修改型 `/api/short-drama/*` 请求都必须携带 `Authorization: Bearer <token>`；GET 与 `/health` 不要求 token。Dashboard 不保存或自动发送该 token，因此该模式适用于 API-only 调用或由受信反向代理注入认证的场景。Token 不应写入 Compose、源码或日志。
+
 ### 本地运行
 
 ```bash
@@ -95,6 +108,7 @@ PowerShell 下可将 `.venv/Scripts/python` 替换为 `.venv\Scripts\python.exe`
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
 | `DATABASE_URL` | `sqlite:///data/app.db` | 当前仅支持 SQLite URL。 |
+| `ADMIN_API_TOKEN` | 空 | 可选；保护修改型短剧 API。空值保持现有兼容行为。 |
 | `CHECK_INTERVAL_MINUTES` | `10` | 新账号默认检查间隔，可按账号覆盖。 |
 | `MAX_CONCURRENT_CHECKS` | `3` | 同时请求的账号上限。 |
 | `MAX_BACKOFF_MINUTES` | `60` | 连续失败时的退避上限。 |
