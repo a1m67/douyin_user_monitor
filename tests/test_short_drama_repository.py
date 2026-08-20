@@ -766,6 +766,16 @@ class ShortDramaRepositoryTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "正整数"):
             self.repository.update_show(show["id"], expected_episode_count=0)
 
+    def test_alias_learning_rejects_conflicts_and_supports_removal(self):
+        first = self.repository.create_show(title="归墟", normalized_title="归墟")
+        second = self.repository.create_show(title="另一部", normalized_title="另一部")
+        learned = self.repository.add_show_alias(first["id"], "归虚世界")
+        self.assertIn("归虚世界", learned["aliases"])
+        with self.assertRaisesRegex(ValueError, "已用于"):
+            self.repository.add_show_alias(second["id"], "归虚世界")
+        removed = self.repository.update_show(first["id"], aliases=[])
+        self.assertEqual(removed["aliases"], [])
+
     def test_ignored_shows_are_hidden_from_library_and_parser_candidates_until_restored(self):
         account = self.create_account("ignored-library")
         show = self.repository.create_show(title="活动名称", normalized_title="活动名称")

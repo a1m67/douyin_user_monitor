@@ -308,6 +308,7 @@ class ShortDramaPipeline:
         season_number: int = 1,
         show_id: int | None = None,
         new_show_title: str | None = None,
+        learn_alias: bool = False,
     ) -> ManualReviewResult:
         if episode_number < 0:
             raise ValueError("集数不能小于 0")
@@ -338,6 +339,9 @@ class ShortDramaPipeline:
                 )
         if show["is_ignored"]:
             raise ValueError("短剧已永久忽略，请先恢复追踪")
+        candidate_alias = str(video.get("show_title_candidate") or "").strip()
+        if learn_alias and candidate_alias:
+            show = self._repository.add_show_alias(int(show["id"]), candidate_alias)
 
         write = self._repository.record_episode_source(
             show_id=int(show["id"]),

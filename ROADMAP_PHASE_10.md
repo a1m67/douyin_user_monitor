@@ -12,7 +12,7 @@ short-drama episode monitor. Phases are implemented and committed in order.
 - [x] Phase 5: Scan-run history and observability
 - [x] Phase 6: SQLite backup, doctor, and GitHub CI
 - [x] Phase 7: Video pagination and filters
-- [ ] Phase 8: Learn show aliases from manual review
+- [x] Phase 8: Learn show aliases from manual review
 - [ ] Phase 9: Cover OCR fallback framework
 
 ## Phase Records
@@ -80,12 +80,17 @@ commit SHA, and anything not verified in a real deployment.
 - Main design: dedicated SQLite offset pagination preserves internal list compatibility while the API supports combined account/show/status/parser/content/search/date filters.
 - Schema changes: schema remains v10; targeted content/parser ordering indexes added.
 - Tests: focused repository/web tests and full suite.
-- Commit: pending
+- Commit: `8b387f4`
 - Not yet verified: query plans on production-scale data.
 
 ### Phase 8
 
-- Status: pending
+- Status: complete
+- Main design: optional manual-review alias learning with normalized global conflict detection; show settings remain the add/remove management surface and known aliases retain parser priority.
+- Schema changes: none.
+- Tests: focused repository/pipeline/web/parser tests and full suite.
+- Commit: pending
+- Not yet verified: alias suggestions against real typo patterns.
 
 ### Phase 9
 

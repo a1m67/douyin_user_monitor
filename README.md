@@ -25,6 +25,7 @@
 - 按账号的 `next_check_at` 错峰巡检，有限并发和指数退避避免单个账号错误影响其他账号。
 - Dashboard：`/shows`、`/shows/{id}`、`/accounts`、`/videos`、`/review`、`/status`，以及 JSON 健康检查 `/health`。
 - 作品 API 使用分页返回，并可组合作者、短剧、分类状态、解析方式、内容类型、关键词和发布日期筛选。
+- 人工审核可选择把候选剧名学习为 Show alias；冲突会明确拒绝，已有 alias 由规则层优先命中以减少 LLM 调用。
 
 ## 快速部署
 
