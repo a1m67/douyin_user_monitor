@@ -888,6 +888,16 @@ class ShortDramaRepositoryTests(unittest.TestCase):
         self.assertEqual(self.repository.get_video(review_video["id"])["classification_status"], "ignored")
         self.assertEqual(self.repository.get_video(ignored_video["id"])["classification_status"], "ignored")
 
+    def test_video_search_paginates_and_combines_filters(self):
+        account = self.create_account("video-search")
+        for number in range(3):
+            video = self.create_video(account["id"], f"search-{number}")
+            self.repository.update_video_processing(video["id"], is_processed=True, needs_review=False, classification_status="ignored", parser_confidence=0, parser_method="regex:test", content_type="non_drama")
+        first = self.repository.search_videos(account_id=account["id"], parser_method="regex:test", content_type="non_drama", q="search", page=1, page_size=2)
+        empty = self.repository.search_videos(account_id=account["id"], page=3, page_size=2)
+        self.assertEqual((first["total"], first["total_pages"], len(first["videos"])), (3, 2, 2))
+        self.assertEqual(empty["videos"], [])
+
     def test_reparse_scopes_select_legacy_ignored_and_all_candidates(self):
         account = self.create_account("reparse-sec")
         legacy = self.create_video(account["id"], "reparse-legacy")

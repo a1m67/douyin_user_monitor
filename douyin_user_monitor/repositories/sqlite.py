@@ -237,6 +237,10 @@ class ShortDramaRepository:
                 ON videos(account_id, created_at DESC);
             CREATE INDEX IF NOT EXISTS idx_videos_review
                 ON videos(needs_review, created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_videos_content_created
+                ON videos(content_type, created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_videos_parser_created
+                ON videos(parser_method, created_at DESC);
             CREATE INDEX IF NOT EXISTS idx_episodes_show_number
                 ON episodes(show_id, episode_number DESC);
             CREATE INDEX IF NOT EXISTS idx_notifications_episode
@@ -1568,6 +1572,7 @@ class ShortDramaRepository:
         show["regular_episode_count"] = sum(
             1 for episode in episodes if int(episode["episode_number"]) > 0
         )
+
         show["special_episode_count"] = sum(
             1 for episode in episodes if int(episode["episode_number"]) == 0
         )
@@ -1602,6 +1607,27 @@ class ShortDramaRepository:
         show["source_accounts"] = source_accounts.get(show_id, [])
         show["source_account_count"] = len(show["source_accounts"])
         return show
+
+    def search_videos(self, *, page: int = 1, page_size: int = 50, account_id: str | None = None, show_id: int | None = None, classification_status: str | None = None, parser_method: str | None = None, content_type: str | None = None, q: str | None = None, date_from: str | None = None, date_to: str | None = None, needs_review: bool | None = None) -> dict[str, Any]:
+        safe_page, safe_size = max(1, int(page)), max(1, min(int(page_size), 200))
+        joins = " FROM videos JOIN accounts ON accounts.id=videos.account_id LEFT JOIN episode_sources es ON es.video_id=videos.id LEFT JOIN episodes e ON e.id=es.episode_id LEFT JOIN shows ON shows.id=e.show_id "
+        clauses: list[str] = []
+        params: list[Any] = []
+        for column, value in (("videos.account_id", account_id), ("shows.id", show_id), ("videos.classification_status", classification_status), ("videos.parser_method", parser_method), ("videos.content_type", content_type)):
+            if value is not None:
+                clauses.append(f"{column}=?")
+                params.append(value)
+        if needs_review is not None:
+            clauses.append("videos.needs_review=?"); params.append(int(needs_review))
+        if q and q.strip():
+            term = f"%{q.strip()}%"; clauses.append("(videos.display_title LIKE ? OR videos.description LIKE ? OR videos.parsed_show_title LIKE ? OR videos.show_title_candidate LIKE ? OR videos.aweme_id LIKE ?)"); params.extend([term] * 5)
+        if date_from: clauses.append("COALESCE(videos.publish_time,videos.created_at)>=?"); params.append(date_from)
+        if date_to: clauses.append("COALESCE(videos.publish_time,videos.created_at)<=?"); params.append(date_to)
+        where = " WHERE " + " AND ".join(clauses) if clauses else ""
+        with self._transaction() as connection:
+            total = int(connection.execute("SELECT COUNT(DISTINCT videos.id)" + joins + where, params).fetchone()[0])
+            rows = connection.execute("SELECT videos.*,accounts.nickname account_nickname,accounts.sec_uid account_sec_uid,shows.id show_id,shows.title show_title" + joins + where + " GROUP BY videos.id ORDER BY COALESCE(videos.publish_time,videos.created_at) DESC,videos.id DESC LIMIT ? OFFSET ?", (*params, safe_size, (safe_page - 1) * safe_size)).fetchall()
+        return {"videos": [_video_row(row) | {"show_id": row["show_id"], "show_title": row["show_title"]} for row in rows], "total": total, "page": safe_page, "page_size": safe_size, "total_pages": (total + safe_size - 1) // safe_size}
 
     def list_show_candidates(self) -> list[dict[str, Any]]:
         with self._transaction() as connection:

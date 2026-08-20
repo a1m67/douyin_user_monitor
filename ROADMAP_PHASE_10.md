@@ -11,7 +11,7 @@ short-drama episode monitor. Phases are implemented and committed in order.
 - [x] Phase 4: Disable the legacy monitor by default
 - [x] Phase 5: Scan-run history and observability
 - [x] Phase 6: SQLite backup, doctor, and GitHub CI
-- [ ] Phase 7: Video pagination and filters
+- [x] Phase 7: Video pagination and filters
 - [ ] Phase 8: Learn show aliases from manual review
 - [ ] Phase 9: Cover OCR fallback framework
 
@@ -71,12 +71,17 @@ commit SHA, and anything not verified in a real deployment.
 - Main design: SQLite online backups with strict filename retention, pre-migration snapshots, read-only doctor plus deterministic repair, and CI for unit, health smoke, and Docker build.
 - Schema changes: none beyond the preceding v10 migration.
 - Tests: focused maintenance/settings tests and full suite.
-- Commit: pending
+- Commit: `75153e5`
 - Not yet verified: GitHub-hosted CI and backup retention on the production filesystem.
 
 ### Phase 7
 
-- Status: pending
+- Status: complete
+- Main design: dedicated SQLite offset pagination preserves internal list compatibility while the API supports combined account/show/status/parser/content/search/date filters.
+- Schema changes: schema remains v10; targeted content/parser ordering indexes added.
+- Tests: focused repository/web tests and full suite.
+- Commit: pending
+- Not yet verified: query plans on production-scale data.
 
 ### Phase 8
 

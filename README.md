@@ -24,6 +24,7 @@
 - Telegram 和飞书 Webhook 通知；每个渠道的成功或失败都会记录，失败不会回滚 Video / Episode。
 - 按账号的 `next_check_at` 错峰巡检，有限并发和指数退避避免单个账号错误影响其他账号。
 - Dashboard：`/shows`、`/shows/{id}`、`/accounts`、`/videos`、`/review`、`/status`，以及 JSON 健康检查 `/health`。
+- 作品 API 使用分页返回，并可组合作者、短剧、分类状态、解析方式、内容类型、关键词和发布日期筛选。
 
 ## 快速部署
 
