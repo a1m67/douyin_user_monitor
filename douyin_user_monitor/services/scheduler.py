@@ -10,6 +10,10 @@ from datetime import datetime, timedelta, timezone
 from typing import Awaitable, Callable
 
 from douyin_user_monitor.repositories.sqlite import ShortDramaRepository
+from douyin_user_monitor.services.crawler_circuit_breaker import (
+    CrawlerCircuitBreaker,
+    classify_crawler_error,
+)
 from douyin_user_monitor.services.episode_pipeline import ShortDramaPipeline, SyncResult
 
 logger = logging.getLogger(__name__)
@@ -43,6 +47,8 @@ class AccountCheckResult:
     next_check_at: str
     sync_result: SyncResult | None = None
     error: str | None = None
+    error_type: str | None = None
+    circuit_open: bool = False
 
 
 class AccountScheduler:
@@ -54,12 +60,14 @@ class AccountScheduler:
         config: SchedulerConfig,
         now: Callable[[], datetime] | None = None,
         jitter: Callable[[float, float], float] | None = None,
+        circuit_breaker: CrawlerCircuitBreaker | None = None,
     ) -> None:
         self._repository = repository
         self._pipeline = pipeline
         self._config = config
         self._now = now or (lambda: datetime.now(timezone.utc))
         self._jitter = jitter or random.uniform
+        self._circuit_breaker = circuit_breaker
         self._task: asyncio.Task[None] | None = None
         self._run_lock = asyncio.Lock()
 
@@ -95,9 +103,14 @@ class AccountScheduler:
 
             return tuple(await asyncio.gather(*(check(str(account["id"])) for account in accounts)))
 
-    async def run_account_once(self, account_id: str) -> AccountCheckResult:
+    async def run_account_once(self, account_id: str, *, force: bool = False) -> AccountCheckResult:
         async with self._run_lock:
-            return await self._check_account(account_id)
+            return await self._check_account(account_id, force=force)
+
+    def crawler_status(self) -> dict[str, object]:
+        if self._circuit_breaker is None:
+            return {"enabled": False, "state": "closed", "reason": None, "retry_at": None}
+        return self._circuit_breaker.snapshot()
 
     async def _loop(self) -> None:
         while True:
@@ -111,14 +124,28 @@ class AccountScheduler:
                 pass
             await asyncio.sleep(self._config.poll_seconds)
 
-    async def _check_account(self, account_id: str) -> AccountCheckResult:
+    async def _check_account(self, account_id: str, *, force: bool = False) -> AccountCheckResult:
         account = self._repository.get_account(account_id)
         if account is None:
             raise KeyError("账号不存在")
         now = _as_utc(self._now())
+        if self._circuit_breaker is not None:
+            decision = self._circuit_breaker.before_request(force=force)
+            if not decision.allowed:
+                return AccountCheckResult(
+                    account_id=account_id,
+                    success=False,
+                    next_check_at=decision.retry_at or now.isoformat(timespec="seconds"),
+                    error="抖音抓取目前处于全局退避状态",
+                    error_type=decision.reason,
+                    circuit_open=True,
+                )
         try:
             sync_result = await self._pipeline.sync_account(account_id)
         except Exception as exc:  # noqa: BLE001 - crawler/provider failure is an account failure
+            error_type = classify_crawler_error(exc)
+            if self._circuit_breaker is not None:
+                self._circuit_breaker.record_failure(account_id, error_type)
             backoff_minutes = calculate_backoff_minutes(
                 interval_minutes=int(account["check_interval_minutes"]),
                 consecutive_failures=int(account["consecutive_failures"]),
@@ -141,8 +168,11 @@ class AccountScheduler:
                 success=False,
                 next_check_at=str(stored["next_check_at"]),
                 error=_safe_error(exc),
+                error_type=error_type,
             )
 
+        if self._circuit_breaker is not None:
+            self._circuit_breaker.record_success(account_id)
         next_check_at = calculate_next_check_at(
             now=now,
             interval_minutes=int(account["check_interval_minutes"]),

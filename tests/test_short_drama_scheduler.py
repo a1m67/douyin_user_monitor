@@ -4,10 +4,11 @@ import asyncio
 import tempfile
 import unittest
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from douyin_user_monitor.repositories.sqlite import ShortDramaRepository
+from douyin_user_monitor.services.crawler_circuit_breaker import CrawlerCircuitBreaker
 from douyin_user_monitor.services.scheduler import (
     AccountScheduler,
     SchedulerConfig,
@@ -103,6 +104,30 @@ class AccountSchedulerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(failed_account["consecutive_failures"], 1)
         self.assertEqual(failed_account["next_check_at"], "2026-08-15T12:10:00+00:00")
         self.assertEqual(calculate_backoff_minutes(interval_minutes=10, consecutive_failures=1, max_backoff_minutes=60), 20)
+
+    async def test_open_circuit_skips_pipeline_until_half_open_probe_succeeds(self):
+        accounts = [self.add_account(name) for name in ("one", "two", "three", "four")]
+        pipeline = StubPipeline(failures={item["id"] for item in accounts[:3]})
+        breaker = CrawlerCircuitBreaker(
+            failure_threshold=3, open_minutes=20, now=lambda: self.now
+        )
+        scheduler = AccountScheduler(
+            repository=self.repository,
+            pipeline=pipeline,
+            config=SchedulerConfig(jitter_ratio=0, poll_seconds=1),
+            circuit_breaker=breaker,
+            now=lambda: self.now,
+        )
+        for account in accounts[:3]:
+            await scheduler.run_account_once(account["id"])
+
+        blocked = await scheduler.run_account_once(accounts[3]["id"])
+        self.assertTrue(blocked.circuit_open)
+        self.assertNotIn(accounts[3]["id"], pipeline.calls)
+        self.now += timedelta(minutes=20)
+        probe = await scheduler.run_account_once(accounts[3]["id"])
+        self.assertTrue(probe.success)
+        self.assertEqual(scheduler.crawler_status()["state"], "closed")
 
 
 if __name__ == "__main__":

@@ -23,7 +23,10 @@ class SchedulerStatus(Protocol):
     def health_status(self) -> str:
         ...
 
-    async def run_account_once(self, account_id: str) -> Any:
+    async def run_account_once(self, account_id: str, *, force: bool = False) -> Any:
+        ...
+
+    def crawler_status(self) -> dict[str, object]:
         ...
 
 
@@ -283,11 +286,13 @@ def create_short_drama_router(
         return {"account": account}
 
     @api.post("/accounts/{account_id}/run-once")
-    async def run_account_once(account_id: str) -> dict[str, Any]:
+    async def run_account_once(account_id: str, force: bool = False) -> dict[str, Any]:
         try:
             if scheduler is not None:
-                check = await scheduler.run_account_once(account_id)
+                check = await scheduler.run_account_once(account_id, force=force)
                 if not check.success:
+                    if getattr(check, "circuit_open", False):
+                        raise HTTPException(status_code=503, detail=check.error)
                     raise RuntimeError(check.error or "账号检查失败")
                 result = check.sync_result
                 if result is None:
@@ -413,6 +418,11 @@ def create_short_drama_router(
     async def status() -> dict[str, Any]:
         result = repository.system_status()
         result["scheduler"] = scheduler.health_status() if scheduler is not None else "not_started"
+        result["crawler"] = (
+            scheduler.crawler_status()
+            if scheduler is not None and hasattr(scheduler, "crawler_status")
+            else {"enabled": False, "state": "closed", "reason": None, "retry_at": None}
+        )
         result["history_backfill_worker"] = (
             history_backfill_worker.health_status()
             if history_backfill_worker is not None

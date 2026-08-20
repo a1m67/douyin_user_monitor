@@ -112,6 +112,9 @@ PowerShell 下可将 `.venv/Scripts/python` 替换为 `.venv\Scripts\python.exe`
 | `CHECK_INTERVAL_MINUTES` | `10` | 新账号默认检查间隔，可按账号覆盖。 |
 | `MAX_CONCURRENT_CHECKS` | `3` | 同时请求的账号上限。 |
 | `MAX_BACKOFF_MINUTES` | `60` | 连续失败时的退避上限。 |
+| `CRAWLER_CIRCUIT_BREAKER_ENABLED` | `true` | 是否启用全局抖音抓取熔断。 |
+| `CRAWLER_CIRCUIT_FAILURE_THRESHOLD` | `3` | 同类全局错误触发熔断所需的不同账号数。 |
+| `CRAWLER_CIRCUIT_OPEN_MINUTES` | `20` | OPEN 状态的冷却分钟数。 |
 | `INITIAL_SYNC_LIMIT` | `20` | 首次同步最近作品数。 |
 | `INCREMENTAL_FETCH_LIMIT` | `30` | 首次同步之后每次日常巡检抓取的最新作品数。 |
 | `HISTORY_BACKFILL_PAGE_SIZE` | `20` | 后台历史补全每页扫描作品数。 |
@@ -168,6 +171,6 @@ Episode 1 --- * Notification
 
 常见检查项：
 
-- Cookie 失效、403、429、登录要求或页面异常会写入账号 `last_error`，并按 10、20、40、60 分钟等指数退避。
+- Cookie 失效、403、429、登录要求或页面异常会写入账号 `last_error`，并按 10、20、40、60 分钟等指数退避。短时间内三个不同账号出现同类全局错误时，crawler 会全局退避；冷却后只放行一个 HALF_OPEN 探针。
 - `/status` 可查看最近错误和待审核数量；`/health` 用于容器健康检查。
 - 使用无 Cookie 或失效 Cookie 的开发环境时，业务链路应通过 `FakeDouyinProvider` 测试；不要把真实抓取失败表述为测试通过。

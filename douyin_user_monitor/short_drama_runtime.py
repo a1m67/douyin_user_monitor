@@ -12,6 +12,7 @@ from douyin_user_monitor.parsers.llm import LLMParser, OpenAICompatibleLLMClient
 from douyin_user_monitor.providers.builtin_douyin import BuiltinDouyinProvider
 from douyin_user_monitor.repositories.sqlite import ShortDramaRepository
 from douyin_user_monitor.services.episode_pipeline import ShortDramaPipeline
+from douyin_user_monitor.services.crawler_circuit_breaker import CrawlerCircuitBreaker
 from douyin_user_monitor.services.history_backfill_worker import (
     HistoryBackfillWorker,
     HistoryBackfillWorkerConfig,
@@ -102,6 +103,11 @@ def build_short_drama_runtime(settings: ShortDramaSettings | None = None) -> Sho
             max_concurrent_checks=resolved_settings.max_concurrent_checks,
             max_backoff_minutes=resolved_settings.max_backoff_minutes,
             poll_seconds=resolved_settings.scheduler_poll_seconds,
+        ),
+        circuit_breaker=CrawlerCircuitBreaker(
+            enabled=resolved_settings.crawler_circuit_breaker_enabled,
+            failure_threshold=resolved_settings.crawler_circuit_failure_threshold,
+            open_minutes=resolved_settings.crawler_circuit_open_minutes,
         ),
     )
     history_backfill_worker = HistoryBackfillWorker(

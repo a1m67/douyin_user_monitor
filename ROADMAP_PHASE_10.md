@@ -6,8 +6,8 @@ short-drama episode monitor. Phases are implemented and committed in order.
 ## Progress
 
 - [x] Phase 1: Season / multi-season episode support
-- [ ] Phase 2: VPS and web security defaults
-- [ ] Phase 3: Global Douyin crawler circuit breaker
+- [x] Phase 2: VPS and web security defaults
+- [x] Phase 3: Global Douyin crawler circuit breaker
 - [ ] Phase 4: Disable the legacy monitor by default
 - [ ] Phase 5: Scan-run history and observability
 - [ ] Phase 6: SQLite backup, doctor, and GitHub CI
@@ -35,12 +35,17 @@ commit SHA, and anything not verified in a real deployment.
 - Main design: Compose binds only to localhost; optional constant-time Bearer authentication protects modifying short-drama API requests while reads and health remain public to the local/reverse-proxy boundary.
 - Schema changes: none.
 - Tests: `python -m unittest discover -s tests -q` - 156 passed; focused settings/web suite - 16 passed.
-- Commit: pending
+- Commit: `c695e12`
 - Not yet verified: real reverse-proxy, HTTPS, Cloudflare Access, and VPS firewall configuration.
 
 ### Phase 3
 
-- Status: pending
+- Status: complete
+- Main design: in-memory closed/open/half-open breaker with centralized error classification, distinct-account thresholds, a single recovery probe, scheduler short-circuiting, manual `force=true`, and structured status output.
+- Schema changes: none.
+- Tests: focused circuit/scheduler/settings/web suite - 23 passed; full suite - 161 passed.
+- Commit: pending
+- Not yet verified: real Douyin 403/429/login failure signatures and recovery timing on the VPS.
 
 ### Phase 4
 

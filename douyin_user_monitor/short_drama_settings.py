@@ -37,6 +37,9 @@ class ShortDramaSettings:
     telegram_chat_id: str
     feishu_webhook_url: str
     admin_api_token: str
+    crawler_circuit_breaker_enabled: bool
+    crawler_circuit_failure_threshold: int
+    crawler_circuit_open_minutes: int
 
 
 def load_short_drama_settings(
@@ -95,6 +98,15 @@ def load_short_drama_settings(
         telegram_chat_id=_value(values, "TELEGRAM_CHAT_ID", ""),
         feishu_webhook_url=_value(values, "FEISHU_WEBHOOK_URL", ""),
         admin_api_token=_value(values, "ADMIN_API_TOKEN", ""),
+        crawler_circuit_breaker_enabled=_boolean(
+            values, "CRAWLER_CIRCUIT_BREAKER_ENABLED", True
+        ),
+        crawler_circuit_failure_threshold=_positive_int(
+            values, "CRAWLER_CIRCUIT_FAILURE_THRESHOLD", 3
+        ),
+        crawler_circuit_open_minutes=_positive_int(
+            values, "CRAWLER_CIRCUIT_OPEN_MINUTES", 20
+        ),
     )
     if settings.llm_enabled:
         missing = [
