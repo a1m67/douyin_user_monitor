@@ -13,7 +13,7 @@ short-drama episode monitor. Phases are implemented and committed in order.
 - [x] Phase 6: SQLite backup, doctor, and GitHub CI
 - [x] Phase 7: Video pagination and filters
 - [x] Phase 8: Learn show aliases from manual review
-- [ ] Phase 9: Cover OCR fallback framework
+- [x] Phase 9: Cover OCR fallback framework
 
 ## Phase Records
 
@@ -89,9 +89,14 @@ commit SHA, and anything not verified in a real deployment.
 - Main design: optional manual-review alias learning with normalized global conflict detection; show settings remain the add/remove management surface and known aliases retain parser priority.
 - Schema changes: none.
 - Tests: focused repository/pipeline/web/parser tests and full suite.
-- Commit: pending
+- Commit: `b3d8581`
 - Not yet verified: alias suggestions against real typo patterns.
 
 ### Phase 9
 
-- Status: pending
+- Status: complete
+- Main design: optional HTTP-compatible OCR abstraction runs only for unresolved review videos with covers, uses conservative confidence, reparses OCR text through the existing parser, and caches success/failure.
+- Schema changes: schema v11 adds `ocr_text`, `ocr_confidence`, and `ocr_processed_at` to videos.
+- Tests: focused OCR/settings/pipeline/repository tests and full suite.
+- Commit: pending
+- Not yet verified: a real OCR provider, real cover URL access, and production OCR accuracy/cost.

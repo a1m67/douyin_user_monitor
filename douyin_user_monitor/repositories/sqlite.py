@@ -15,7 +15,7 @@ from douyin_user_monitor.parsers.regex import normalize_title
 from douyin_user_monitor.maintenance import backup_database
 
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 SHOW_STATUSES = frozenset({"updating", "completed", "paused"})
 VIDEO_CLASSIFICATIONS = frozenset({"matched", "ignored", "review"})
 VIDEO_CONTENT_TYPES = frozenset({"episode", "trailer", "show_content", "unknown", "non_drama"})
@@ -160,6 +160,9 @@ class ShortDramaRepository:
                     CHECK (content_type IN ('episode', 'trailer', 'show_content', 'unknown', 'non_drama')),
                 parser_evidence TEXT NOT NULL DEFAULT '{}',
                 llm_raw_result TEXT,
+                ocr_text TEXT,
+                ocr_confidence REAL,
+                ocr_processed_at TEXT,
                 created_at TEXT NOT NULL,
                 processed_at TEXT
             );
@@ -278,6 +281,9 @@ class ShortDramaRepository:
             "llm_raw_result": "TEXT",
             "parsed_season_number": "INTEGER NOT NULL DEFAULT 1",
             "season_candidate": "INTEGER NOT NULL DEFAULT 1",
+            "ocr_text": "TEXT",
+            "ocr_confidence": "REAL",
+            "ocr_processed_at": "TEXT",
         }.items():
             if not _table_has_column(connection, "videos", column):
                 connection.execute(f"ALTER TABLE videos ADD COLUMN {column} {definition}")
@@ -1028,6 +1034,13 @@ class ShortDramaRepository:
                 raise KeyError("视频不存在")
             row = connection.execute("SELECT * FROM videos WHERE id = ?", (video_id,)).fetchone()
             return _video_row(row)
+
+    def save_video_ocr(self, video_id: int, *, text: str | None, confidence: float | None) -> dict[str, Any]:
+        with self._transaction() as connection:
+            cursor = connection.execute("UPDATE videos SET ocr_text=?,ocr_confidence=?,ocr_processed_at=? WHERE id=?", (_optional_text(text), confidence, utc_now(), video_id))
+            if cursor.rowcount == 0:
+                raise KeyError("视频不存在")
+            return _video_row(connection.execute("SELECT * FROM videos WHERE id=?", (video_id,)).fetchone())
 
     def refresh_video_metadata(
         self,

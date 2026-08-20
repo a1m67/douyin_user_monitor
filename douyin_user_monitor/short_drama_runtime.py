@@ -23,6 +23,7 @@ from douyin_user_monitor.short_drama_settings import (
     load_cookie_header,
     load_short_drama_settings,
 )
+from douyin_user_monitor.ocr import HttpOCRBackend
 
 
 @dataclass
@@ -84,6 +85,7 @@ def build_short_drama_runtime(settings: ShortDramaSettings | None = None) -> Sho
         llm_backend=llm_backend,
         auto_accept_confidence=resolved_settings.auto_accept_confidence,
     )
+    ocr_backend = HttpOCRBackend(api_url=resolved_settings.ocr_api_url, api_key=resolved_settings.ocr_api_key, timeout_seconds=resolved_settings.ocr_timeout_seconds) if resolved_settings.ocr_enabled else None
     pipeline = ShortDramaPipeline(
         repository=repository,
         provider=provider,
@@ -95,6 +97,8 @@ def build_short_drama_runtime(settings: ShortDramaSettings | None = None) -> Sho
         notify_on_initial_sync=resolved_settings.notify_on_initial_sync,
         dispatcher=dispatcher,
         default_check_interval_minutes=resolved_settings.check_interval_minutes,
+        ocr_backend=ocr_backend,
+        ocr_timeout_seconds=resolved_settings.ocr_timeout_seconds,
     )
     scheduler = AccountScheduler(
         repository=repository,

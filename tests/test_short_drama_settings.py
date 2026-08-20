@@ -65,6 +65,12 @@ class ShortDramaSettingsTests(unittest.TestCase):
         self.assertFalse(settings.legacy_monitor_enabled)
         self.assertEqual(settings.scan_run_retention_days, 30)
         self.assertEqual(settings.backup_retention_count, 14)
+        self.assertFalse(settings.ocr_enabled)
+        self.assertEqual(settings.ocr_timeout_seconds, 15)
+
+    def test_enabled_ocr_requires_api_url(self):
+        with self.assertRaisesRegex(ValueError, "OCR_API_URL"):
+            load_short_drama_settings(project_root=self.root, environ={"OCR_ENABLED": "true"})
 
     def test_security_defaults_are_disabled_and_compose_binds_localhost(self):
         settings = load_short_drama_settings(project_root=self.root, environ={})

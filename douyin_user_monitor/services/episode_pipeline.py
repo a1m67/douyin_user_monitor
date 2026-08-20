@@ -17,6 +17,7 @@ from douyin_user_monitor.parsers.regex import normalize_title
 from douyin_user_monitor.providers.base import DouyinProvider, ProviderAccount, ProviderVideo
 from douyin_user_monitor.repositories.sqlite import EpisodeWriteResult, ShortDramaRepository
 from douyin_user_monitor.video_text import build_video_text_metadata
+from douyin_user_monitor.ocr import OCRBackend, run_ocr
 
 logger = logging.getLogger(__name__)
 
@@ -122,6 +123,8 @@ class ShortDramaPipeline:
         notify_on_initial_sync: bool = False,
         dispatcher: EpisodeUpdateDispatcher | None = None,
         default_check_interval_minutes: int = 10,
+        ocr_backend: OCRBackend | None = None,
+        ocr_timeout_seconds: float = 15,
     ) -> None:
         if not 0.0 <= auto_accept_confidence <= 1.0:
             raise ValueError("AUTO_ACCEPT_CONFIDENCE 必须在 0 到 1 之间")
@@ -143,6 +146,8 @@ class ShortDramaPipeline:
         self._notify_on_initial_sync = notify_on_initial_sync
         self._dispatcher = dispatcher
         self._default_check_interval_minutes = default_check_interval_minutes
+        self._ocr_backend = ocr_backend
+        self._ocr_timeout_seconds = ocr_timeout_seconds
 
     async def add_account(
         self,
@@ -574,6 +579,31 @@ class ShortDramaPipeline:
             ),
             text_sources=text_metadata.text_sources,
         )
+        if parsed.status == REVIEW and video.get("cover_url") and (
+            self._ocr_backend is not None or video.get("ocr_processed_at")
+        ):
+            ocr_text = str(video.get("ocr_text") or "").strip()
+            if not video.get("ocr_processed_at") and self._ocr_backend is not None:
+                try:
+                    ocr_result = run_ocr(self._ocr_backend, str(video["cover_url"]), self._ocr_timeout_seconds)
+                    video = self._repository.save_video_ocr(int(video["id"]), text=ocr_result.text, confidence=ocr_result.confidence)
+                    ocr_text = ocr_result.text if ocr_result.confidence >= 0.8 else ""
+                except Exception:
+                    video = self._repository.save_video_ocr(int(video["id"]), text=None, confidence=None)
+                    ocr_text = ""
+            elif float(video.get("ocr_confidence") or 0) < 0.8:
+                ocr_text = ""
+            if ocr_text:
+                ocr_parsed = self._parser.parse(
+                    display_title=ocr_text, description=ocr_text, hashtags=(),
+                    account_nickname=str(account["nickname"]),
+                    known_shows=self._repository.list_show_candidates(),
+                    recent_account_videos=(), recent_account_matches=(),
+                    account_show_candidates=self._repository.list_account_show_candidates(str(account["id"]), limit=20),
+                    text_sources={"ocr": ocr_text},
+                )
+                if ocr_parsed.status == MATCHED and ocr_parsed.show_title and ocr_parsed.episode_number is not None:
+                    parsed = ocr_parsed
         candidate_title = parsed.show_title_candidate or parsed.show_title
         ignored_show = (
             self._repository.get_show_by_title_or_alias(candidate_title)

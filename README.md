@@ -114,6 +114,9 @@ PowerShell 下可将 `.venv/Scripts/python` 替换为 `.venv\Scripts\python.exe`
 | `LEGACY_MONITOR_ENABLED` | `false` | 仅迁移兼容时启动旧 JSON Monitor；新 SQLite 短剧调度器始终启用。 |
 | `SCAN_RUN_RETENTION_DAYS` | `30` | 巡检历史保留天数；启动时清理过期记录。 |
 | `BACKUP_RETENTION_COUNT` | `14` | `data/backups/app-*.db` 在线备份保留数量。 |
+| `OCR_ENABLED` | `false` | 是否为仍需审核且有封面的作品启用 OCR fallback。 |
+| `OCR_TIMEOUT_SECONDS` | `15` | 单次封面 OCR 超时。 |
+| `OCR_API_URL` / `OCR_API_KEY` | 空 | HTTP-compatible OCR 服务地址及可选密钥；密钥不记录。 |
 | `CHECK_INTERVAL_MINUTES` | `10` | 新账号默认检查间隔，可按账号覆盖。 |
 | `MAX_CONCURRENT_CHECKS` | `3` | 同时请求的账号上限。 |
 | `MAX_BACKOFF_MINUTES` | `60` | 连续失败时的退避上限。 |
@@ -163,7 +166,7 @@ Episode 1 --- * Notification
 
 `BuiltinDouyinProvider` 包装现有进程内 crawler。现有 `get_latest_videos()` 仍负责日常最新一页；新增 `get_video_page()` 只为用户主动历史补全提供 cursor 分页。以后可新增 `PlaywrightDouyinProvider`、`ApiDouyinProvider` 或第三方 Provider，而不用更改短剧业务服务。
 
-`EpisodeParser` 先运行 `RegexParser`；支持“第二季 / 第2季 / S2 / Season 2”以及 `S2E12` 等组合格式。仅在规则结果需要审核或置信度不足等受控条件下，才调用 OpenAI-compatible LLM fallback。高置信度且能匹配已有 Show 的完整集数建议可自动归档，其余进入人工审核。当前不会下载视频、抽帧、OCR、Whisper 或绕过验证码。
+`EpisodeParser` 先运行 `RegexParser`；支持“第二季 / 第2季 / S2 / Season 2”以及 `S2E12` 等组合格式。仅在规则结果需要审核或置信度不足等受控条件下，才调用 OpenAI-compatible LLM fallback。若仍需审核且存在封面，可选 OCR backend 只识别封面并把文本重新送入现有 parser；结果会缓存，不下载完整视频、不抽帧、不做 Whisper/ASR。
 
 ## 测试
 

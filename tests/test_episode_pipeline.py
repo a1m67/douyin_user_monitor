@@ -14,6 +14,7 @@ from douyin_user_monitor.providers.base import (
 from douyin_user_monitor.providers.fake import FakeDouyinProvider
 from douyin_user_monitor.repositories.sqlite import ShortDramaRepository
 from douyin_user_monitor.services.episode_pipeline import ShortDramaPipeline
+from douyin_user_monitor.ocr import FakeOCRBackend, OCRResult
 
 
 def make_video(aweme_id: str, description: str, timestamp: int) -> ProviderVideo:
@@ -132,6 +133,19 @@ class ShortDramaPipelineTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(updated_result.new_episode_updates), 1)
         self.assertEqual(updated_result.new_episode_updates[0].episode["episode_number"], 17)
         self.assertEqual(self.repository.get_show(show["id"])["latest_episode"], 17)
+
+    async def test_cover_ocr_reuses_parser_and_caches_result(self):
+        self.repository.create_show(title="归墟", normalized_title="归墟")
+        self.provider.videos_by_sec_uid["sec-one"] = [make_video("ocr-32", "第32集", 5)]
+        backend = FakeOCRBackend(OCRResult("《归墟》第32集", 0.95))
+        pipeline = ShortDramaPipeline(repository=self.repository, provider=self.provider, ocr_backend=backend)
+        account, _ = await pipeline.add_account(self.account_one_provider.homepage_url)
+        result = await pipeline.sync_account(account["id"])
+        video = self.repository.get_video_by_aweme_id("ocr-32")
+        self.assertEqual((result.new_videos, video["classification_status"], video["ocr_text"]), (1, "matched", "《归墟》第32集"))
+        self.assertEqual(backend.calls, 1)
+        pipeline._process_video(account=account, video=video)
+        self.assertEqual(backend.calls, 1)
 
     async def test_plain_video_is_saved_once_and_ignored_on_initial_sync(self):
         account, _ = await self.pipeline.add_account(self.account_one_provider.homepage_url)

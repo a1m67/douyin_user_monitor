@@ -43,6 +43,10 @@ class ShortDramaSettings:
     legacy_monitor_enabled: bool
     scan_run_retention_days: int
     backup_retention_count: int
+    ocr_enabled: bool
+    ocr_timeout_seconds: float
+    ocr_api_url: str
+    ocr_api_key: str
 
 
 def load_short_drama_settings(
@@ -113,6 +117,10 @@ def load_short_drama_settings(
         legacy_monitor_enabled=_boolean(values, "LEGACY_MONITOR_ENABLED", False),
         scan_run_retention_days=_positive_int(values, "SCAN_RUN_RETENTION_DAYS", 30),
         backup_retention_count=_positive_int(values, "BACKUP_RETENTION_COUNT", 14),
+        ocr_enabled=_boolean(values, "OCR_ENABLED", False),
+        ocr_timeout_seconds=_positive_float(values, "OCR_TIMEOUT_SECONDS", 15),
+        ocr_api_url=_value(values, "OCR_API_URL", ""),
+        ocr_api_key=_value(values, "OCR_API_KEY", ""),
     )
     if settings.llm_enabled:
         missing = [
@@ -126,6 +134,8 @@ def load_short_drama_settings(
         ]
         if missing:
             raise ValueError(f"启用 LLM 时必须设置: {', '.join(missing)}")
+    if settings.ocr_enabled and not settings.ocr_api_url:
+        raise ValueError("启用 OCR 时必须设置 OCR_API_URL")
     if settings.history_backfill_delay_max_seconds < settings.history_backfill_delay_min_seconds:
         raise ValueError(
             "HISTORY_BACKFILL_DELAY_MAX_SECONDS 不能小于 HISTORY_BACKFILL_DELAY_MIN_SECONDS"
