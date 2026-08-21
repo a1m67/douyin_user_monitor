@@ -1,3 +1,3 @@
     async function boot() { await refreshStatus(); try { const match=route.match(/^\/shows\/(\d+)$/); if(match) return renderShowDetail(match[1]); if(route==="/updates") return renderUpdates(); if(route==="/accounts") return renderAccounts(); if(route==="/videos") return renderVideos(); if(route==="/review") return renderReview(); if(route==="/status") return renderStatus(); if(route==="/settings/crawler") return renderCrawlerSettings(); if(route==="/quality") return renderQuality(); return renderShows(); } catch(error) { app.innerHTML=empty(error.message); } }
-    if ("serviceWorker" in navigator) window.addEventListener("load", () => navigator.serviceWorker.register("/sw.js"));
+    if ("serviceWorker" in navigator) window.addEventListener("load", () => navigator.serviceWorker.register(`/sw.js?v=${window.SHORT_DRAMA_CONFIG.buildId}`));
     boot();

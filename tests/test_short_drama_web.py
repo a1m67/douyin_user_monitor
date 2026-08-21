@@ -609,6 +609,21 @@ class ShortDramaWebTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('url.pathname.startsWith("/api/")', worker.text)
         self.assertNotIn("caches.match(event.request)", worker.text.split('url.pathname.startsWith("/api/")', 1)[1].split("return;", 1)[0])
 
+    async def test_build_identity_versions_assets_and_service_worker_cache(self):
+        page = self.client.get("/following")
+        version = self.client.get("/version")
+        self.assertEqual(version.status_code, 200)
+        build_id = version.json()["build_id"]
+        self.assertRegex(build_id, r"^[0-9a-f]{16}$")
+        self.assertIn(f"/static/app.js?v={build_id}", page.text)
+        versioned = self.client.get(f"/static/app.js?v={build_id}")
+        unversioned = self.client.get("/static/app.js")
+        self.assertIn("immutable", versioned.headers["cache-control"])
+        self.assertEqual(unversioned.headers["cache-control"], "no-cache")
+        worker = self.client.get("/sw.js")
+        self.assertIn(f'short-drama-shell-${{BUILD_ID}}', worker.text)
+        self.assertIn(f'const BUILD_ID = "{build_id}"', worker.text)
+
 
 if __name__ == "__main__":
     unittest.main()

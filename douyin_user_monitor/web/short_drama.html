@@ -8,7 +8,7 @@
   <link rel="manifest" href="/manifest.webmanifest" />
   <link rel="icon" href="/pwa-icon.svg" type="image/svg+xml" />
   <title>AI 短剧追更</title>
-  <link rel="stylesheet" href="/static/app.css" />
+  <link rel="stylesheet" href="/static/app.css?v={{BUILD_ID}}" />
 </head>
 <body>
   <div class="shell">
@@ -34,12 +34,12 @@
   </div>
   <div class="notice" id="notice" role="status"></div>
   <nav class="bottom-nav" aria-label="主导航"><a href="/following" data-bottom-nav="following">追更</a><a href="/updates" data-bottom-nav="updates">动态</a><a href="/shows" data-bottom-nav="shows">全部</a><a href="/review" data-bottom-nav="review">审核</a></nav>
-  <script>window.SHORT_DRAMA_CONFIG={defaultCheckIntervalMinutes:Number("{{DEFAULT_CHECK_INTERVAL_MINUTES}}")};</script>
-  <script src="/static/api.js"></script>
-  <script src="/static/core.js"></script>
-  <script src="/static/shows.js"></script>
-  <script src="/static/library.js"></script>
-  <script src="/static/system.js"></script>
-  <script src="/static/app.js"></script>
+  <script>window.SHORT_DRAMA_CONFIG={defaultCheckIntervalMinutes:Number("{{DEFAULT_CHECK_INTERVAL_MINUTES}}"),buildId:"{{BUILD_ID}}"};</script>
+  <script src="/static/api.js?v={{BUILD_ID}}"></script>
+  <script src="/static/core.js?v={{BUILD_ID}}"></script>
+  <script src="/static/shows.js?v={{BUILD_ID}}"></script>
+  <script src="/static/library.js?v={{BUILD_ID}}"></script>
+  <script src="/static/system.js?v={{BUILD_ID}}"></script>
+  <script src="/static/app.js?v={{BUILD_ID}}"></script>
 </body>
 </html>

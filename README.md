@@ -26,6 +26,7 @@
 - 按账号的 `next_check_at` 错峰巡检，有限并发和指数退避避免单个账号错误影响其他账号。
 - Dashboard：`/shows`、`/shows/{id}`、`/accounts`、`/videos`、`/review`、`/status`，以及 JSON 健康检查 `/health`。
 - Web 层按 API 模型/序列化、页面资源和浏览器功能域拆分；静态模块保持无构建步骤，便于 VPS 直接部署和调试。
+- `/version` 返回非敏感应用版本和资源 build ID；HTML 与 service worker 自动引用带内容版本的静态资源，解决 PWA 升级时新旧 JS 混用。
 - 作品 API 使用分页返回，并可组合作者、短剧、分类状态、解析方式、内容类型、关键词和发布日期筛选。
 - 人工审核可选择把候选剧名学习为 Show alias；冲突会明确拒绝，已有 alias 由规则层优先命中以减少 LLM 调用。
 

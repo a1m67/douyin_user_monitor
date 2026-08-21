@@ -8,7 +8,7 @@ Security, delivery reliability, maintainability, long-running storage, and daily
 - [x] Phase 2: Legacy monitor isolation
 - [x] Phase 3: Reliable notification outbox
 - [x] Phase 4: Complete web module split
-- [ ] Phase 5: Build identity and cache-safe PWA delivery
+- [x] Phase 5: Build identity and cache-safe PWA delivery
 - [ ] Phase 6: Automatic backups and maintenance worker
 - [ ] Phase 7: Bounded Douyin raw payload storage
 - [ ] Phase 8: Avatar, cover, and continue-watching UX
@@ -54,12 +54,12 @@ Security, delivery reliability, maintainability, long-running storage, and daily
 
 ### Phase 5
 
-- Status: pending
-- Main design: explicit build/version metadata, versioned static URLs, and deterministic service-worker cache upgrades.
-- Schema changes: none expected.
-- Tests: pending.
-- Commit: pending.
-- Production verification still needed: pending.
+- Status: complete
+- Main design: deterministic content-derived build identity, public non-sensitive `/version`, versioned immutable static URLs, and a build-scoped service-worker cache that removes prior shells on activation.
+- Schema changes: none; schema remains v19.
+- Tests: deterministic build format, versioned template URLs, immutable/version-mismatch cache headers, service-worker cache identity, Web/auth regression, and full suite.
+- Commit: recorded after implementation commit.
+- Production verification still needed: update an installed PWA across two production deployments and confirm the prior cache is removed.
 
 ### Phase 6
 
