@@ -169,6 +169,8 @@ def create_short_drama_router(
     configured_admin_token = admin_api_token.strip()
 
     async def require_admin_token(request: Request) -> None:
+        if getattr(request.state, "auth_mode", None) == "session":
+            return
         if not configured_admin_token or request.method in {"GET", "HEAD", "OPTIONS"}:
             return
         authorization = request.headers.get("authorization", "")

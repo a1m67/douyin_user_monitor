@@ -59,6 +59,8 @@ class ShortDramaSettingsTests(unittest.TestCase):
         self.assertEqual(settings.llm_timeout_seconds, 12.0)
         self.assertEqual(settings.llm_auto_accept_confidence, 0.92)
         self.assertEqual(settings.admin_api_token, "test-admin-token")
+        self.assertFalse(settings.app_auth_enabled)
+        self.assertEqual(settings.app_session_ttl_hours, 168)
         self.assertTrue(settings.crawler_circuit_breaker_enabled)
         self.assertEqual(settings.crawler_circuit_failure_threshold, 3)
         self.assertEqual(settings.crawler_circuit_open_minutes, 20)
@@ -71,6 +73,15 @@ class ShortDramaSettingsTests(unittest.TestCase):
     def test_enabled_ocr_requires_api_url(self):
         with self.assertRaisesRegex(ValueError, "OCR_API_URL"):
             load_short_drama_settings(project_root=self.root, environ={"OCR_ENABLED": "true"})
+
+    def test_enabled_app_auth_requires_password_and_strong_secret(self):
+        with self.assertRaisesRegex(ValueError, "APP_AUTH_PASSWORD"):
+            load_short_drama_settings(project_root=self.root, environ={"APP_AUTH_ENABLED": "true"})
+        with self.assertRaisesRegex(ValueError, "APP_SESSION_SECRET"):
+            load_short_drama_settings(
+                project_root=self.root,
+                environ={"APP_AUTH_ENABLED": "true", "APP_AUTH_PASSWORD": "secret", "APP_SESSION_SECRET": "short"},
+            )
 
     def test_security_defaults_are_disabled_and_compose_binds_localhost(self):
         settings = load_short_drama_settings(project_root=self.root, environ={})

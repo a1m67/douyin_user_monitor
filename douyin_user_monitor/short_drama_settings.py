@@ -37,6 +37,11 @@ class ShortDramaSettings:
     telegram_chat_id: str
     feishu_webhook_url: str
     admin_api_token: str
+    app_auth_enabled: bool
+    app_auth_password: str
+    app_session_secret: str
+    app_session_ttl_hours: int
+    app_cookie_secure: str
     crawler_circuit_breaker_enabled: bool
     crawler_circuit_failure_threshold: int
     crawler_circuit_open_minutes: int
@@ -107,6 +112,11 @@ def load_short_drama_settings(
         telegram_chat_id=_value(values, "TELEGRAM_CHAT_ID", ""),
         feishu_webhook_url=_value(values, "FEISHU_WEBHOOK_URL", ""),
         admin_api_token=_value(values, "ADMIN_API_TOKEN", ""),
+        app_auth_enabled=_boolean(values, "APP_AUTH_ENABLED", False),
+        app_auth_password=_value(values, "APP_AUTH_PASSWORD", ""),
+        app_session_secret=_value(values, "APP_SESSION_SECRET", ""),
+        app_session_ttl_hours=_positive_int(values, "APP_SESSION_TTL_HOURS", 168),
+        app_cookie_secure=_choice(values, "APP_COOKIE_SECURE", "auto", {"auto", "true", "false"}),
         crawler_circuit_breaker_enabled=_boolean(
             values, "CRAWLER_CIRCUIT_BREAKER_ENABLED", True
         ),
@@ -144,6 +154,11 @@ def load_short_drama_settings(
             raise ValueError(f"启用 LLM 时必须设置: {', '.join(missing)}")
     if settings.ocr_enabled and not settings.ocr_api_url:
         raise ValueError("启用 OCR 时必须设置 OCR_API_URL")
+    if settings.app_auth_enabled:
+        if not settings.app_auth_password:
+            raise ValueError("启用 APP_AUTH_ENABLED 时必须设置 APP_AUTH_PASSWORD")
+        if len(settings.app_session_secret.encode("utf-8")) < 32:
+            raise ValueError("启用 APP_AUTH_ENABLED 时 APP_SESSION_SECRET 至少需要 32 字节")
     if settings.history_backfill_delay_max_seconds < settings.history_backfill_delay_min_seconds:
         raise ValueError(
             "HISTORY_BACKFILL_DELAY_MAX_SECONDS 不能小于 HISTORY_BACKFILL_DELAY_MIN_SECONDS"
@@ -207,6 +222,13 @@ def _load_dotenv(path: Path) -> dict[str, str]:
 
 def _value(values: Mapping[str, str], key: str, default: str) -> str:
     return str(values.get(key, default) or "").strip()
+
+
+def _choice(values: Mapping[str, str], key: str, default: str, choices: set[str]) -> str:
+    result = _value(values, key, default).lower()
+    if result not in choices:
+        raise ValueError(f"{key} 必须是: {', '.join(sorted(choices))}")
+    return result
 
 
 def _path(root: Path, value: str) -> Path:

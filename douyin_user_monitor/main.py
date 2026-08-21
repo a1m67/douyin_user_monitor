@@ -13,6 +13,7 @@ from douyin_user_monitor.short_drama_runtime import (
 )
 from douyin_user_monitor.short_drama_settings import load_short_drama_settings
 from douyin_user_monitor.web.short_drama import create_short_drama_router
+from douyin_user_monitor.web.auth import AppAuthConfig, AppAuthMiddleware, create_auth_router
 
 
 class _RuntimeHolder:
@@ -54,6 +55,16 @@ def create_app(runtime: ShortDramaRuntime | None = None) -> FastAPI:
             await shutdown_monitor(active_runtime)
 
     application = FastAPI(title="AI 短剧追更系统", version="1.0.0", lifespan=lifespan)
+    auth_config = AppAuthConfig(
+        enabled=getattr(settings, "app_auth_enabled", False),
+        password=getattr(settings, "app_auth_password", ""),
+        session_secret=getattr(settings, "app_session_secret", ""),
+        session_ttl_hours=getattr(settings, "app_session_ttl_hours", 168),
+        cookie_secure=getattr(settings, "app_cookie_secure", "auto"),
+        admin_api_token=settings.admin_api_token,
+    )
+    application.add_middleware(AppAuthMiddleware, config=auth_config)
+    application.include_router(create_auth_router(auth_config))
     application.include_router(monitor_router, prefix="/api/monitor", tags=["Monitor"])
     application.include_router(
         create_short_drama_router(

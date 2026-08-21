@@ -72,7 +72,7 @@ Internet
   -> 127.0.0.1:8900
 ```
 
-面向浏览器使用时，优先在反向代理层保护整个 Dashboard。也可以设置 `ADMIN_API_TOKEN`，此时所有修改型 `/api/short-drama/*` 请求都必须携带 `Authorization: Bearer <token>`；GET 与 `/health` 不要求 token。Dashboard 不保存或自动发送该 token，因此该模式适用于 API-only 调用或由受信反向代理注入认证的场景。Token 不应写入 Compose、源码或日志。
+面向公网浏览器使用时，可启用内置单用户登录：设置 `APP_AUTH_ENABLED=true`、非空 `APP_AUTH_PASSWORD` 和至少 32 字节的 `APP_SESSION_SECRET`。浏览器使用签名、限时、HttpOnly Session Cookie；修改请求由前端自动携带 session-bound CSRF token。HTTPS 反代下 `APP_COOKIE_SECURE=auto` 会设置 Secure Cookie。`ADMIN_API_TOKEN` 继续用于 curl、脚本和自动化 Bearer 调用，并可绕过浏览器 Session/CSRF；所有 Secret 均不得写入源码或日志。
 
 ### 本地运行
 
@@ -111,6 +111,11 @@ PowerShell 下可将 `.venv/Scripts/python` 替换为 `.venv\Scripts\python.exe`
 | --- | --- | --- |
 | `DATABASE_URL` | `sqlite:///data/app.db` | 当前仅支持 SQLite URL。 |
 | `ADMIN_API_TOKEN` | 空 | 可选；保护修改型短剧 API。空值保持现有兼容行为。 |
+| `APP_AUTH_ENABLED` | `false` | 启用单用户 Dashboard 登录和全部短剧 API 认证。 |
+| `APP_AUTH_PASSWORD` | 空 | 单用户登录密码；只从运行环境读取。 |
+| `APP_SESSION_SECRET` | 空 | Session HMAC 密钥；启用认证时至少 32 字节。 |
+| `APP_SESSION_TTL_HOURS` | `168` | 登录 Session 有效小时数。 |
+| `APP_COOKIE_SECURE` | `auto` | `auto` 根据 HTTPS/反代协议设置 Secure，也可显式设为 true/false。 |
 | `LEGACY_MONITOR_ENABLED` | `false` | 仅迁移兼容时启动旧 JSON Monitor；新 SQLite 短剧调度器始终启用。 |
 | `SCAN_RUN_RETENTION_DAYS` | `30` | 巡检历史保留天数；启动时清理过期记录。 |
 | `BACKUP_RETENTION_COUNT` | `14` | `data/backups/app-*.db` 在线备份保留数量。 |
