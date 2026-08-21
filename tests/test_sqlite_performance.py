@@ -144,6 +144,14 @@ class SQLitePerformanceTests(unittest.TestCase):
             self.assertEqual(connection.execute("PRAGMA busy_timeout").fetchone()[0], 30_000)
             self.assertEqual(connection.execute("PRAGMA foreign_keys").fetchone()[0], 1)
 
+    def test_read_transaction_does_not_hold_process_write_lock(self):
+        with self.repository._transaction() as connection:
+            connection.execute("SELECT 1").fetchone()
+            self.assertFalse(self.repository._lock._is_owned())
+        with self.repository._transaction() as connection:
+            connection.execute("INSERT INTO app_meta(key, value) VALUES ('phase6_lock_test', '1') ON CONFLICT(key) DO UPDATE SET value=excluded.value")
+            self.assertTrue(self.repository._lock._is_owned())
+
     def test_video_and_update_pagination_remain_bounded(self):
         videos = self.repository.search_videos(page=2, page_size=25)
         updates = self.repository.list_update_events(

@@ -27,6 +27,55 @@ _UNSET = object()
 logger = logging.getLogger(__name__)
 
 
+class _LockingConnection:
+    """Acquire the process write lock lazily on the first mutating statement."""
+
+    _WRITE_PREFIXES = (
+        "INSERT", "UPDATE", "DELETE", "REPLACE", "CREATE", "ALTER", "DROP",
+        "VACUUM", "REINDEX", "ANALYZE",
+    )
+
+    def __init__(self, connection: sqlite3.Connection, lock: threading.RLock):
+        self._connection = connection
+        self._lock = lock
+        self._locked = False
+
+    def _ensure_write_lock(self, sql: str) -> None:
+        if self._locked or not str(sql).lstrip().upper().startswith(self._WRITE_PREFIXES):
+            return
+        self._lock.acquire()
+        self._locked = True
+
+    def execute(self, sql: str, parameters: Sequence[Any] = ()) -> sqlite3.Cursor:
+        self._ensure_write_lock(sql)
+        return self._connection.execute(sql, parameters)
+
+    def executemany(self, sql: str, parameters: Sequence[Sequence[Any]]) -> sqlite3.Cursor:
+        self._ensure_write_lock(sql)
+        return self._connection.executemany(sql, parameters)
+
+    def executescript(self, sql_script: str) -> sqlite3.Cursor:
+        self._ensure_write_lock("CREATE")
+        return self._connection.executescript(sql_script)
+
+    def commit(self) -> None:
+        self._connection.commit()
+
+    def rollback(self) -> None:
+        self._connection.rollback()
+
+    def close(self) -> None:
+        self._connection.close()
+
+    def release(self) -> None:
+        if self._locked:
+            self._locked = False
+            self._lock.release()
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._connection, name)
+
+
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
@@ -97,6 +146,30 @@ class ShortDramaRepository:
 
     @contextmanager
     def _transaction(self) -> Iterator[sqlite3.Connection]:
+        raw_connection = self._connect()
+        connection = _LockingConnection(raw_connection, self._lock)
+        try:
+            yield connection  # type: ignore[misc]
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            try:
+                connection.close()
+            finally:
+                connection.release()
+
+    @contextmanager
+    def _read_connection(self) -> Iterator[sqlite3.Connection]:
+        connection = self._connect()
+        try:
+            yield connection
+        finally:
+            connection.close()
+
+    @contextmanager
+    def _write_transaction(self) -> Iterator[sqlite3.Connection]:
         with self._lock:
             connection = self._connect()
             try:

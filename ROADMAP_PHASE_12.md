@@ -11,7 +11,7 @@ tested, and committed independently without pushing during the phase.
 - [x] Phase 3: Central Douyin request protection
 - [x] Phase 4: Normalized Show aliases
 - [x] Phase 5: Batch parser context snapshots
-- [ ] Phase 6: SQLite and scheduler concurrency
+- [x] Phase 6: SQLite and scheduler concurrency
 - [ ] Phase 7: Parser execution metrics
 - [ ] Phase 8: Episode watch progress
 - [ ] Phase 9: Modular short-drama web application
@@ -51,7 +51,7 @@ tested, and committed independently without pushing during the phase.
 - Main design: aliases are indexed by normalized value and queried in SQL; canonical titles remain on `shows`, parser candidates load aliases from the normalized table, and the legacy JSON field is maintained as an API-compatible mirror.
 - Schema changes: v16 adds `show_aliases` with cascading Show ownership and a unique normalized alias. Migration expands JSON aliases in Show-id order, retains the earliest alias owner, skips canonical-title conflicts, logs warnings, and repairs the compatibility mirror.
 - Tests: JSON migration conflict handling, SQL lookup, ignored-Show alias behavior, removal, canonical-title conflicts, merge/update compatibility, focused repository/parser/pipeline suite, and full suite.
-- Commit: `refactor: normalize show aliases` (SHA recorded after commit)
+- Commit: `727a20a` (`refactor: normalize show aliases`)
 - Production verification still needed: inspect migration warnings against a copied production database and confirm all expected legacy aliases remain assigned to the intended Show.
 
 ### Phase 5
@@ -60,17 +60,17 @@ tested, and committed independently without pushing during the phase.
 - Main design: `ParsingContextSnapshot` is built once per incremental sync, once per history page, and once per reparse batch. It carries known Shows, recent account videos/matches, and account candidates; successful matches update the in-memory windows so later videos in the same batch can use newly created context.
 - Schema changes: none.
 - Tests: repository context query-count assertions, same-batch bare-episode context resolution, history/pipeline regression, reparse snapshot reuse, and full suite.
-- Commit: `perf: reuse parser context per video batch` (SHA recorded after commit)
+- Commit: `5365145` (`perf: reuse parser context per video batch`)
 - Production verification still needed: compare SQL statement counts and parser latency on a copied production-sized database before/after deployment.
 
 ### Phase 6
 
-- Status: pending
-- Main design: pending
-- Schema changes: pending
-- Tests: pending
-- Commit: pending
-- Production verification still needed: pending
+- Status: complete
+- Main design: lazy write-lock acquisition for Repository connections lets pure reads proceed without the process write lock while preserving short write transactions and SQLite WAL safeguards. Scheduler uses per-account asyncio locks with bounded cleanup; the due loop retains its global concurrency cap.
+- Schema changes: none.
+- Tests: read/write lock behavior, same-account manual serialization, cross-account manual/scheduler independence, scheduler backoff/circuit regression, SQLite performance regression, and full suite.
+- Commit: `refactor: improve sqlite and scheduler concurrency` (SHA recorded after commit)
+- Production verification still needed: observe WAL write contention and scheduler overlap on a copied VPS workload, especially while history and latest scans target the same account.
 
 ### Phase 7
 

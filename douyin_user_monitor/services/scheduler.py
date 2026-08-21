@@ -76,7 +76,30 @@ class AccountScheduler:
         self._circuit_breaker = circuit_breaker
         self._request_guard = request_guard
         self._task: asyncio.Task[None] | None = None
-        self._run_lock = asyncio.Lock()
+        self._account_locks: dict[str, asyncio.Lock] = {}
+        self._account_lock_users: dict[str, int] = {}
+        self._account_locks_guard = asyncio.Lock()
+
+    async def _account_lock(self, account_id: str) -> asyncio.Lock:
+        async with self._account_locks_guard:
+            key = str(account_id)
+            self._account_lock_users[key] = self._account_lock_users.get(key, 0) + 1
+            return self._account_locks.setdefault(key, asyncio.Lock())
+
+    async def _run_one_account(self, account_id: str, *, force: bool, trigger_type: str) -> AccountCheckResult:
+        lock = await self._account_lock(account_id)
+        try:
+            async with lock:
+                return await self._check_account(account_id, force=force, trigger_type=trigger_type)
+        finally:
+            async with self._account_locks_guard:
+                key = str(account_id)
+                remaining = self._account_lock_users.get(key, 1) - 1
+                if remaining <= 0:
+                    self._account_lock_users.pop(key, None)
+                    self._account_locks.pop(key, None)
+                else:
+                    self._account_lock_users[key] = remaining
 
     async def start(self) -> None:
         if self._task is not None and not self._task.done():
@@ -97,22 +120,20 @@ class AccountScheduler:
         return "ok" if self._task is not None and not self._task.done() else "stopped"
 
     async def run_due_once(self) -> tuple[AccountCheckResult, ...]:
-        async with self._run_lock:
-            now = _as_utc(self._now())
-            accounts = self._repository.due_accounts(now=now.isoformat(timespec="seconds"), limit=500)
-            if not accounts:
-                return ()
-            semaphore = asyncio.Semaphore(self._config.max_concurrent_checks)
+        now = _as_utc(self._now())
+        accounts = self._repository.due_accounts(now=now.isoformat(timespec="seconds"), limit=500)
+        if not accounts:
+            return ()
+        semaphore = asyncio.Semaphore(self._config.max_concurrent_checks)
 
-            async def check(account_id: str) -> AccountCheckResult:
-                async with semaphore:
-                    return await self._check_account(account_id, trigger_type="scheduler")
+        async def check(account_id: str) -> AccountCheckResult:
+            async with semaphore:
+                return await self._run_one_account(account_id, force=False, trigger_type="scheduler")
 
-            return tuple(await asyncio.gather(*(check(str(account["id"])) for account in accounts)))
+        return tuple(await asyncio.gather(*(check(str(account["id"])) for account in accounts)))
 
     async def run_account_once(self, account_id: str, *, force: bool = False) -> AccountCheckResult:
-        async with self._run_lock:
-            return await self._check_account(account_id, force=force, trigger_type="manual")
+        return await self._run_one_account(account_id, force=force, trigger_type="manual")
 
     def crawler_status(self) -> dict[str, object]:
         if self._request_guard is not None:

@@ -41,6 +41,31 @@ class StubPipeline:
             self.active -= 1
 
 
+class ControlledPipeline(StubPipeline):
+    def __init__(self, blocked_account_id: str) -> None:
+        super().__init__()
+        self.blocked_account_id = blocked_account_id
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+        self.active_by_account: dict[str, int] = {}
+        self.max_active_by_account: dict[str, int] = {}
+
+    async def sync_account(self, account_id: str):
+        self.calls.append(account_id)
+        self.active_by_account[account_id] = self.active_by_account.get(account_id, 0) + 1
+        self.max_active_by_account[account_id] = max(
+            self.max_active_by_account.get(account_id, 0),
+            self.active_by_account[account_id],
+        )
+        try:
+            if account_id == self.blocked_account_id:
+                self.started.set()
+                await self.release.wait()
+            return StubSyncResult(account={"id": account_id})
+        finally:
+            self.active_by_account[account_id] -= 1
+
+
 class AccountSchedulerTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
         self.temp_dir = tempfile.TemporaryDirectory()
@@ -112,6 +137,32 @@ class AccountSchedulerTests(unittest.IsolatedAsyncioTestCase):
         scheduler = AccountScheduler(repository=self.repository, pipeline=StubPipeline(), config=SchedulerConfig(), now=lambda: self.now)
         await scheduler.run_account_once(account["id"])
         self.assertEqual(self.repository.list_scan_runs(account["id"])[0]["trigger_type"], "manual")
+
+    async def test_manual_account_a_does_not_block_account_b(self):
+        first = self.add_account("manual-a")
+        second = self.add_account("manual-b")
+        pipeline = ControlledPipeline(first["id"])
+        scheduler = AccountScheduler(repository=self.repository, pipeline=pipeline, config=SchedulerConfig(), now=lambda: self.now)
+        first_task = asyncio.create_task(scheduler.run_account_once(first["id"]))
+        await pipeline.started.wait()
+        second_result = await asyncio.wait_for(scheduler.run_account_once(second["id"]), timeout=0.5)
+        self.assertTrue(second_result.success)
+        pipeline.release.set()
+        await first_task
+
+    async def test_concurrent_manual_runs_for_same_account_are_serialized_and_cleaned_up(self):
+        account = self.add_account("manual-same")
+        pipeline = ControlledPipeline(account["id"])
+        scheduler = AccountScheduler(repository=self.repository, pipeline=pipeline, config=SchedulerConfig(), now=lambda: self.now)
+        first_task = asyncio.create_task(scheduler.run_account_once(account["id"]))
+        await pipeline.started.wait()
+        second_task = asyncio.create_task(scheduler.run_account_once(account["id"]))
+        await asyncio.sleep(0)
+        self.assertEqual(pipeline.max_active_by_account[account["id"]], 1)
+        pipeline.release.set()
+        await asyncio.gather(first_task, second_task)
+        self.assertEqual(pipeline.max_active_by_account[account["id"]], 1)
+        self.assertEqual(scheduler._account_locks, {})
 
     async def test_open_circuit_skips_pipeline_until_half_open_probe_succeeds(self):
         accounts = [self.add_account(name) for name in ("one", "two", "three", "four")]
