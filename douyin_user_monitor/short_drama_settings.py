@@ -40,6 +40,8 @@ class ShortDramaSettings:
     crawler_circuit_breaker_enabled: bool
     crawler_circuit_failure_threshold: int
     crawler_circuit_open_minutes: int
+    douyin_max_concurrent_requests: int
+    douyin_min_request_interval_seconds: float
     legacy_monitor_enabled: bool
     scan_run_retention_days: int
     backup_retention_count: int
@@ -113,6 +115,12 @@ def load_short_drama_settings(
         ),
         crawler_circuit_open_minutes=_positive_int(
             values, "CRAWLER_CIRCUIT_OPEN_MINUTES", 20
+        ),
+        douyin_max_concurrent_requests=_positive_int(
+            values, "DOUYIN_MAX_CONCURRENT_REQUESTS", 3
+        ),
+        douyin_min_request_interval_seconds=_non_negative_float(
+            values, "DOUYIN_MIN_REQUEST_INTERVAL_SECONDS", 0.5
         ),
         legacy_monitor_enabled=_boolean(values, "LEGACY_MONITOR_ENABLED", False),
         scan_run_retention_days=_positive_int(values, "SCAN_RUN_RETENTION_DAYS", 30),

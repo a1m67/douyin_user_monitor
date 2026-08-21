@@ -112,6 +112,10 @@ class CrawlerCircuitBreaker:
                 "retry_at": self._retry_at(),
             }
 
+    def reset(self) -> None:
+        with self._lock:
+            self._close()
+
     def _open(self, reason: str, now: datetime) -> None:
         self._state = "open"
         self._reason = reason

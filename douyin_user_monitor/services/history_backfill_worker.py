@@ -10,6 +10,10 @@ from typing import Awaitable, Callable
 
 from douyin_user_monitor.repositories.sqlite import ShortDramaRepository
 from douyin_user_monitor.services.episode_pipeline import ShortDramaPipeline
+from douyin_user_monitor.services.douyin_request_guard import (
+    DouyinCircuitOpenError,
+    DouyinRequestGuard,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -159,6 +163,14 @@ class HistoryBackfillWorker:
                         break
                     except asyncio.CancelledError:
                         raise
+                    except DouyinCircuitOpenError as exc:
+                        await self._sleep(
+                            min(
+                                60.0,
+                                DouyinRequestGuard.seconds_until_retry(exc.retry_at),
+                            )
+                        )
+                        return
                     except Exception as exc:  # noqa: BLE001 - provider/page errors are retried
                         if attempt == 2:
                             current = self._repository.get_account(account_id)

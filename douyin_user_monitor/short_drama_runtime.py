@@ -10,9 +10,11 @@ from douyin_user_monitor.notifiers.telegram import TelegramNotifier
 from douyin_user_monitor.parsers.episode_parser import EpisodeParser
 from douyin_user_monitor.parsers.llm import LLMParser, OpenAICompatibleLLMClient
 from douyin_user_monitor.providers.builtin_douyin import BuiltinDouyinProvider
+from douyin_user_monitor.providers.base import ProviderAccount
 from douyin_user_monitor.repositories.sqlite import ShortDramaRepository
 from douyin_user_monitor.services.episode_pipeline import ShortDramaPipeline
 from douyin_user_monitor.services.crawler_circuit_breaker import CrawlerCircuitBreaker
+from douyin_user_monitor.services.douyin_request_guard import DouyinRequestGuard
 from douyin_user_monitor.services.history_backfill_worker import (
     HistoryBackfillWorker,
     HistoryBackfillWorkerConfig,
@@ -56,7 +58,17 @@ def build_short_drama_runtime(settings: ShortDramaSettings | None = None) -> Sho
         resolved_settings.crawler_config_path,
         cookie_override=load_cookie_header(resolved_settings.cookie_file),
     )
-    provider = BuiltinDouyinProvider(crawler)
+    circuit_breaker = CrawlerCircuitBreaker(
+        enabled=resolved_settings.crawler_circuit_breaker_enabled,
+        failure_threshold=resolved_settings.crawler_circuit_failure_threshold,
+        open_minutes=resolved_settings.crawler_circuit_open_minutes,
+    )
+    request_guard = DouyinRequestGuard(
+        circuit_breaker=circuit_breaker,
+        max_concurrent_requests=resolved_settings.douyin_max_concurrent_requests,
+        min_request_interval_seconds=resolved_settings.douyin_min_request_interval_seconds,
+    )
+    provider = BuiltinDouyinProvider(crawler, request_guard=request_guard)
     repository = ShortDramaRepository(
         resolved_settings.database_path,
         legacy_state_path=resolved_settings.project_root / "data" / "monitor_users.json",
@@ -111,11 +123,7 @@ def build_short_drama_runtime(settings: ShortDramaSettings | None = None) -> Sho
             max_backoff_minutes=resolved_settings.max_backoff_minutes,
             poll_seconds=resolved_settings.scheduler_poll_seconds,
         ),
-        circuit_breaker=CrawlerCircuitBreaker(
-            enabled=resolved_settings.crawler_circuit_breaker_enabled,
-            failure_threshold=resolved_settings.crawler_circuit_failure_threshold,
-            open_minutes=resolved_settings.crawler_circuit_open_minutes,
-        ),
+        request_guard=request_guard,
     )
     history_backfill_worker = HistoryBackfillWorker(
         repository=repository,
@@ -130,7 +138,10 @@ def build_short_drama_runtime(settings: ShortDramaSettings | None = None) -> Sho
         account = next((item for item in repository.list_accounts() if item["enabled"]), None)
         if account is None:
             return {"status": "unknown", "reason": "没有可用的启用账号"}
-        await crawler.fetch_user_post_videos(str(account["sec_uid"]), 0, 1)
+        async with request_guard.force_requests():
+            await provider.get_video_page(
+                _runtime_provider_account(account), cursor=0, limit=1
+            )
         return {"status": "healthy", "reason": "验证请求成功"}
 
     cookie_manager = CookieManager(
@@ -147,4 +158,12 @@ def build_short_drama_runtime(settings: ShortDramaSettings | None = None) -> Sho
         scheduler=scheduler,
         history_backfill_worker=history_backfill_worker,
         cookie_manager=cookie_manager,
+    )
+
+
+def _runtime_provider_account(account: dict[str, object]) -> ProviderAccount:
+    return ProviderAccount(
+        id=str(account["id"]),
+        sec_uid=str(account["sec_uid"]),
+        homepage_url=str(account.get("homepage_url") or ""),
     )

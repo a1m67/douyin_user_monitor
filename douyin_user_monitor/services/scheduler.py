@@ -16,6 +16,10 @@ from douyin_user_monitor.services.crawler_circuit_breaker import (
     classify_crawler_error,
 )
 from douyin_user_monitor.services.episode_pipeline import ShortDramaPipeline, SyncResult
+from douyin_user_monitor.services.douyin_request_guard import (
+    DouyinCircuitOpenError,
+    DouyinRequestGuard,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +66,7 @@ class AccountScheduler:
         now: Callable[[], datetime] | None = None,
         jitter: Callable[[float, float], float] | None = None,
         circuit_breaker: CrawlerCircuitBreaker | None = None,
+        request_guard: DouyinRequestGuard | None = None,
     ) -> None:
         self._repository = repository
         self._pipeline = pipeline
@@ -69,6 +74,7 @@ class AccountScheduler:
         self._now = now or (lambda: datetime.now(timezone.utc))
         self._jitter = jitter or random.uniform
         self._circuit_breaker = circuit_breaker
+        self._request_guard = request_guard
         self._task: asyncio.Task[None] | None = None
         self._run_lock = asyncio.Lock()
 
@@ -109,6 +115,8 @@ class AccountScheduler:
             return await self._check_account(account_id, force=force, trigger_type="manual")
 
     def crawler_status(self) -> dict[str, object]:
+        if self._request_guard is not None:
+            return self._request_guard.snapshot()
         if self._circuit_breaker is None:
             return {"enabled": False, "state": "closed", "reason": None, "retry_at": None}
         return self._circuit_breaker.snapshot()
@@ -143,9 +151,23 @@ class AccountScheduler:
                     circuit_open=True,
                 )
         try:
-            sync_result = await self._pipeline.sync_account(account_id)
+            if force and self._request_guard is not None:
+                async with self._request_guard.force_requests():
+                    sync_result = await self._pipeline.sync_account(account_id)
+            else:
+                sync_result = await self._pipeline.sync_account(account_id)
         except Exception as exc:  # noqa: BLE001 - crawler/provider failure is an account failure
             error_type = classify_crawler_error(exc)
+            circuit_open = isinstance(exc, DouyinCircuitOpenError)
+            if circuit_open:
+                return AccountCheckResult(
+                    account_id=account_id,
+                    success=False,
+                    next_check_at=exc.retry_at or now.isoformat(timespec="seconds"),
+                    error=str(exc),
+                    error_type=exc.reason or "circuit_open",
+                    circuit_open=True,
+                )
             if self._circuit_breaker is not None:
                 self._circuit_breaker.record_failure(account_id, error_type)
             backoff_minutes = calculate_backoff_minutes(
@@ -172,6 +194,7 @@ class AccountScheduler:
                 next_check_at=str(stored["next_check_at"]),
                 error=_safe_error(exc),
                 error_type=error_type,
+                circuit_open=circuit_open,
             )
 
         if self._circuit_breaker is not None:

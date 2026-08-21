@@ -123,6 +123,8 @@ PowerShell 下可将 `.venv/Scripts/python` 替换为 `.venv\Scripts\python.exe`
 | `CRAWLER_CIRCUIT_BREAKER_ENABLED` | `true` | 是否启用全局抖音抓取熔断。 |
 | `CRAWLER_CIRCUIT_FAILURE_THRESHOLD` | `3` | 同类全局错误触发熔断所需的不同账号数。 |
 | `CRAWLER_CIRCUIT_OPEN_MINUTES` | `20` | OPEN 状态的冷却分钟数。 |
+| `DOUYIN_MAX_CONCURRENT_REQUESTS` | `3` | 所有 Douyin crawler 请求共享的全局并发上限。 |
+| `DOUYIN_MIN_REQUEST_INTERVAL_SECONDS` | `0.5` | 所有 Douyin crawler 请求之间的最小间隔。 |
 | `INITIAL_SYNC_LIMIT` | `20` | 首次同步最近作品数。 |
 | `INCREMENTAL_FETCH_LIMIT` | `30` | 首次同步之后每次日常巡检抓取的最新作品数。 |
 | `HISTORY_BACKFILL_PAGE_SIZE` | `20` | 后台历史补全每页扫描作品数。 |

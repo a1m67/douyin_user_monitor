@@ -8,7 +8,7 @@ tested, and committed independently without pushing during the phase.
 
 - [x] Phase 1: ShowSeason metadata
 - [x] Phase 2: Reliable Douyin empty-page handling
-- [ ] Phase 3: Central Douyin request protection
+- [x] Phase 3: Central Douyin request protection
 - [ ] Phase 4: Normalized Show aliases
 - [ ] Phase 5: Batch parser context snapshots
 - [ ] Phase 6: SQLite and scheduler concurrency
@@ -38,12 +38,12 @@ tested, and committed independently without pushing during the phase.
 
 ### Phase 3
 
-- Status: pending
-- Main design: pending
-- Schema changes: pending
-- Tests: pending
-- Commit: pending
-- Production verification still needed: pending
+- Status: complete
+- Main design: `DouyinRequestGuard` wraps provider profile/page/detail requests with the shared circuit, global semaphore, and minimum interval. Scheduler/history/manual and Cookie probe share the same runtime guard; force only bypasses circuit and resets it after a successful probe.
+- Schema changes: none; new settings `DOUYIN_MAX_CONCURRENT_REQUESTS` and `DOUYIN_MIN_REQUEST_INTERVAL_SECONDS` default to 3 and 0.5.
+- Tests: shared circuit, force reset, concurrency, rate interval, scheduler/history compatibility, and full suite.
+- Commit: `refactor: centralize douyin request protection` (SHA recorded after commit)
+- Production verification still needed: validate real Cookie probe behavior and tune interval/concurrency against VPS traffic limits.
 
 ### Phase 4
 

@@ -15,6 +15,7 @@ from douyin_user_monitor.providers.base import (
 )
 from douyin_user_monitor.providers.account_input import AccountInputResolver
 from douyin_user_monitor.video_text import build_video_text_metadata
+from douyin_user_monitor.services.douyin_request_guard import DouyinRequestGuard
 
 
 class BuiltinCrawlerProtocol(Protocol):
@@ -49,9 +50,12 @@ class BuiltinDouyinProvider:
         crawler: BuiltinCrawlerProtocol,
         *,
         account_input_resolver: AccountInputResolver | None = None,
+        request_guard: DouyinRequestGuard | None = None,
     ):
         self._crawler = crawler
-        self._account_input_resolver = account_input_resolver or AccountInputResolver(crawler)
+        self._request_guard = request_guard
+        resolver_crawler = _GuardedCrawler(crawler, request_guard) if request_guard else crawler
+        self._account_input_resolver = account_input_resolver or AccountInputResolver(resolver_crawler)
 
     async def resolve_account(self, homepage_url: str) -> ProviderAccount:
         resolved = await self._account_input_resolver.resolve(homepage_url)
@@ -62,7 +66,9 @@ class BuiltinDouyinProvider:
         )
 
     async def get_user_profile(self, account: ProviderAccount) -> ProviderProfile:
-        raw_profile = await self._crawler.handler_user_profile(account.sec_uid)
+        async def request() -> dict[str, Any]:
+            return await self._crawler.handler_user_profile(account.sec_uid)
+        raw_profile = await self._execute(account, request)
         if not isinstance(raw_profile, dict):
             raise ValueError("抖音用户资料格式无效")
         return ProviderProfile(
@@ -89,11 +95,11 @@ class BuiltinDouyinProvider:
             raise ValueError("limit 必须大于 0")
         if cursor < 0:
             raise ValueError("cursor 不能小于 0")
-        payload = await self._crawler.fetch_user_post_videos(
-            account.sec_uid,
-            max_cursor=cursor,
-            count=limit,
-        )
+        async def request() -> dict[str, Any]:
+            return await self._crawler.fetch_user_post_videos(
+                account.sec_uid, max_cursor=cursor, count=limit
+            )
+        payload = await self._execute(account, request)
         if not isinstance(payload, dict):
             raise MalformedResponseError("malformed_response: 抖音作品响应不是对象")
         if "aweme_list" not in payload:
@@ -124,6 +130,11 @@ class BuiltinDouyinProvider:
 
     async def aclose(self) -> None:
         await self._crawler.aclose()
+
+    async def _execute(self, account: ProviderAccount, operation, *, force: bool = False):
+        if self._request_guard is None:
+            return await operation()
+        return await self._request_guard.execute(account.sec_uid, operation, force=force)
 
     def _to_provider_video(self, raw: Mapping[str, Any]) -> ProviderVideo | None:
         aweme_id = str(raw.get("aweme_id") or "").strip()
@@ -257,3 +268,14 @@ def _extract_explicit_has_more(payload: Mapping[str, Any]) -> bool | None:
         except (TypeError, ValueError):
             return None
     return None
+
+
+class _GuardedCrawler:
+    def __init__(self, crawler: BuiltinCrawlerProtocol, guard: DouyinRequestGuard) -> None:
+        self._crawler = crawler
+        self._guard = guard
+
+    async def fetch_one_video(self, aweme_id: str) -> dict[str, Any]:
+        return await self._guard.execute(
+            f"video:{aweme_id}", lambda: self._crawler.fetch_one_video(aweme_id)
+        )
