@@ -24,6 +24,7 @@ def classify_crawler_error(exc: Exception) -> str:
         ("timeout", r"timeout|timed out|超时"),
         ("network", r"network|connection|connecterror|dns|网络|连接"),
         ("empty_response", r"empty[_ ]?response|空响应|响应为空"),
+        ("malformed_response", r"malformed[_ ]?response|格式无效|缺少\s*aweme_list|不是对象"),
     )
     for error_type, pattern in rules:
         if re.search(pattern, text, re.IGNORECASE):

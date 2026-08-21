@@ -2,7 +2,12 @@ from __future__ import annotations
 
 import unittest
 
-from douyin_user_monitor.providers.base import ProviderAccount
+from douyin_user_monitor.providers.base import (
+    MalformedResponseError,
+    PageResultState,
+    ProviderAccount,
+    TransientEmptyPageError,
+)
 from douyin_user_monitor.providers.builtin_douyin import BuiltinDouyinProvider
 
 
@@ -22,7 +27,7 @@ class StubCrawler:
 
     async def fetch_user_post_videos(self, sec_user_id: str, max_cursor: int, count: int):
         self.video_args = (sec_user_id, max_cursor, count)
-        return {
+        return getattr(self, "post_payload", {
             "aweme_list": [
                 {
                     "aweme_id": "1002",
@@ -39,7 +44,7 @@ class StubCrawler:
                     "create_time": 1_600_000_000,
                 },
             ]
-        }
+        })
 
     async def fetch_one_video(self, aweme_id: str):
         raise AssertionError(f"provider should not fetch video detail: {aweme_id}")
@@ -88,6 +93,26 @@ class BuiltinDouyinProviderTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([video.aweme_id for video in page.videos], ["1002", "1001"])
         self.assertEqual(page.next_cursor, 123)
         self.assertFalse(page.has_more)
+        self.assertEqual(page.state, PageResultState.SUCCESS)
+
+    async def test_empty_page_requires_explicit_end_of_feed(self):
+        account = ProviderAccount(id="1", sec_uid="sec-1")
+        self.crawler.post_payload = {"aweme_list": [], "has_more": 0, "max_cursor": 123}
+        page = await self.provider.get_video_page(account, cursor=123, limit=5)
+        self.assertEqual(page.state, PageResultState.END_OF_FEED)
+        self.assertFalse(page.has_more)
+
+        self.crawler.post_payload = {"aweme_list": [], "has_more": 1, "max_cursor": 123}
+        with self.assertRaises(TransientEmptyPageError):
+            await self.provider.get_video_page(account, cursor=123, limit=5)
+
+    async def test_malformed_pages_raise_classifiable_errors(self):
+        account = ProviderAccount(id="1", sec_uid="sec-1")
+        for payload in ({"has_more": 0}, [], {"aweme_list": None}, {"aweme_list": []}):
+            self.crawler.post_payload = payload
+            with self.subTest(payload=payload):
+                with self.assertRaises(MalformedResponseError):
+                    await self.provider.get_video_page(account, cursor=0, limit=5)
 
 
 if __name__ == "__main__":

@@ -7,7 +7,7 @@ tested, and committed independently without pushing during the phase.
 ## Progress
 
 - [x] Phase 1: ShowSeason metadata
-- [ ] Phase 2: Reliable Douyin empty-page handling
+- [x] Phase 2: Reliable Douyin empty-page handling
 - [ ] Phase 3: Central Douyin request protection
 - [ ] Phase 4: Normalized Show aliases
 - [ ] Phase 5: Batch parser context snapshots
@@ -29,12 +29,12 @@ tested, and committed independently without pushing during the phase.
 
 ### Phase 2
 
-- Status: pending
-- Main design: pending
-- Schema changes: pending
-- Tests: pending
-- Commit: pending
-- Production verification still needed: pending
+- Status: complete
+- Main design: provider pages expose explicit success/end/transient states; malformed payloads and transient empty pages raise classified errors, and history advances only after a valid page.
+- Schema changes: none.
+- Tests: provider payload matrix, transient retry/success, three-attempt failure with unchanged cursor, focused pipeline/worker tests, and full suite (209 tests) passed.
+- Commit: `fix: distinguish douyin empty pages from completion` (SHA recorded after commit)
+- Production verification still needed: observe real risk-control and expired-cookie payloads to confirm crawler error messages retain the intended classification.
 
 ### Phase 3
 

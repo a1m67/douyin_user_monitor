@@ -14,7 +14,13 @@ from douyin_user_monitor.monitor.history_sync import (
 from douyin_user_monitor.parsers.base import IGNORED, MATCHED, REVIEW
 from douyin_user_monitor.parsers.episode_parser import EpisodeParser
 from douyin_user_monitor.parsers.regex import normalize_title
-from douyin_user_monitor.providers.base import DouyinProvider, ProviderAccount, ProviderVideo
+from douyin_user_monitor.providers.base import (
+    DouyinProvider,
+    PageResultState,
+    ProviderAccount,
+    ProviderVideo,
+    TransientEmptyPageError,
+)
 from douyin_user_monitor.repositories.sqlite import EpisodeWriteResult, ShortDramaRepository
 from douyin_user_monitor.video_text import build_video_text_metadata
 from douyin_user_monitor.ocr import OCRBackend, run_ocr
@@ -253,8 +259,12 @@ class ShortDramaPipeline:
                 cursor=cursor,
                 limit=self._history_backfill_page_size,
             )
+            if page.state == PageResultState.TRANSIENT_EMPTY:
+                raise TransientEmptyPageError(
+                    "empty_response: 抖音返回异常空页，历史游标保持不变"
+                )
             next_cursor = int(page.next_cursor)
-            effective_has_more = bool(page.has_more and page.videos)
+            effective_has_more = bool(page.has_more)
             known_cursors = set(history.get("cursor_history") or ())
             if seen_cursors is not None:
                 known_cursors.update(seen_cursors)

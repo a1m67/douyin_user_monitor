@@ -6,9 +6,12 @@ from typing import Any, Mapping, Protocol
 
 from douyin_user_monitor.providers.base import (
     ProviderAccount,
+    MalformedResponseError,
+    PageResultState,
     ProviderProfile,
     ProviderVideo,
     ProviderVideoPage,
+    TransientEmptyPageError,
 )
 from douyin_user_monitor.providers.account_input import AccountInputResolver
 from douyin_user_monitor.video_text import build_video_text_metadata
@@ -91,19 +94,32 @@ class BuiltinDouyinProvider:
             max_cursor=cursor,
             count=limit,
         )
-        raw_list = payload.get("aweme_list") if isinstance(payload, dict) else None
+        if not isinstance(payload, dict):
+            raise MalformedResponseError("malformed_response: 抖音作品响应不是对象")
+        if "aweme_list" not in payload:
+            raise MalformedResponseError("malformed_response: 抖音作品响应缺少 aweme_list")
+        raw_list = payload.get("aweme_list")
         if raw_list is None:
-            return ProviderVideoPage(videos=(), next_cursor=cursor, has_more=False)
+            raise MalformedResponseError("malformed_response: aweme_list 为空值")
         if not isinstance(raw_list, list) or not all(isinstance(item, dict) for item in raw_list):
-            raise ValueError("抖音作品列表格式无效")
+            raise MalformedResponseError("malformed_response: 抖音作品列表格式无效")
 
         videos = [self._to_provider_video(item) for item in raw_list]
         videos = [video for video in videos if video is not None]
         next_cursor = _extract_next_cursor(payload, fallback=cursor)
+        explicit_has_more = _extract_explicit_has_more(payload)
+        if not videos and explicit_has_more is None:
+            raise MalformedResponseError(
+                "malformed_response: 空作品页缺少有效 has_more，无法确认是否结束"
+            )
+        has_more = _extract_has_more(payload, current_cursor=cursor, next_cursor=next_cursor)
+        if not videos and has_more:
+            raise TransientEmptyPageError("empty_response: 抖音返回空作品页但仍标记 has_more")
         return ProviderVideoPage(
             videos=tuple(sorted(videos, key=lambda video: video.publish_time or "", reverse=True)),
             next_cursor=next_cursor,
-            has_more=_extract_has_more(payload, current_cursor=cursor, next_cursor=next_cursor),
+            has_more=has_more,
+            state=(PageResultState.SUCCESS if videos else PageResultState.END_OF_FEED),
         )
 
     async def aclose(self) -> None:
@@ -225,6 +241,13 @@ def _extract_next_cursor(payload: Mapping[str, Any], *, fallback: int) -> int:
 
 
 def _extract_has_more(payload: Mapping[str, Any], *, current_cursor: int, next_cursor: int) -> bool:
+    explicit = _extract_explicit_has_more(payload)
+    if explicit is not None:
+        return explicit
+    return next_cursor != current_cursor
+
+
+def _extract_explicit_has_more(payload: Mapping[str, Any]) -> bool | None:
     value = payload.get("has_more")
     if isinstance(value, bool):
         return value
@@ -232,5 +255,5 @@ def _extract_has_more(payload: Mapping[str, Any], *, current_cursor: int, next_c
         try:
             return int(value) > 0
         except (TypeError, ValueError):
-            return False
-    return next_cursor != current_cursor
+            return None
+    return None

@@ -77,6 +77,19 @@ class SlowProvider(FakeDouyinProvider):
             self.active -= 1
 
 
+class TransientThenSuccessProvider(FakeDouyinProvider):
+    def __init__(self, *, transient_count: int, success_page: ProviderVideoPage, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.transient_count = transient_count
+        self.success_page = success_page
+
+    async def get_video_page(self, account, *, cursor: int, limit: int):
+        self.page_calls.append((account.sec_uid, cursor, limit))
+        if len(self.page_calls) <= self.transient_count:
+            return ProviderVideoPage(videos=(), next_cursor=cursor, has_more=True)
+        return self.success_page
+
+
 class PausableSleep:
     def __init__(self) -> None:
         self.started = asyncio.Event()
@@ -212,6 +225,39 @@ class HistoryBackfillWorkerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(stored["history_sync_status"], "completed")
         self.assertEqual([call[1] for call in provider.page_calls], [0, 20, 20])
         self.assertIsNone(stored["history_last_error"])
+
+    async def test_transient_empty_retries_without_advancing_cursor_then_succeeds(self):
+        account = self.account()
+        provider = TransientThenSuccessProvider(
+            transient_count=1,
+            success_page=page("v1", 1, 20, False),
+        )
+        pipeline, worker = self.build(provider)
+        pipeline.start_history_backfill(account["id"])
+        await worker.start()
+        await worker.wait_until_idle()
+
+        stored = self.repository.get_account(account["id"])
+        self.assertEqual(stored["history_sync_status"], "completed")
+        self.assertEqual(stored["history_processed_pages"], 1)
+        self.assertEqual([call[1] for call in provider.page_calls], [0, 0])
+
+    async def test_three_transient_empty_pages_fail_without_advancing_cursor(self):
+        account = self.account()
+        provider = TransientThenSuccessProvider(
+            transient_count=3,
+            success_page=page("unused", 1, 20, False),
+        )
+        pipeline, worker = self.build(provider)
+        pipeline.start_history_backfill(account["id"])
+        await worker.start()
+        await worker.wait_until_idle()
+
+        stored = self.repository.get_account(account["id"])
+        self.assertEqual(stored["history_sync_status"], "failed")
+        self.assertEqual(stored["history_next_cursor"], 0)
+        self.assertEqual(stored["history_processed_pages"], 0)
+        self.assertEqual(len(provider.page_calls), 3)
 
     async def test_startup_recovers_running_job_from_persisted_cursor(self):
         account = self.account()

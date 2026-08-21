@@ -2,7 +2,26 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Any, Mapping, Protocol
+
+
+class PageResultState(str, Enum):
+    SUCCESS = "success"
+    END_OF_FEED = "end_of_feed"
+    TRANSIENT_EMPTY = "transient_empty"
+
+
+class DouyinPageError(RuntimeError):
+    """Base class for provider page failures that must not advance history."""
+
+
+class TransientEmptyPageError(DouyinPageError):
+    pass
+
+
+class MalformedResponseError(DouyinPageError):
+    pass
 
 
 @dataclass(frozen=True)
@@ -40,6 +59,15 @@ class ProviderVideoPage:
     videos: tuple[ProviderVideo, ...]
     next_cursor: int
     has_more: bool
+    state: PageResultState | None = None
+
+    def __post_init__(self) -> None:
+        if self.state is not None:
+            return
+        state = PageResultState.SUCCESS
+        if not self.videos:
+            state = PageResultState.TRANSIENT_EMPTY if self.has_more else PageResultState.END_OF_FEED
+        object.__setattr__(self, "state", state)
 
 
 class DouyinProvider(Protocol):
