@@ -103,6 +103,26 @@ class ShortDramaPipelineTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.repository.list_update_events()["events"], [])
         return account
 
+    async def test_account_avatar_is_saved_and_refreshed_best_effort(self):
+        self.provider.profiles_by_sec_uid["sec-one"] = ProviderProfile(
+            nickname="AI末日剧场",
+            avatar_url="https://img.example/avatar-old.jpg",
+        )
+        account, created = await self.pipeline.add_account(self.account_one_provider.homepage_url)
+        self.assertTrue(created)
+        self.assertEqual(account["avatar_url"], "https://img.example/avatar-old.jpg")
+
+        self.provider.profiles_by_sec_uid["sec-one"] = ProviderProfile(
+            nickname="AI末日剧场",
+            avatar_url="https://img.example/avatar-new.jpg",
+        )
+        await self.pipeline.sync_account(account["id"])
+
+        self.assertEqual(
+            self.repository.get_account(account["id"])["avatar_url"],
+            "https://img.example/avatar-new.jpg",
+        )
+
     async def test_acceptance_scenarios_a_to_d(self):
         first_account = await self.add_first_account_and_sync_baseline()
         shows = self.repository.list_shows()

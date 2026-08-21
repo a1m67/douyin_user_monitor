@@ -37,7 +37,11 @@ class ShortDramaWebTests(unittest.IsolatedAsyncioTestCase):
         provider_account = ProviderAccount(id="", sec_uid="sec-1", homepage_url="https://www.douyin.com/user/sec-1")
         provider = FakeDouyinProvider(
             accounts_by_url={provider_account.homepage_url: provider_account},
-            profiles_by_sec_uid={"sec-1": ProviderProfile(nickname="AI剧场")},
+            profiles_by_sec_uid={
+                "sec-1": ProviderProfile(
+                    nickname="AI剧场", avatar_url="https://img.example/ai-theater.jpg"
+                )
+            },
             videos_by_sec_uid={
                 "sec-1": [
                     ProviderVideo(
@@ -110,10 +114,18 @@ class ShortDramaWebTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("移除此集", page_source)
         self.assertIn("移除来源", page_source)
         self.assertIn("role=\"link\"", page_source)
-        self.assertIn("!event.target.closest('.show-menu')", page_source)
+        self.assertIn("!event.target.closest('.show-menu,.continue-link')", page_source)
+        self.assertIn("mediaThumb", static_source)
+        self.assertIn("account-avatar", page_source)
+        self.assertIn("continue_watching", static_source)
 
         payload = self.client.get("/api/short-drama/shows").json()
         self.assertEqual(payload["shows"][0]["title"], "末日重生")
+        self.assertEqual(payload["shows"][0]["continue_watching"]["episode_number"], 12)
+        self.assertEqual(
+            self.client.get("/api/short-drama/accounts").json()["accounts"][0]["avatar_url"],
+            "https://img.example/ai-theater.jpg",
+        )
         detail = self.client.get(f"/api/short-drama/shows/{payload['shows'][0]['id']}").json()
         self.assertEqual(detail["show"]["episodes"][0]["episode_number"], 12)
         self.assertEqual(detail["show"]["seasons"][0]["season_number"], 1)
@@ -582,7 +594,7 @@ class ShortDramaWebTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_diagnostics_are_redacted_and_doctor_is_read_only(self):
         data = self.client.get("/api/short-drama/diagnostics").json()
-        self.assertEqual(data["database"]["schema_version"], 19)
+        self.assertEqual(data["database"]["schema_version"], 20)
         self.assertIn("llm_calls", data["parser_metrics_24h"])
         self.assertNotIn("token", str(data).lower())
         self.assertTrue(self.client.post("/api/short-drama/diagnostics/doctor").json()["ok"])

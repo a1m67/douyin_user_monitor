@@ -353,6 +353,60 @@ class ShortDramaRepositoryTests(unittest.TestCase):
         self.assertEqual(self.repository.set_watch_progress(show["id"], 2, 8)["watched_episode_number"], 8)
         self.assertIsNone(self.repository.get_watch_progress(show["id"], 1))
 
+    def test_show_cover_avatar_and_continue_watching_use_recorded_sources(self):
+        account = self.repository.create_account(
+            sec_uid="visual-source",
+            nickname="视觉作者",
+            avatar_url="https://img.example/avatar.jpg",
+            homepage_url="https://www.douyin.com/user/visual-source",
+        )
+        show = self.repository.create_show(title="继续观看", normalized_title="继续观看")
+        for number, cover in ((1, None), (3, "https://img.example/episode-3.jpg")):
+            video, _ = self.repository.create_video(
+                aweme_id=f"visual-{number}",
+                account_id=account["id"],
+                description=f"《继续观看》第{number}集",
+                hashtags=[],
+                publish_time=f"2026-08-{number:02d}T00:00:00+00:00",
+                video_url=f"https://www.douyin.com/video/visual-{number}",
+                cover_url=cover,
+                raw={},
+            )
+            self.repository.record_episode_source(
+                show_id=show["id"],
+                episode_number=number,
+                video_id=video["id"],
+                account_id=account["id"],
+                published_at=video["publish_time"],
+            )
+        self.repository.set_watch_progress(show["id"], 1, 1)
+
+        summary = self.repository.list_show_summaries()[0]
+        detail = self.repository.get_show_detail(show["id"])
+
+        self.assertEqual(summary["cover_url"], "https://img.example/episode-3.jpg")
+        self.assertEqual(summary["source_accounts"][0]["avatar_url"], "https://img.example/avatar.jpg")
+        self.assertEqual(summary["continue_watching"]["episode_number"], 3)
+        self.assertEqual(summary["continue_watching"]["video_url"], "https://www.douyin.com/video/visual-3")
+        self.assertEqual(detail["cover_url"], summary["cover_url"])
+        self.assertEqual(detail["continue_watching"]["episode_number"], 3)
+        self.assertEqual(detail["seasons"][0]["continue_watching"]["episode_number"], 3)
+        self.repository.set_watch_progress(show["id"], 1, 3)
+        self.assertIsNone(self.repository.get_show_detail(show["id"])["continue_watching"])
+
+    def test_v20_migration_adds_nullable_account_avatar(self):
+        account = self.create_account("avatar-migration")
+        with self.repository._transaction() as connection:
+            connection.execute("ALTER TABLE accounts DROP COLUMN avatar_url")
+            connection.execute(
+                "UPDATE app_meta SET value='19' WHERE key='schema_version'"
+            )
+
+        migrated = ShortDramaRepository(self.repository.database_path)
+
+        self.assertEqual(migrated.schema_version(), 20)
+        self.assertIsNone(migrated.get_account(account["id"])["avatar_url"])
+
     def test_v14_show_season_migration_only_copies_legacy_metadata_to_season_one(self):
         account = self.create_account("season-v14")
         show = self.repository.create_show(title="旧多季剧", normalized_title="旧多季剧")

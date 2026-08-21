@@ -17,7 +17,7 @@ from douyin_user_monitor.maintenance import backup_database
 from douyin_user_monitor.raw_payload import compact_video_raw
 
 
-SCHEMA_VERSION = 19
+SCHEMA_VERSION = 20
 SQLITE_BUSY_TIMEOUT_MS = 30_000
 SHOW_STATUSES = frozenset({"updating", "completed", "paused"})
 VIDEO_CLASSIFICATIONS = frozenset({"matched", "ignored", "review"})
@@ -193,6 +193,7 @@ class ShortDramaRepository:
             CREATE TABLE IF NOT EXISTS accounts (
                 id TEXT PRIMARY KEY,
                 nickname TEXT NOT NULL,
+                avatar_url TEXT,
                 sec_uid TEXT NOT NULL UNIQUE,
                 homepage_url TEXT NOT NULL,
                 enabled INTEGER NOT NULL DEFAULT 1,
@@ -495,6 +496,7 @@ class ShortDramaRepository:
             if not _table_has_column(connection, "videos", column):
                 connection.execute(f"ALTER TABLE videos ADD COLUMN {column} {definition}")
         for column, definition in {
+            "avatar_url": "TEXT",
             "history_sync_status": "TEXT NOT NULL DEFAULT 'idle'",
             "history_next_cursor": "INTEGER NOT NULL DEFAULT 0",
             "history_has_more": "INTEGER NOT NULL DEFAULT 1",
@@ -707,6 +709,7 @@ class ShortDramaRepository:
         sec_uid: str,
         nickname: str,
         homepage_url: str,
+        avatar_url: str | None = None,
         check_interval_minutes: int = 10,
         enabled: bool = True,
         initial_sync_completed: bool = False,
@@ -721,13 +724,14 @@ class ShortDramaRepository:
             connection.execute(
                 """
                 INSERT INTO accounts(
-                    id, nickname, sec_uid, homepage_url, enabled, check_interval_minutes,
+                    id, nickname, avatar_url, sec_uid, homepage_url, enabled, check_interval_minutes,
                     initial_sync_completed, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     account_id,
                     safe_nickname,
+                    _optional_text(avatar_url),
                     safe_sec_uid,
                     homepage_url.strip(),
                     int(enabled),
@@ -760,7 +764,10 @@ class ShortDramaRepository:
             return [_account_row(row) for row in rows]
 
     def update_account(self, account_id: str, **changes: Any) -> dict[str, Any]:
-        allowed = {"nickname", "homepage_url", "enabled", "check_interval_minutes", "next_check_at"}
+        allowed = {
+            "nickname", "avatar_url", "homepage_url", "enabled",
+            "check_interval_minutes", "next_check_at",
+        }
         values = {key: value for key, value in changes.items() if key in allowed}
         if not values:
             existing = self.get_account(account_id)
@@ -773,6 +780,8 @@ class ShortDramaRepository:
                 raise ValueError("昵称不能为空")
         if "homepage_url" in values:
             values["homepage_url"] = str(values["homepage_url"] or "").strip()
+        if "avatar_url" in values:
+            values["avatar_url"] = _optional_text(values["avatar_url"])
         if "enabled" in values:
             values["enabled"] = int(bool(values["enabled"]))
         if "check_interval_minutes" in values:
@@ -2005,7 +2014,57 @@ class ShortDramaRepository:
                     "AND episode_number > ? AND episode_number > 0",
                     (int(show["id"]), int(show.get("latest_season") or 1), watched),
                 ).fetchone()[0])
+                cover = connection.execute(
+                    """
+                    SELECT videos.cover_url
+                    FROM episodes
+                    JOIN episode_sources ON episode_sources.episode_id=episodes.id
+                    JOIN videos ON videos.id=episode_sources.video_id
+                    WHERE episodes.show_id=? AND videos.cover_url IS NOT NULL
+                      AND TRIM(videos.cover_url)<>''
+                    ORDER BY episodes.season_number DESC, episodes.episode_number DESC,
+                             COALESCE(episode_sources.published_at, episode_sources.created_at) ASC,
+                             episode_sources.id ASC
+                    LIMIT 1
+                    """,
+                    (int(show["id"]),),
+                ).fetchone()
+                show["cover_url"] = str(cover["cover_url"]) if cover else None
+                show["continue_watching"] = self._continue_watching_row(
+                    connection,
+                    int(show["id"]),
+                    int(show.get("latest_season") or 1),
+                    watched,
+                )
             return result
+
+    def _continue_watching_row(
+        self,
+        connection: sqlite3.Connection,
+        show_id: int,
+        season_number: int,
+        watched_episode_number: int,
+    ) -> dict[str, Any] | None:
+        row = connection.execute(
+            """
+            SELECT episodes.id AS episode_id, episodes.season_number, episodes.episode_number,
+                   videos.id AS video_id, videos.video_url, videos.cover_url,
+                   accounts.id AS account_id, accounts.nickname AS account_nickname
+            FROM episodes
+            JOIN episode_sources ON episode_sources.episode_id=episodes.id
+            JOIN videos ON videos.id=episode_sources.video_id
+            JOIN accounts ON accounts.id=episode_sources.account_id
+            WHERE episodes.show_id=? AND episodes.season_number=?
+              AND episodes.episode_number>? AND episodes.episode_number>0
+              AND TRIM(videos.video_url)<>''
+            ORDER BY episodes.episode_number ASC,
+                     COALESCE(episode_sources.published_at, episode_sources.created_at) ASC,
+                     episode_sources.id ASC
+            LIMIT 1
+            """,
+            (int(show_id), int(season_number), int(watched_episode_number)),
+        ).fetchone()
+        return _row_to_dict(row) if row else None
 
     def _source_accounts_for_shows(
         self, connection: sqlite3.Connection, show_ids: Sequence[int]
@@ -2015,14 +2074,14 @@ class ShortDramaRepository:
         placeholders = ",".join("?" for _ in show_ids)
         rows = connection.execute(
             f"""
-            SELECT episodes.show_id, accounts.id, accounts.nickname,
+            SELECT episodes.show_id, accounts.id, accounts.nickname, accounts.avatar_url,
                    MAX(COALESCE(episode_sources.published_at, episode_sources.created_at))
                        AS latest_source_at
             FROM episodes
             JOIN episode_sources ON episode_sources.episode_id = episodes.id
             JOIN accounts ON accounts.id = episode_sources.account_id
             WHERE episodes.show_id IN ({placeholders})
-            GROUP BY episodes.show_id, accounts.id, accounts.nickname
+            GROUP BY episodes.show_id, accounts.id, accounts.nickname, accounts.avatar_url
             ORDER BY latest_source_at DESC, accounts.nickname COLLATE NOCASE
             """,
             tuple(show_ids),
@@ -2030,7 +2089,11 @@ class ShortDramaRepository:
         result: dict[int, list[dict[str, Any]]] = {}
         for row in rows:
             result.setdefault(int(row["show_id"]), []).append(
-                {"id": str(row["id"]), "nickname": str(row["nickname"])}
+                {
+                    "id": str(row["id"]),
+                    "nickname": str(row["nickname"]),
+                    "avatar_url": _optional_text(row["avatar_url"]),
+                }
             )
         return result
 
@@ -2058,6 +2121,21 @@ class ShortDramaRepository:
             progress_rows = connection.execute(
                 "SELECT * FROM watch_progress WHERE show_id=?", (show_id,)
             ).fetchall()
+            cover_row = connection.execute(
+                """
+                SELECT videos.cover_url
+                FROM episodes
+                JOIN episode_sources ON episode_sources.episode_id=episodes.id
+                JOIN videos ON videos.id=episode_sources.video_id
+                WHERE episodes.show_id=? AND videos.cover_url IS NOT NULL
+                  AND TRIM(videos.cover_url)<>''
+                ORDER BY episodes.season_number DESC, episodes.episode_number DESC,
+                         COALESCE(episode_sources.published_at, episode_sources.created_at) ASC,
+                         episode_sources.id ASC
+                LIMIT 1
+                """,
+                (show_id,),
+            ).fetchone()
         show["episodes"] = episodes
         latest_season = int(show.get("latest_season") or 1)
         latest_episode = int(show["latest_episode"] or 0)
@@ -2112,6 +2190,7 @@ class ShortDramaRepository:
         show["seasons"].sort(key=lambda item: int(item["season_number"]), reverse=True)
         show["source_accounts"] = source_accounts.get(show_id, [])
         show["source_account_count"] = len(show["source_accounts"])
+        show["cover_url"] = str(cover_row["cover_url"]) if cover_row else None
         progress_map = {int(row["season_number"]): dict(row) for row in progress_rows}
         for season in show["seasons"]:
             progress = progress_map.get(int(season["season_number"]))
@@ -2121,7 +2200,51 @@ class ShortDramaRepository:
                 1 for episode in season["episodes"]
                 if int(episode["episode_number"]) > watched and int(episode["episode_number"]) > 0
             )
+            season["continue_watching"] = self._continue_watching_from_episodes(
+                season["episodes"], watched
+            )
+        latest = next(
+            (
+                season for season in show["seasons"]
+                if int(season["season_number"]) == latest_season
+            ),
+            None,
+        )
+        show["continue_watching"] = latest.get("continue_watching") if latest else None
         return show
+
+    @staticmethod
+    def _continue_watching_from_episodes(
+        episodes: Sequence[Mapping[str, Any]], watched_episode_number: int
+    ) -> dict[str, Any] | None:
+        candidates = sorted(
+            (
+                episode for episode in episodes
+                if int(episode["episode_number"]) > int(watched_episode_number)
+                and int(episode["episode_number"]) > 0
+            ),
+            key=lambda episode: int(episode["episode_number"]),
+        )
+        for episode in candidates:
+            source = next(
+                (
+                    item for item in episode.get("sources", [])
+                    if str(item.get("video_url") or "").strip()
+                ),
+                None,
+            )
+            if source:
+                return {
+                    "episode_id": int(episode["id"]),
+                    "season_number": int(episode["season_number"]),
+                    "episode_number": int(episode["episode_number"]),
+                    "video_id": int(source["video_id"]),
+                    "video_url": str(source["video_url"]),
+                    "cover_url": source.get("cover_url"),
+                    "account_id": str(source["account_id"]),
+                    "account_nickname": str(source["account_nickname"]),
+                }
+        return None
 
     def _sources_for_episodes(
         self, connection: sqlite3.Connection, episode_ids: Sequence[int]

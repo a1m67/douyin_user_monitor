@@ -11,7 +11,7 @@ Security, delivery reliability, maintainability, long-running storage, and daily
 - [x] Phase 5: Build identity and cache-safe PWA delivery
 - [x] Phase 6: Automatic backups and maintenance worker
 - [x] Phase 7: Bounded Douyin raw payload storage
-- [ ] Phase 8: Avatar, cover, and continue-watching UX
+- [x] Phase 8: Avatar, cover, and continue-watching UX
 - [ ] Phase 9: Optional adaptive scheduler
 
 ## Phase Records
@@ -81,12 +81,12 @@ Security, delivery reliability, maintainability, long-running storage, and daily
 
 ### Phase 8
 
-- Status: pending
-- Main design: reliable account avatars, show covers, and direct continue-watching actions.
-- Schema changes: pending.
-- Tests: pending.
-- Commit: pending.
-- Production verification still needed: pending.
+- Status: complete
+- Main design: persist provider avatars on short-drama accounts, derive resilient show covers from valid episode sources, and expose the next recorded regular episode after watch progress as a direct continue-watching action.
+- Schema changes: SQLite v20 adds nullable `accounts.avatar_url`; show cover and continue-watching data remain derived to avoid stale duplicate state.
+- Tests: avatar persistence and best-effort refresh, v19-to-v20 migration, derived cover selection, continue-watching across missing episodes, media URL validation and Web/API response regressions; full suite passed with 244 tests.
+- Commit: recorded after implementation commit.
+- Production verification still needed: verify Douyin avatar/cover URL longevity and broken-image fallback behavior on the deployed dashboard.
 
 ### Phase 9
 

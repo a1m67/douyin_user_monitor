@@ -252,6 +252,7 @@ class ShortDramaPipeline:
         account = self._repository.create_account(
             sec_uid=provider_account.sec_uid,
             nickname=_usable_nickname(profile.nickname, provider_account.sec_uid),
+            avatar_url=profile.avatar_url,
             homepage_url=provider_account.homepage_url or homepage_url,
             check_interval_minutes=check_interval_minutes or self._default_check_interval_minutes,
         )
@@ -263,10 +264,15 @@ class ShortDramaPipeline:
         return self._repository.update_account(
             account_id,
             nickname=_usable_nickname(profile.nickname, str(account["sec_uid"])),
+            avatar_url=profile.avatar_url,
         )
 
     async def sync_account(self, account_id: str, *, limit: int | None = None) -> SyncResult:
         account = self._require_account(account_id)
+        try:
+            account = await self.refresh_account_profile(account_id)
+        except Exception as exc:
+            logger.warning("[account] profile refresh failed account_id=%s reason=%s", account_id, exc)
         initial_sync = not bool(account["initial_sync_completed"])
         fetch_limit = limit or (
             self._initial_sync_limit if initial_sync else self._incremental_fetch_limit

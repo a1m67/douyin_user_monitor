@@ -11,6 +11,21 @@ const request = window.ShortDramaAPI.request;
     function escapeHtml(value) {
       return String(value ?? "").replace(/[&<>'"]/g, char => ({"&":"&amp;","<":"&lt;",">":"&gt;","'":"&#39;","\"":"&quot;"}[char]));
     }
+    function safeMediaUrl(value) {
+      try {
+        const url = new URL(String(value || ""));
+        return ["http:", "https:"].includes(url.protocol) ? url.href : "";
+      } catch (_) {
+        return "";
+      }
+    }
+    function mediaThumb(url, label, variant = "") {
+      const safeUrl = safeMediaUrl(url);
+      const fallback = Array.from(String(label || "?").trim())[0] || "?";
+      const classes = `media-thumb ${variant}`.trim();
+      if (!safeUrl) return `<span class="${classes} media-fallback" aria-hidden="true">${escapeHtml(fallback)}</span>`;
+      return `<span class="${classes}"><img src="${escapeHtml(safeUrl)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.hidden=true;this.nextElementSibling.hidden=false" /><span class="media-fallback" hidden aria-hidden="true">${escapeHtml(fallback)}</span></span>`;
+    }
     function formatTime(value, fallback = "-") {
       if (!value) return fallback;
       const date = new Date(value);
