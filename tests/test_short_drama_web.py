@@ -549,6 +549,12 @@ class ShortDramaWebTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(reparsed.status_code, 200)
         self.assertEqual(reparsed.json()["reparsed_count"], 1)
 
+    async def test_diagnostics_are_redacted_and_doctor_is_read_only(self):
+        data = self.client.get("/api/short-drama/diagnostics").json()
+        self.assertEqual(data["database"]["schema_version"], 14)
+        self.assertNotIn("token", str(data).lower())
+        self.assertTrue(self.client.post("/api/short-drama/diagnostics/doctor").json()["ok"])
+
 
 if __name__ == "__main__":
     unittest.main()

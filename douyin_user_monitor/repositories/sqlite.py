@@ -77,6 +77,9 @@ class ShortDramaRepository:
                 self._repair_placeholder_account_nicknames(connection)
                 self._set_meta(connection, "legacy_state_imported", utc_now())
 
+    def schema_version(self) -> int:
+        return SCHEMA_VERSION
+
     @contextmanager
     def _transaction(self) -> Iterator[sqlite3.Connection]:
         with self._lock:

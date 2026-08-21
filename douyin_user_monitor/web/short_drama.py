@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 
 from douyin_user_monitor.notifiers.dispatcher import NotificationDispatcher
 from douyin_user_monitor.repositories.sqlite import ShortDramaRepository
+from douyin_user_monitor.maintenance import backup_database, doctor_database
 from douyin_user_monitor.services.episode_pipeline import (
     HistoryBackfillResult,
     ShortDramaPipeline,
@@ -175,6 +176,10 @@ def create_short_drama_router(
 
     @router.get("/settings/crawler", response_class=HTMLResponse, include_in_schema=False)
     async def crawler_settings_page() -> HTMLResponse:
+        return page()
+
+    @router.get("/diagnostics", response_class=HTMLResponse, include_in_schema=False)
+    async def diagnostics_page() -> HTMLResponse:
         return page()
 
     def health_payload() -> dict[str, str]:
@@ -377,6 +382,28 @@ def create_short_drama_router(
     async def crawler_settings() -> dict[str, Any]:
         empty = {"configured": False, "status": "not_configured", "last_validated_at": None, "last_updated_at": None}
         return {"cookie": cookie_manager.status() if cookie_manager else empty}
+
+    @api.get("/diagnostics")
+    async def diagnostics() -> dict[str, Any]:
+        path = repository.database_path
+        doctor = doctor_database(path)
+        return {"database": {"path": path.name, "size_bytes": path.stat().st_size,
+                "schema_version": repository.schema_version(), "doctor_ok": doctor.ok,
+                "backup_count": len(list((path.parent / "backups").glob("app-*.db")))},
+                "scheduler": scheduler.health_status() if scheduler else "not_started",
+                "crawler": scheduler.crawler_status() if scheduler and hasattr(scheduler,"crawler_status") else {},
+                "cookie": cookie_manager.status() if cookie_manager else {"status":"not_configured"},
+                "features": {"llm": "configured_or_disabled", "ocr": "configured_or_disabled"}}
+
+    @api.post("/diagnostics/doctor")
+    async def run_doctor() -> dict[str, Any]:
+        report = doctor_database(repository.database_path)
+        return {"ok": report.ok, "checks": report.checks}
+
+    @api.post("/diagnostics/backup")
+    async def create_backup() -> dict[str, Any]:
+        path = backup_database(repository.database_path)
+        return {"created": True, "filename": path.name}
 
     @api.put("/settings/crawler/cookie")
     async def update_crawler_cookie(payload: CookieUpdatePayload) -> dict[str, Any]:

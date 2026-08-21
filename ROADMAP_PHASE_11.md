@@ -10,7 +10,7 @@ short-drama tracker. Phases are implemented, tested, and committed in order.
 - [x] Phase 3: Episode update feed and unread state
 - [x] Phase 4: Advanced episode corrections
 - [x] Phase 5: Web cookie management
-- [ ] Phase 6: System diagnostics dashboard
+- [x] Phase 6: System diagnostics dashboard
 - [ ] Phase 7: Data quality center
 - [ ] Phase 8: Mobile and PWA experience
 - [ ] Phase 9: Long-running SQLite performance
@@ -62,17 +62,17 @@ and production behavior that has not yet been verified.
 - Main design: `/settings/crawler` accepts a Cookie header or browser-export JSON, writes a private runtime file with temp/fsync/replace, reloads the in-process crawler immediately, exposes only masked status/timestamps, and probes one enabled account on demand. Existing admin write authentication protects save and test actions.
 - Schema changes: none.
 - Tests: focused cookie/settings/web suite - 21 passed; full suite - 191 passed.
-- Commit: this phase commit (SHA recorded during final roadmap pass)
+- Commit: `10febcc`
 - Not yet verified: a live VPS browser export, real Douyin login/risk-control classification, and filesystem ownership in the production container.
 
 ### Phase 6
 
-- Status: pending
-- Main design: pending
-- Schema changes: pending
-- Tests: pending
-- Commit: pending
-- Not yet verified: pending
+- Status: complete
+- Main design: Redacted diagnostics report database/schema/size/backups, scheduler, crawler circuit, Cookie, and LLM/OCR configuration state. Protected actions run read-only doctor and create a SQLite backup; `/health` remains lightweight.
+- Schema changes: none.
+- Tests: focused web diagnostic test - 1 passed; full suite - 192 passed.
+- Commit: this phase commit (SHA recorded during final roadmap pass)
+- Not yet verified: production backup permissions and live external-service probes.
 
 ### Phase 7
 
