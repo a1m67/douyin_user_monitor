@@ -7,6 +7,7 @@ import unittest
 from pathlib import Path
 
 from douyin_user_monitor.repositories.sqlite import ShortDramaRepository
+from douyin_user_monitor.parser_version import PARSER_VERSION
 
 
 class ShortDramaRepositoryTests(unittest.TestCase):
@@ -404,7 +405,7 @@ class ShortDramaRepositoryTests(unittest.TestCase):
 
         migrated = ShortDramaRepository(self.repository.database_path)
 
-        self.assertEqual(migrated.schema_version(), 21)
+        self.assertEqual(migrated.schema_version(), 22)
         self.assertIsNone(migrated.get_account(account["id"])["avatar_url"])
 
     def test_v20_migration_preserves_account_schedule_behavior(self):
@@ -416,7 +417,7 @@ class ShortDramaRepositoryTests(unittest.TestCase):
         migrated = ShortDramaRepository(self.repository.database_path)
         stored = migrated.get_account(account["id"])
 
-        self.assertEqual(migrated.schema_version(), 21)
+        self.assertEqual(migrated.schema_version(), 22)
         self.assertEqual(stored["schedule_mode"], "inherit")
         self.assertIsNone(stored["adaptive_min_interval_minutes"])
         self.assertIsNone(stored["adaptive_max_interval_minutes"])
@@ -1316,6 +1317,61 @@ class ShortDramaRepositoryTests(unittest.TestCase):
         self.assertEqual(refreshed["episode_candidate"], 39)
         self.assertEqual(refreshed["show_title_candidate"], "候选剧")
 
+    def test_outdated_parser_filters_and_reparse_scope_exclude_matched(self):
+        account = self.create_account("parser-outdated")
+        legacy_ignored = self.create_video(account["id"], "outdated-ignored")
+        current_review = self.create_video(account["id"], "current-review")
+        legacy_matched = self.create_video(account["id"], "outdated-matched")
+        self.repository.update_video_processing(
+            legacy_ignored["id"], is_processed=True, needs_review=False,
+            classification_status="ignored", parser_confidence=0.0,
+            parser_method="regex:legacy", content_type="non_drama",
+        )
+        self.repository.update_video_processing(
+            current_review["id"], is_processed=False, needs_review=True,
+            classification_status="review", parser_confidence=0.4,
+            parser_method="regex:current", parser_version=PARSER_VERSION,
+            parser_input_hash="a" * 64, processed_build_sha="build",
+        )
+        self.repository.update_video_processing(
+            legacy_matched["id"], is_processed=True, needs_review=False,
+            classification_status="matched", parser_confidence=1.0,
+            parsed_show_title="已归档短剧", parsed_episode_number=8,
+            parser_method="manual_review", content_type="episode",
+        )
+
+        outdated = self.repository.search_videos(parser_outdated=True, page_size=20)
+        current = self.repository.search_videos(parser_outdated=False, page_size=20)
+        reparse_ids = {
+            video["id"]
+            for video in self.repository.list_reparse_videos(account["id"], scope="outdated")
+        }
+
+        self.assertEqual(
+            {video["id"] for video in outdated["videos"]},
+            {legacy_ignored["id"], legacy_matched["id"]},
+        )
+        self.assertEqual({video["id"] for video in current["videos"]}, {current_review["id"]})
+        self.assertEqual(reparse_ids, {legacy_ignored["id"]})
+        self.assertIsNone(self.repository.get_video(legacy_matched["id"])["parser_version"])
+
+    def test_v21_migration_adds_nullable_parser_identity(self):
+        account = self.create_account("parser-migration")
+        video = self.create_video(account["id"], "parser-migration-video")
+        with self.repository._transaction() as connection:
+            connection.execute("ALTER TABLE videos DROP COLUMN parser_version")
+            connection.execute("ALTER TABLE videos DROP COLUMN parser_input_hash")
+            connection.execute("ALTER TABLE videos DROP COLUMN processed_build_sha")
+            connection.execute("UPDATE app_meta SET value='21' WHERE key='schema_version'")
+
+        migrated = ShortDramaRepository(self.repository.database_path)
+        stored = migrated.get_video(video["id"])
+
+        self.assertEqual(migrated.schema_version(), 22)
+        self.assertIsNone(stored["parser_version"])
+        self.assertIsNone(stored["parser_input_hash"])
+        self.assertIsNone(stored["processed_build_sha"])
+
 
     def test_move_episode_merges_conflict_and_keeps_sources_events_and_latest(self):
         account = self.create_account()
@@ -1389,6 +1445,7 @@ class ShortDramaRepositoryTests(unittest.TestCase):
         self.assertEqual(report["categories"]["review"]["count"], 1)
         self.assertEqual(report["categories"]["low_confidence"]["count"], 3)
         self.assertEqual(report["categories"]["missing_episodes"]["count"], 1)
+        self.assertEqual(report["categories"]["outdated_parser"]["count"], 3)
         self.assertEqual(report["categories"]["stale_shows"]["count"], 1)
 
 

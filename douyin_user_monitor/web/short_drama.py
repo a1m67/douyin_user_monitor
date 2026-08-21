@@ -463,12 +463,13 @@ def create_short_drama_router(
         classification_status: str | None = Query(default=None, pattern="^(matched|ignored|review)$"),
         account_id: str | None = None, show_id: int | None = None,
         parser_method: str | None = None,
+        parser_outdated: bool | None = None,
         content_type: str | None = Query(default=None, pattern="^(episode|trailer|show_content|unknown|non_drama)$"),
         q: str | None = Query(default=None, max_length=200), date_from: str | None = None, date_to: str | None = None,
         page: int = Query(default=1, ge=1), page_size: int = Query(default=50, ge=1, le=200),
         limit: int | None = Query(default=None, ge=1, le=500),
     ) -> dict[str, Any]:
-        return repository.search_videos(needs_review=needs_review, classification_status=classification_status, account_id=account_id, show_id=show_id, parser_method=parser_method, content_type=content_type, q=q, date_from=date_from, date_to=date_to, page=page, page_size=min(limit or page_size, 200))
+        return repository.search_videos(needs_review=needs_review, classification_status=classification_status, account_id=account_id, show_id=show_id, parser_method=parser_method, parser_outdated=parser_outdated, content_type=content_type, q=q, date_from=date_from, date_to=date_to, page=page, page_size=min(limit or page_size, 200))
 
     @api.post("/videos/{video_id}/reparse")
     async def reparse_video(video_id: int) -> dict[str, Any]:

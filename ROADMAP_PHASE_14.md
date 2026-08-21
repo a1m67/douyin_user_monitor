@@ -56,7 +56,12 @@ Transactional reliability, lightweight operations, parser governance, bounded AI
 
 ### Phase 5
 
-- Status: pending
+- Status: completed
+- Main design: persist a manually versioned parser identity, stable input hash, and build SHA for every parser outcome; expose outdated processing without automatically rewriting matched Episode records.
+- Schema changes: v22 adds nullable parser version, parser input hash, and processed build SHA to videos; null remains the legacy marker.
+- New settings: none; parser rule changes require an explicit `PARSER_VERSION` bump.
+- Tests: parser identity for matched/review/ignored results, stable input hash refresh behavior, outdated API and reparse filtering, v21 migration, quality reporting, focused repository/pipeline/web suites, and the complete 268-test suite.
+- Production verification still needed: confirm the quality center's legacy count and run a bounded outdated reparse on a backup-verified production database.
 
 ### Phase 6
 

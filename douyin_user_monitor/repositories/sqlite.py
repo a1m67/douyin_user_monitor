@@ -13,11 +13,12 @@ from pathlib import Path
 from typing import Any, Iterator, Mapping, Sequence
 
 from douyin_user_monitor.parsers.regex import normalize_title
+from douyin_user_monitor.parser_version import PARSER_VERSION
 from douyin_user_monitor.maintenance import backup_database
 from douyin_user_monitor.raw_payload import compact_video_raw
 
 
-SCHEMA_VERSION = 21
+SCHEMA_VERSION = 22
 SQLITE_BUSY_TIMEOUT_MS = 30_000
 SHOW_STATUSES = frozenset({"updating", "completed", "paused"})
 VIDEO_CLASSIFICATIONS = frozenset({"matched", "ignored", "review"})
@@ -331,6 +332,9 @@ class ShortDramaRepository:
                 parsed_season_number INTEGER NOT NULL DEFAULT 1,
                 parsed_episode_number INTEGER,
                 parser_method TEXT,
+                parser_version TEXT,
+                parser_input_hash TEXT,
+                processed_build_sha TEXT,
                 parser_reason TEXT,
                 show_title_candidate TEXT,
                 season_candidate INTEGER NOT NULL DEFAULT 1,
@@ -580,6 +584,9 @@ class ShortDramaRepository:
             "ocr_text": "TEXT",
             "ocr_confidence": "REAL",
             "ocr_processed_at": "TEXT",
+            "parser_version": "TEXT",
+            "parser_input_hash": "TEXT",
+            "processed_build_sha": "TEXT",
         }.items():
             if not _table_has_column(connection, "videos", column):
                 connection.execute(f"ALTER TABLE videos ADD COLUMN {column} {definition}")
@@ -1589,6 +1596,9 @@ class ShortDramaRepository:
         content_type: str = "unknown",
         parser_evidence: Mapping[str, Any] | None = None,
         llm_raw_result: Any | None = None,
+        parser_version: str | None = None,
+        parser_input_hash: str | None = None,
+        processed_build_sha: str | None = None,
     ) -> dict[str, Any]:
         resolved_status = classification_status or _classification_from_legacy_fields(
             needs_review=needs_review,
@@ -1616,6 +1626,7 @@ class ShortDramaRepository:
                     parser_reason = ?, show_title_candidate = ?, season_candidate = ?, episode_candidate = ?, content_type = ?,
                     parser_evidence = COALESCE(?, parser_evidence),
                     llm_raw_result = COALESCE(?, llm_raw_result),
+                    parser_version = ?, parser_input_hash = ?, processed_build_sha = ?,
                     processed_at = ?
                 WHERE id = ?
                 """,
@@ -1637,6 +1648,9 @@ class ShortDramaRepository:
                     json.dumps(llm_raw_result, ensure_ascii=False, separators=(",", ":"))
                     if llm_raw_result is not None
                     else None,
+                    _optional_text(parser_version),
+                    _optional_text(parser_input_hash),
+                    _optional_text(processed_build_sha),
                     utc_now() if is_processed else None,
                     video_id,
                 ),
@@ -1775,11 +1789,16 @@ class ShortDramaRepository:
             "legacy_ignored": "videos.parser_reason = 'legacy_ignored'",
             "ignored": "videos.classification_status = 'ignored'",
             "ignored_review": "videos.classification_status IN ('ignored', 'review')",
+            "outdated": "videos.classification_status IN ('ignored', 'review') "
+            "AND (videos.parser_version IS NULL OR videos.parser_version != ?)",
         }
         try:
             scope_filter = filters[scope]
         except KeyError as exc:
             raise ValueError("重新解析范围无效") from exc
+        params: tuple[Any, ...] = (str(account_id),)
+        if scope == "outdated":
+            params = (str(account_id), PARSER_VERSION)
         with self._transaction() as connection:
             rows = connection.execute(
                 f"""
@@ -1789,7 +1808,7 @@ class ShortDramaRepository:
                 ORDER BY COALESCE(videos.publish_time, videos.created_at) ASC, videos.id ASC
                 LIMIT 5000
                 """,
-                (str(account_id),),
+                params,
             ).fetchall()
             return [_video_row(row) for row in rows]
 
@@ -2411,7 +2430,7 @@ class ShortDramaRepository:
             result.setdefault(int(row["episode_id"]), []).append(_episode_source_row(row))
         return result
 
-    def search_videos(self, *, page: int = 1, page_size: int = 50, account_id: str | None = None, show_id: int | None = None, classification_status: str | None = None, parser_method: str | None = None, content_type: str | None = None, q: str | None = None, date_from: str | None = None, date_to: str | None = None, needs_review: bool | None = None) -> dict[str, Any]:
+    def search_videos(self, *, page: int = 1, page_size: int = 50, account_id: str | None = None, show_id: int | None = None, classification_status: str | None = None, parser_method: str | None = None, content_type: str | None = None, q: str | None = None, date_from: str | None = None, date_to: str | None = None, needs_review: bool | None = None, parser_outdated: bool | None = None) -> dict[str, Any]:
         safe_page, safe_size = max(1, int(page)), max(1, min(int(page_size), 200))
         joins = " FROM videos JOIN accounts ON accounts.id=videos.account_id LEFT JOIN episode_sources es ON es.video_id=videos.id LEFT JOIN episodes e ON e.id=es.episode_id LEFT JOIN shows ON shows.id=e.show_id "
         clauses: list[str] = []
@@ -2422,6 +2441,13 @@ class ShortDramaRepository:
                 params.append(value)
         if needs_review is not None:
             clauses.append("videos.needs_review=?"); params.append(int(needs_review))
+        if parser_outdated is not None:
+            clauses.append(
+                "(videos.parser_version IS NULL OR videos.parser_version != ?)"
+                if parser_outdated
+                else "videos.parser_version = ?"
+            )
+            params.append(PARSER_VERSION)
         if q and q.strip():
             term = f"%{q.strip()}%"; clauses.append("(videos.display_title LIKE ? OR videos.description LIKE ? OR videos.parsed_show_title LIKE ? OR videos.show_title_candidate LIKE ? OR videos.aweme_id LIKE ?)"); params.extend([term] * 5)
         if date_from: clauses.append("COALESCE(videos.publish_time,videos.created_at)>=?"); params.append(date_from)
@@ -3046,6 +3072,7 @@ class ShortDramaRepository:
             "source_less_episodes": ("""SELECT episodes.id,shows.id show_id,shows.title,episodes.season_number,episodes.episode_number FROM episodes JOIN shows ON shows.id=episodes.show_id LEFT JOIN episode_sources ON episode_sources.episode_id=episodes.id WHERE episode_sources.id IS NULL ORDER BY episodes.id""", ()),
             "low_confidence": ("""SELECT videos.id,accounts.nickname,COALESCE(videos.display_title,videos.description) title,videos.parser_confidence FROM videos JOIN accounts ON accounts.id=videos.account_id WHERE videos.classification_status!='ignored' AND videos.parser_confidence<0.90 ORDER BY videos.parser_confidence ASC""", ()),
             "ocr_only": ("""SELECT videos.id,accounts.nickname,COALESCE(videos.display_title,videos.description) title,videos.ocr_confidence FROM videos JOIN accounts ON accounts.id=videos.account_id WHERE videos.ocr_text IS NOT NULL AND videos.ocr_text!='' AND videos.parser_method LIKE 'ocr:%' ORDER BY videos.created_at DESC""", ()),
+            "outdated_parser": ("""SELECT videos.id,accounts.nickname,COALESCE(videos.display_title,videos.description) title,videos.classification_status,videos.parser_version FROM videos JOIN accounts ON accounts.id=videos.account_id WHERE videos.parser_version IS NULL OR videos.parser_version != ? ORDER BY videos.created_at DESC""", (PARSER_VERSION,)),
             "stale_shows": ("""SELECT id,title,latest_update_at FROM shows WHERE is_ignored=0 AND status='updating' AND (latest_update_at IS NULL OR latest_update_at<?) ORDER BY latest_update_at""", (cutoff,)),
         }
         result: dict[str, Any] = {"stale_days": max(1, stale_days), "categories": {}}

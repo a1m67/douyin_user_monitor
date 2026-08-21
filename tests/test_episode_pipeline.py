@@ -14,8 +14,12 @@ from douyin_user_monitor.providers.base import (
 )
 from douyin_user_monitor.providers.fake import FakeDouyinProvider
 from douyin_user_monitor.repositories.sqlite import ShortDramaRepository
-from douyin_user_monitor.services.episode_pipeline import ShortDramaPipeline
+from douyin_user_monitor.services.episode_pipeline import (
+    ShortDramaPipeline,
+    _metadata_refresh_changes_parser_inputs,
+)
 from douyin_user_monitor.ocr import FakeOCRBackend, OCRResult
+from douyin_user_monitor.parser_version import PARSER_VERSION, video_parser_input_hash
 
 
 def make_video(aweme_id: str, description: str, timestamp: int) -> ProviderVideo:
@@ -158,6 +162,11 @@ class ShortDramaPipelineTests(unittest.IsolatedAsyncioTestCase):
         events = self.repository.list_update_events()["events"]
         self.assertEqual(len(events), 1)
         self.assertEqual(events[0]["episode_number"], 17)
+        matched = self.repository.get_video_by_aweme_id("1004")
+        self.assertEqual(matched["parser_version"], PARSER_VERSION)
+        self.assertEqual(matched["parser_input_hash"], video_parser_input_hash(matched))
+        self.assertEqual(len(matched["parser_input_hash"]), 64)
+        self.assertTrue(matched["processed_build_sha"])
 
     async def test_cover_ocr_reuses_parser_and_caches_result(self):
         self.repository.create_show(title="归墟", normalized_title="归墟")
@@ -215,6 +224,9 @@ class ShortDramaPipelineTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(videos[0]["classification_status"], "ignored")
         self.assertTrue(videos[0]["is_processed"])
         self.assertFalse(videos[0]["needs_review"])
+        self.assertEqual(videos[0]["parser_version"], PARSER_VERSION)
+        self.assertEqual(len(videos[0]["parser_input_hash"]), 64)
+        self.assertTrue(videos[0]["processed_build_sha"])
 
     async def test_duplicate_provider_video_rehydrates_legacy_metadata_without_notification(self):
         dispatcher = RecordingDispatcher()
@@ -357,6 +369,24 @@ class ShortDramaPipelineTests(unittest.IsolatedAsyncioTestCase):
             [8],
         )
 
+    def test_metadata_refresh_reparses_only_when_stable_parser_inputs_change(self):
+        previous = {
+            "display_title": "第8集 | 《契鬼人》",
+            "description": "《契鬼人》第8集",
+            "hashtags": ["契鬼人"],
+            "text_sources": {"item_title": "《契鬼人》"},
+        }
+        previous["parser_input_hash"] = video_parser_input_hash(previous)
+        artwork_only = {
+            **previous,
+            "cover_url": "https://cover.example/new.jpg",
+            "video_url": "https://www.douyin.com/video/new",
+        }
+        changed = {**artwork_only, "description": "《契鬼人》第9集"}
+
+        self.assertFalse(_metadata_refresh_changes_parser_inputs(previous, artwork_only))
+        self.assertTrue(_metadata_refresh_changes_parser_inputs(previous, changed))
+
     async def test_known_show_without_episode_is_sent_to_review(self):
         account, _ = await self.pipeline.add_account(self.account_one_provider.homepage_url)
         self.repository.create_show(title="末日重生", normalized_title="末日重生")
@@ -379,6 +409,9 @@ class ShortDramaPipelineTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.ignored_videos, 0)
         self.assertEqual(review_video["aweme_id"], "3002")
         self.assertTrue(review_video["needs_review"])
+        self.assertEqual(review_video["parser_version"], PARSER_VERSION)
+        self.assertEqual(len(review_video["parser_input_hash"]), 64)
+        self.assertTrue(review_video["processed_build_sha"])
 
     async def test_ignored_show_alias_blocks_new_episodes_until_restored(self):
         dispatcher = RecordingDispatcher()

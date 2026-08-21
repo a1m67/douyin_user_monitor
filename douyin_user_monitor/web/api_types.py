@@ -100,7 +100,7 @@ class BatchVideoPayload(BaseModel):
 
 
 class ReparseAccountPayload(BaseModel):
-    scope: str = Field(default="legacy_ignored", pattern="^(legacy_ignored|ignored|ignored_review)$")
+    scope: str = Field(default="legacy_ignored", pattern="^(legacy_ignored|ignored|ignored_review|outdated)$")
 
 
 class CookieUpdatePayload(BaseModel):

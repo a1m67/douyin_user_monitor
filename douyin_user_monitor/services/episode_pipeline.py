@@ -15,6 +15,11 @@ from douyin_user_monitor.monitor.history_sync import (
 from douyin_user_monitor.parsers.base import IGNORED, MATCHED, REVIEW, ParseTrace
 from douyin_user_monitor.parsers.episode_parser import EpisodeParser
 from douyin_user_monitor.parsers.regex import normalize_title
+from douyin_user_monitor.parser_version import (
+    PARSER_VERSION,
+    current_build_sha,
+    video_parser_input_hash,
+)
 from douyin_user_monitor.providers.base import (
     DouyinProvider,
     PageResultState,
@@ -492,6 +497,9 @@ class ShortDramaPipeline:
             season_candidate=season_number,
             episode_candidate=episode_number,
             content_type="episode",
+            parser_version=PARSER_VERSION,
+            parser_input_hash=video_parser_input_hash(video),
+            processed_build_sha=current_build_sha(),
         )
         update = _episode_update_if_new(show, write, processed_video, account)
         return ManualReviewResult(
@@ -738,6 +746,11 @@ class ShortDramaPipeline:
                 display_title=text_metadata.display_title,
                 text_sources=text_metadata.text_sources,
             )
+        processing_identity = {
+            "parser_version": PARSER_VERSION,
+            "parser_input_hash": video_parser_input_hash(video),
+            "processed_build_sha": current_build_sha(),
+        }
         parsed, trace = _parse_with_trace(
             self._parser,
             display_title=text_metadata.display_title or "",
@@ -800,6 +813,7 @@ class ShortDramaPipeline:
                 parsed=parsed,
                 ignored_show=ignored_show,
                 candidate_title=candidate_title,
+                processing_identity=processing_identity,
             )
             return _VideoProcessingOutcome(status=IGNORED, update=None, video=video)
         if parsed.status == IGNORED:
@@ -826,6 +840,7 @@ class ShortDramaPipeline:
                 content_type=parsed.content_type,
                 parser_evidence=parsed.evidence,
                 llm_raw_result=parsed.llm_raw_result,
+                **processing_identity,
             )
             return _VideoProcessingOutcome(status=IGNORED, update=None, video=video)
 
@@ -862,6 +877,7 @@ class ShortDramaPipeline:
                 content_type=parsed.content_type,
                 parser_evidence=parsed.evidence,
                 llm_raw_result=parsed.llm_raw_result,
+                **processing_identity,
             )
             return _VideoProcessingOutcome(status=REVIEW, update=None, video=video)
 
@@ -880,6 +896,7 @@ class ShortDramaPipeline:
                 parsed=parsed,
                 ignored_show=show,
                 candidate_title=candidate_title,
+                processing_identity=processing_identity,
             )
             return _VideoProcessingOutcome(status=IGNORED, update=None, video=video)
         try:
@@ -919,6 +936,7 @@ class ShortDramaPipeline:
                 parsed=parsed,
                 ignored_show=refreshed_show,
                 candidate_title=candidate_title,
+                processing_identity=processing_identity,
             )
             return _VideoProcessingOutcome(status=IGNORED, update=None, video=video)
         processed_video = self._repository.update_video_processing(
@@ -938,6 +956,7 @@ class ShortDramaPipeline:
             content_type=parsed.content_type,
             parser_evidence=parsed.evidence,
             llm_raw_result=parsed.llm_raw_result,
+            **processing_identity,
         )
         return _VideoProcessingOutcome(
             status=MATCHED,
@@ -968,6 +987,7 @@ class ShortDramaPipeline:
         parsed: Any,
         ignored_show: dict[str, Any],
         candidate_title: str | None,
+        processing_identity: dict[str, str],
     ) -> None:
         logger.info(
             "[parse] ignored_show aweme_id=%s show_id=%s",
@@ -991,6 +1011,7 @@ class ShortDramaPipeline:
             content_type=parsed.content_type,
             parser_evidence=parsed.evidence,
             llm_raw_result=parsed.llm_raw_result,
+            **processing_identity,
         )
 
     def _require_account(self, account_id: str) -> dict[str, Any]:
@@ -1040,10 +1061,10 @@ def _metadata_refresh_changes_parser_inputs(
     refreshed: dict[str, Any],
 ) -> bool:
     """Avoid reprocessing when only artwork, playback links, or opaque raw data changed."""
-    return (
-        previous.get("description") != refreshed.get("description")
-        or previous.get("text_sources") != refreshed.get("text_sources")
-    )
+    previous_hash = str(previous.get("parser_input_hash") or "")
+    if not previous_hash:
+        previous_hash = video_parser_input_hash(previous)
+    return previous_hash != video_parser_input_hash(refreshed)
 
 
 def _provider_account(account: dict[str, Any]) -> ProviderAccount:

@@ -192,6 +192,8 @@ Episode 1 --- * Notification
 
 `EpisodeParser` 先运行 `RegexParser`；支持“第二季 / 第2季 / S2 / Season 2”以及 `S2E12` 等组合格式。仅在规则结果需要审核或置信度不足等受控条件下，才调用 OpenAI-compatible LLM fallback。若仍需审核且存在封面，可选 OCR backend 只识别封面并把文本重新送入现有 parser；结果会缓存，不下载完整视频、不抽帧、不做 Whisper/ASR。
 
+每条已处理作品会记录人工维护的 `PARSER_VERSION`、稳定输入 SHA256 和处理时 build SHA。`/videos` 可使用 `parser_outdated=true` 筛选旧版本结果；账号页的“旧 Parser”批量重新解析仅处理 ignored/review，历史 matched 记录不会被自动改写。
+
 ## 测试
 
 生产维护命令使用 SQLite 在线备份 API，`doctor` 默认只读；schema 升级前也会自动在数据库同级 `backups/` 创建快照：

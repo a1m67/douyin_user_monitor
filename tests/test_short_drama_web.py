@@ -618,7 +618,7 @@ class ShortDramaWebTests(unittest.IsolatedAsyncioTestCase):
         with patch("douyin_user_monitor.web.short_drama.doctor_database") as doctor:
             data = self.client.get("/api/short-drama/diagnostics").json()
         doctor.assert_not_called()
-        self.assertEqual(data["database"]["schema_version"], 21)
+        self.assertEqual(data["database"]["schema_version"], 22)
         self.assertIsNone(data["database"]["last_doctor_at"])
         self.assertGreaterEqual(data["database"]["database_latency_ms"], 0)
         self.assertEqual(
@@ -648,7 +648,8 @@ class ShortDramaWebTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.client.get("/quality").status_code, 200)
         data = self.client.get("/api/short-drama/quality").json()
         self.assertEqual(set(data["categories"]), {"review", "missing_episodes", "suspicious_jumps",
-            "expected_count_conflicts", "source_less_episodes", "low_confidence", "ocr_only", "stale_shows"})
+            "expected_count_conflicts", "source_less_episodes", "low_confidence", "ocr_only",
+            "outdated_parser", "stale_shows"})
 
     async def test_pwa_metadata_assets_and_mobile_navigation(self):
         page = self.client.get("/following")
