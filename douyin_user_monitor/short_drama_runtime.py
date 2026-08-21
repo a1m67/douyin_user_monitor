@@ -42,6 +42,7 @@ class ShortDramaRuntime:
 
     async def start(self) -> None:
         self.repository.prune_scan_runs(retention_days=self.settings.scan_run_retention_days)
+        await self.dispatcher.start()
         await self.history_backfill_worker.start()
         await self.scheduler.start()
 
@@ -83,7 +84,13 @@ def build_short_drama_runtime(settings: ShortDramaSettings | None = None) -> Sho
         )
     if resolved_settings.feishu_webhook_url:
         notifiers.append(FeishuNotifier(webhook_url=resolved_settings.feishu_webhook_url))
-    dispatcher = NotificationDispatcher(repository=repository, notifiers=notifiers)
+    dispatcher = NotificationDispatcher(
+        repository=repository, notifiers=notifiers,
+        poll_seconds=resolved_settings.notification_poll_seconds,
+        max_attempts=resolved_settings.notification_max_attempts,
+        max_backoff_seconds=resolved_settings.notification_max_backoff_seconds,
+        claim_timeout_seconds=resolved_settings.notification_claim_timeout_seconds,
+    )
     llm_backend = None
     if resolved_settings.llm_enabled:
         llm_backend = LLMParser(

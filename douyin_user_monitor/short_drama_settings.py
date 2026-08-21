@@ -36,6 +36,10 @@ class ShortDramaSettings:
     telegram_bot_token: str
     telegram_chat_id: str
     feishu_webhook_url: str
+    notification_poll_seconds: float
+    notification_max_attempts: int
+    notification_max_backoff_seconds: int
+    notification_claim_timeout_seconds: int
     admin_api_token: str
     app_auth_enabled: bool
     app_auth_password: str
@@ -111,6 +115,10 @@ def load_short_drama_settings(
         telegram_bot_token=_value(values, "TELEGRAM_BOT_TOKEN", ""),
         telegram_chat_id=_value(values, "TELEGRAM_CHAT_ID", ""),
         feishu_webhook_url=_value(values, "FEISHU_WEBHOOK_URL", ""),
+        notification_poll_seconds=_positive_float(values, "NOTIFICATION_POLL_SECONDS", 5.0),
+        notification_max_attempts=_positive_int(values, "NOTIFICATION_MAX_ATTEMPTS", 8),
+        notification_max_backoff_seconds=_positive_int(values, "NOTIFICATION_MAX_BACKOFF_SECONDS", 3600),
+        notification_claim_timeout_seconds=_positive_int(values, "NOTIFICATION_CLAIM_TIMEOUT_SECONDS", 300),
         admin_api_token=_value(values, "ADMIN_API_TOKEN", ""),
         app_auth_enabled=_boolean(values, "APP_AUTH_ENABLED", False),
         app_auth_password=_value(values, "APP_AUTH_PASSWORD", ""),

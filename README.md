@@ -22,6 +22,7 @@
 - 历史补全由独立后台 worker 连续分页，使用持久化 opaque cursor，支持暂停、继续、失败重试、服务重启恢复和重复页幂等；历史补全不发送旧集通知。
 - 短剧库展示实际收录数、正片/特殊集、缺集、来源作者，可按作者、剧名和忽略状态筛选；支持设置预计总集数、永久忽略错误 Show，以及移除误归档 Episode 或单个来源。
 - Telegram 和飞书 Webhook 通知；每个渠道的成功或失败都会记录，失败不会回滚 Video / Episode。
+- 通知先写入持久化 outbox，再由后台 worker 投递；同一剧集、事件和渠道只创建一个任务，失败按指数退避重试，服务重启可恢复超时任务。
 - 按账号的 `next_check_at` 错峰巡检，有限并发和指数退避避免单个账号错误影响其他账号。
 - Dashboard：`/shows`、`/shows/{id}`、`/accounts`、`/videos`、`/review`、`/status`，以及 JSON 健康检查 `/health`。
 - 作品 API 使用分页返回，并可组合作者、短剧、分类状态、解析方式、内容类型、关键词和发布日期筛选。
@@ -147,6 +148,10 @@ PowerShell 下可将 `.venv/Scripts/python` 替换为 `.venv\Scripts\python.exe`
 | `DOUYIN_COOKIE_FILE` | `data/cookies.json` | Cookie 文件路径。 |
 | `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` | 空 | 两者都配置后启用 Telegram。 |
 | `FEISHU_WEBHOOK_URL` | 空 | 配置后启用飞书通知。 |
+| `NOTIFICATION_POLL_SECONDS` | `5` | 通知 outbox worker 轮询间隔。 |
+| `NOTIFICATION_MAX_ATTEMPTS` | `8` | 单个通知任务最大投递次数。 |
+| `NOTIFICATION_MAX_BACKOFF_SECONDS` | `3600` | 通知失败退避上限。 |
+| `NOTIFICATION_CLAIM_TIMEOUT_SECONDS` | `300` | processing 任务被视为失联并重新领取的秒数。 |
 
 ## 数据与架构
 

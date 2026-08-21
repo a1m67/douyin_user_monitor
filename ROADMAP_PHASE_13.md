@@ -6,7 +6,7 @@ Security, delivery reliability, maintainability, long-running storage, and daily
 
 - [x] Phase 1: Single-user web authentication and CSRF
 - [x] Phase 2: Legacy monitor isolation
-- [ ] Phase 3: Reliable notification outbox
+- [x] Phase 3: Reliable notification outbox
 - [ ] Phase 4: Complete web module split
 - [ ] Phase 5: Build identity and cache-safe PWA delivery
 - [ ] Phase 6: Automatic backups and maintenance worker
@@ -36,12 +36,12 @@ Security, delivery reliability, maintainability, long-running storage, and daily
 
 ### Phase 3
 
-- Status: pending
-- Main design: persistent idempotent notification outbox with background retry and bounded backoff.
-- Schema changes: pending.
-- Tests: pending.
-- Commit: pending.
-- Production verification still needed: pending.
+- Status: complete
+- Main design: persistent idempotent notification outbox with background retry, stale-claim recovery, and bounded backoff.
+- Schema changes: v19 adds durable notification delivery jobs keyed by Episode, event type, and channel.
+- Tests: idempotent enqueue, successful delivery, retry recovery, stale processing recovery, dead-letter behavior, notification history compatibility, repository regression, and full suite (235 tests passed).
+- Commit: recorded after implementation commit.
+- Production verification still needed: Telegram/Feishu outage recovery and retry timing on the VPS; external endpoints provide at-least-once rather than transactional exactly-once delivery.
 
 ### Phase 4
 

@@ -85,6 +85,59 @@ class EpisodeNotificationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual({(item["channel"], item["success"]) for item in persisted}, {("success", True), ("failure", False)})
         self.assertEqual(self.repository.get_show_episodes(self.update.show["id"])[0]["episode_number"], 17)
 
+    async def test_dispatch_is_idempotent_per_episode_and_channel(self):
+        successful = SuccessfulNotifier()
+        dispatcher = NotificationDispatcher(repository=self.repository, notifiers=[successful])
+
+        await dispatcher.dispatch(self.update)
+        await dispatcher.dispatch(self.update)
+
+        self.assertEqual(len(successful.sent), 1)
+        deliveries = self.repository.list_notification_deliveries(episode_id=self.update.episode["id"])
+        self.assertEqual(len(deliveries), 1)
+        self.assertEqual(deliveries[0]["status"], "sent")
+
+    async def test_failed_delivery_retries_and_eventually_succeeds(self):
+        class FlakyNotifier(SuccessfulNotifier):
+            channel = "flaky"
+
+            def __init__(self) -> None:
+                super().__init__()
+                self.calls = 0
+
+            async def send_episode_update(self, notification: EpisodeNotification) -> None:
+                self.calls += 1
+                if self.calls == 1:
+                    raise RuntimeError("temporary")
+                await super().send_episode_update(notification)
+
+        notifier = FlakyNotifier()
+        dispatcher = NotificationDispatcher(repository=self.repository, notifiers=[notifier], max_attempts=3)
+        result = await dispatcher.dispatch(self.update)
+        self.assertFalse(result[0].success)
+        delivery = self.repository.list_notification_deliveries()[0]
+        self.assertEqual(delivery["status"], "retry")
+
+        with self.repository._write_transaction() as connection:
+            connection.execute("UPDATE notification_deliveries SET next_attempt_at='2000-01-01T00:00:00+00:00'")
+        self.assertEqual(await dispatcher.deliver_due(), 1)
+        self.assertEqual(self.repository.list_notification_deliveries()[0]["status"], "sent")
+
+    async def test_stale_processing_delivery_is_recovered(self):
+        successful = SuccessfulNotifier()
+        dispatcher = NotificationDispatcher(repository=self.repository, notifiers=[successful], claim_timeout_seconds=1)
+        await dispatcher.dispatch(self.update)
+        with self.repository._write_transaction() as connection:
+            connection.execute(
+                "UPDATE notification_deliveries SET status='processing', sent_at=NULL, locked_at='2000-01-01T00:00:00+00:00'"
+            )
+        self.assertEqual(await dispatcher.deliver_due(), 1)
+
+    async def test_max_attempts_marks_delivery_dead(self):
+        dispatcher = NotificationDispatcher(repository=self.repository, notifiers=[FailingNotifier()], max_attempts=1)
+        await dispatcher.dispatch(self.update)
+        self.assertEqual(self.repository.list_notification_deliveries()[0]["status"], "dead")
+
     async def test_telegram_uses_cover_photo_when_available(self):
         requests: list[httpx.Request] = []
 

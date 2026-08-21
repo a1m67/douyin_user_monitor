@@ -16,7 +16,7 @@ from douyin_user_monitor.parsers.regex import normalize_title
 from douyin_user_monitor.maintenance import backup_database
 
 
-SCHEMA_VERSION = 18
+SCHEMA_VERSION = 19
 SQLITE_BUSY_TIMEOUT_MS = 30_000
 SHOW_STATUSES = frozenset({"updating", "completed", "paused"})
 VIDEO_CLASSIFICATIONS = frozenset({"matched", "ignored", "review"})
@@ -313,6 +313,26 @@ class ShortDramaRepository:
                 sent_at TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS notification_deliveries (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                show_id INTEGER NOT NULL REFERENCES shows(id) ON DELETE CASCADE,
+                episode_id INTEGER NOT NULL REFERENCES episodes(id) ON DELETE CASCADE,
+                channel TEXT NOT NULL,
+                event_type TEXT NOT NULL DEFAULT 'new_episode',
+                payload_json TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending'
+                    CHECK (status IN ('pending', 'processing', 'retry', 'sent', 'dead')),
+                attempt_count INTEGER NOT NULL DEFAULT 0,
+                next_attempt_at TEXT NOT NULL,
+                last_error TEXT,
+                locked_at TEXT,
+                sent_at TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(episode_id, channel, event_type),
+                CHECK (attempt_count >= 0)
+            );
+
             CREATE TABLE IF NOT EXISTS show_seasons (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 show_id INTEGER NOT NULL REFERENCES shows(id) ON DELETE CASCADE,
@@ -418,6 +438,8 @@ class ShortDramaRepository:
                 );
             CREATE INDEX IF NOT EXISTS idx_notifications_episode
                 ON notifications(episode_id, sent_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_notification_deliveries_due
+                ON notification_deliveries(status, next_attempt_at, id);
             CREATE INDEX IF NOT EXISTS idx_scan_runs_account_started
                 ON scan_runs(account_id, started_at DESC);
             CREATE INDEX IF NOT EXISTS idx_scan_runs_account_order
@@ -548,6 +570,11 @@ class ShortDramaRepository:
             connection.execute(
                 "CREATE INDEX IF NOT EXISTS idx_watch_progress_show "
                 "ON watch_progress(show_id, season_number DESC)"
+            )
+        if previous_version < 19:
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_notification_deliveries_due "
+                "ON notification_deliveries(status, next_attempt_at, id)"
             )
         if previous_version >= SCHEMA_VERSION:
             return
@@ -2488,12 +2515,30 @@ class ShortDramaRepository:
                     """,
                     (target_episode_id, target_show_id, source_episode_id),
                 )
+                connection.execute(
+                    """DELETE FROM notification_deliveries
+                       WHERE episode_id=? AND EXISTS (
+                           SELECT 1 FROM notification_deliveries target
+                           WHERE target.episode_id=?
+                             AND target.channel=notification_deliveries.channel
+                             AND target.event_type=notification_deliveries.event_type
+                       )""",
+                    (source_episode_id, target_episode_id),
+                )
+                connection.execute(
+                    "UPDATE notification_deliveries SET episode_id=?, show_id=? WHERE episode_id=?",
+                    (target_episode_id, target_show_id, source_episode_id),
+                )
                 connection.execute("DELETE FROM episodes WHERE id = ?", (source_episode_id,))
 
             # Notifications for moved (rather than coalesced) episodes still
             # point at the source show, so update them before deleting it.
             connection.execute(
                 "UPDATE notifications SET show_id = ? WHERE show_id = ?",
+                (target_show_id, source_show_id),
+            )
+            connection.execute(
+                "UPDATE notification_deliveries SET show_id = ? WHERE show_id = ?",
                 (target_show_id, source_show_id),
             )
             connection.execute(
@@ -2586,6 +2631,8 @@ class ShortDramaRepository:
                 )
                 connection.execute("UPDATE notifications SET show_id=? WHERE episode_id=?",
                                    (target_show_id, episode_id))
+                connection.execute("UPDATE notification_deliveries SET show_id=? WHERE episode_id=?",
+                                   (target_show_id, episode_id))
                 connection.execute(
                     "UPDATE update_events SET show_id=?,season_number=?,episode_number=? WHERE episode_id=?",
                     (target_show_id, season_number, episode_number, episode_id),
@@ -2595,6 +2642,18 @@ class ShortDramaRepository:
                 connection.execute("UPDATE episode_sources SET episode_id=? WHERE episode_id=?",
                                    (final_id, episode_id))
                 connection.execute("UPDATE notifications SET episode_id=?,show_id=? WHERE episode_id=?",
+                                   (final_id, target_show_id, episode_id))
+                connection.execute(
+                    """DELETE FROM notification_deliveries
+                       WHERE episode_id=? AND EXISTS (
+                           SELECT 1 FROM notification_deliveries target_jobs
+                           WHERE target_jobs.episode_id=?
+                             AND target_jobs.channel=notification_deliveries.channel
+                             AND target_jobs.event_type=notification_deliveries.event_type
+                       )""",
+                    (episode_id, final_id),
+                )
+                connection.execute("UPDATE notification_deliveries SET episode_id=?,show_id=? WHERE episode_id=?",
                                    (final_id, target_show_id, episode_id))
                 self._merge_update_event(connection, episode_id, final_id, target_show_id,
                                          season_number, episode_number)
@@ -3049,6 +3108,122 @@ class ShortDramaRepository:
         query += " ORDER BY sent_at DESC, id DESC"
         with self._transaction() as connection:
             return [_notification_row(row) for row in connection.execute(query, params).fetchall()]
+
+    def enqueue_notification_delivery(
+        self, *, show_id: int, episode_id: int, channel: str,
+        payload: Mapping[str, Any], event_type: str = "new_episode",
+    ) -> tuple[dict[str, Any], bool]:
+        now = utc_now()
+        safe_channel = channel.strip()
+        safe_event_type = event_type.strip()
+        if not safe_channel or not safe_event_type:
+            raise ValueError("通知渠道和事件类型不能为空")
+        with self._transaction() as connection:
+            cursor = connection.execute(
+                """
+                INSERT OR IGNORE INTO notification_deliveries(
+                    show_id, episode_id, channel, event_type, payload_json,
+                    status, attempt_count, next_attempt_at, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?)
+                """,
+                (show_id, episode_id, safe_channel, safe_event_type,
+                 json.dumps(dict(payload), ensure_ascii=False, separators=(",", ":")), now, now, now),
+            )
+            row = connection.execute(
+                "SELECT * FROM notification_deliveries WHERE episode_id=? AND channel=? AND event_type=?",
+                (episode_id, safe_channel, safe_event_type),
+            ).fetchone()
+            if row is None:
+                raise RuntimeError("通知任务入队后无法读取")
+            return _notification_delivery_row(row), cursor.rowcount > 0
+
+    def claim_notification_deliveries(
+        self, *, limit: int, stale_before: str, now: str | None = None,
+    ) -> list[dict[str, Any]]:
+        claimed_at = now or utc_now()
+        with self._write_transaction() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM notification_deliveries
+                WHERE ((status IN ('pending', 'retry') AND next_attempt_at <= ?)
+                    OR (status = 'processing' AND locked_at <= ?))
+                ORDER BY next_attempt_at, id LIMIT ?
+                """,
+                (claimed_at, stale_before, max(1, int(limit))),
+            ).fetchall()
+            if not rows:
+                return []
+            ids = [int(row["id"]) for row in rows]
+            placeholders = ",".join("?" for _ in ids)
+            connection.execute(
+                f"UPDATE notification_deliveries SET status='processing', locked_at=?, updated_at=? "
+                f"WHERE id IN ({placeholders})",
+                (claimed_at, claimed_at, *ids),
+            )
+            refreshed = connection.execute(
+                f"SELECT * FROM notification_deliveries WHERE id IN ({placeholders}) ORDER BY id",
+                ids,
+            ).fetchall()
+            return [_notification_delivery_row(row) for row in refreshed]
+
+    def complete_notification_delivery(self, delivery_id: int) -> dict[str, Any]:
+        now = utc_now()
+        with self._write_transaction() as connection:
+            row = connection.execute(
+                "SELECT * FROM notification_deliveries WHERE id=?", (delivery_id,)
+            ).fetchone()
+            if row is None:
+                raise KeyError("通知任务不存在")
+            connection.execute(
+                """UPDATE notification_deliveries SET status='sent', attempt_count=attempt_count+1,
+                   last_error=NULL, locked_at=NULL, sent_at=?, updated_at=? WHERE id=?""",
+                (now, now, delivery_id),
+            )
+            connection.execute(
+                "INSERT INTO notifications(show_id, episode_id, channel, success, error, sent_at) "
+                "VALUES (?, ?, ?, 1, NULL, ?)",
+                (row["show_id"], row["episode_id"], row["channel"], now),
+            )
+            updated = connection.execute(
+                "SELECT * FROM notification_deliveries WHERE id=?", (delivery_id,)
+            ).fetchone()
+            return _notification_delivery_row(updated)
+
+    def fail_notification_delivery(
+        self, delivery_id: int, *, error: str, next_attempt_at: str, dead: bool,
+    ) -> dict[str, Any]:
+        now = utc_now()
+        safe_error = _optional_text(error) or "notification delivery failed"
+        with self._write_transaction() as connection:
+            row = connection.execute(
+                "SELECT * FROM notification_deliveries WHERE id=?", (delivery_id,)
+            ).fetchone()
+            if row is None:
+                raise KeyError("通知任务不存在")
+            connection.execute(
+                """UPDATE notification_deliveries SET status=?, attempt_count=attempt_count+1,
+                   next_attempt_at=?, last_error=?, locked_at=NULL, updated_at=? WHERE id=?""",
+                ("dead" if dead else "retry", next_attempt_at, safe_error[:2000], now, delivery_id),
+            )
+            connection.execute(
+                "INSERT INTO notifications(show_id, episode_id, channel, success, error, sent_at) "
+                "VALUES (?, ?, ?, 0, ?, ?)",
+                (row["show_id"], row["episode_id"], row["channel"], safe_error[:2000], now),
+            )
+            updated = connection.execute(
+                "SELECT * FROM notification_deliveries WHERE id=?", (delivery_id,)
+            ).fetchone()
+            return _notification_delivery_row(updated)
+
+    def list_notification_deliveries(self, *, episode_id: int | None = None) -> list[dict[str, Any]]:
+        query = "SELECT * FROM notification_deliveries"
+        params: tuple[Any, ...] = ()
+        if episode_id is not None:
+            query += " WHERE episode_id=?"
+            params = (episode_id,)
+        query += " ORDER BY id"
+        with self._read_connection() as connection:
+            return [_notification_delivery_row(row) for row in connection.execute(query, params).fetchall()]
 
     def mark_account_sync_success(self, account_id: str, *, next_check_at: str) -> dict[str, Any]:
         now = utc_now()
@@ -3647,6 +3822,12 @@ def _episode_source_row(row: sqlite3.Row) -> dict[str, Any]:
 def _notification_row(row: sqlite3.Row) -> dict[str, Any]:
     result = _row_to_dict(row)
     result["success"] = bool(result["success"])
+    return result
+
+
+def _notification_delivery_row(row: sqlite3.Row) -> dict[str, Any]:
+    result = _row_to_dict(row)
+    result["payload"] = _json_object(result.pop("payload_json", "{}"))
     return result
 
 
