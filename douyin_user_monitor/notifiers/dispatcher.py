@@ -35,6 +35,8 @@ class NotificationDispatcher:
         self._stop = asyncio.Event()
         self._wake = asyncio.Event()
         self._worker: asyncio.Task[None] | None = None
+        self._last_success: str | None = None
+        self._last_error: str | None = None
 
     @property
     def enabled_channels(self) -> tuple[str, ...]:
@@ -72,6 +74,13 @@ class NotificationDispatcher:
 
     def wake(self) -> None:
         self._wake.set()
+
+    def health_status(self) -> dict[str, object]:
+        return {
+            "running": self._worker is not None and not self._worker.done(),
+            "last_success": self._last_success,
+            "last_error": self._last_error,
+        }
 
     async def start(self) -> None:
         if self._worker is None or self._worker.done():
@@ -126,9 +135,12 @@ class NotificationDispatcher:
                     self._repository.fail_notification_delivery, job["id"],
                     error=str(exc) or exc.__class__.__name__, next_attempt_at=next_time, dead=dead,
                 )
+                self._last_error = str(exc) or exc.__class__.__name__
             else:
                 await asyncio.to_thread(self._repository.complete_notification_delivery, job["id"])
                 delivered += 1
+                self._last_success = datetime.now(timezone.utc).isoformat(timespec="seconds")
+                self._last_error = None
         return delivered
 
     async def aclose(self) -> None:

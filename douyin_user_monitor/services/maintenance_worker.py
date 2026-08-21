@@ -35,6 +35,13 @@ class MaintenanceWorker:
         self._last_checkpoint_at: datetime | None = None
         self._last_run_at: datetime | None = None
         self._last_error: str | None = None
+        persisted = repository.get_service_state(
+            "last_backup_at", "last_checkpoint_at", "last_maintenance_at", "maintenance_last_error"
+        )
+        self._last_backup_at = self._parse_time(persisted.get("last_backup_at")) or self._last_backup_at
+        self._last_checkpoint_at = self._parse_time(persisted.get("last_checkpoint_at"))
+        self._last_run_at = self._parse_time(persisted.get("last_maintenance_at"))
+        self._last_error = str(persisted.get("maintenance_last_error") or "") or None
 
     async def start(self) -> None:
         if not self._config.enabled or (self._task is not None and not self._task.done()):
@@ -53,8 +60,13 @@ class MaintenanceWorker:
             try:
                 await self.run_once()
                 self._last_error = None
+                await asyncio.to_thread(self._repository.set_service_state, maintenance_last_error="")
             except Exception as exc:  # noqa: BLE001
                 self._last_error = str(exc) or exc.__class__.__name__
+                await asyncio.to_thread(
+                    self._repository.set_service_state,
+                    maintenance_last_error=self._last_error,
+                )
                 logger.exception("automatic maintenance failed")
             try:
                 await asyncio.wait_for(self._stop.wait(), timeout=self._config.poll_seconds)
@@ -79,11 +91,23 @@ class MaintenanceWorker:
                 retention_count=self._config.backup_retention_count,
             )
             self._last_backup_at = current
+            await asyncio.to_thread(
+                self._repository.set_service_state,
+                last_backup_at=self._iso(current),
+            )
         checkpoint = None
         if self._due(self._last_checkpoint_at, current, self._config.checkpoint_interval_hours):
             checkpoint = await asyncio.to_thread(passive_wal_checkpoint, self._repository.database_path)
             self._last_checkpoint_at = current
+            await asyncio.to_thread(
+                self._repository.set_service_state,
+                last_checkpoint_at=self._iso(current),
+            )
         self._last_run_at = current
+        await asyncio.to_thread(
+            self._repository.set_service_state,
+            last_maintenance_at=self._iso(current),
+        )
         return {"backup": backup_path.name if backup_path else None, "scan_runs_pruned": removed,
                 "raw_payloads_compacted": compacted, "checkpoint": checkpoint}
 
@@ -95,6 +119,7 @@ class MaintenanceWorker:
             "last_backup_at": self._iso(self._last_backup_at),
             "last_checkpoint_at": self._iso(self._last_checkpoint_at),
             "last_error": self._last_error,
+            "last_success": self._iso(self._last_run_at) if self._last_error is None else None,
         }
 
     def _latest_backup_time(self) -> datetime | None:
@@ -111,3 +136,10 @@ class MaintenanceWorker:
     @staticmethod
     def _iso(value: datetime | None) -> str | None:
         return value.isoformat(timespec="seconds") if value else None
+
+    @staticmethod
+    def _parse_time(value: object) -> datetime | None:
+        try:
+            return datetime.fromisoformat(str(value)) if value else None
+        except ValueError:
+            return None

@@ -90,6 +90,8 @@ class AccountScheduler:
         self._account_locks: dict[str, asyncio.Lock] = {}
         self._account_lock_users: dict[str, int] = {}
         self._account_locks_guard = asyncio.Lock()
+        self._last_success: str | None = None
+        self._last_error: str | None = None
 
     async def _account_lock(self, account_id: str) -> asyncio.Lock:
         async with self._account_locks_guard:
@@ -127,8 +129,12 @@ class AccountScheduler:
         except asyncio.CancelledError:
             pass
 
-    def health_status(self) -> str:
-        return "ok" if self._task is not None and not self._task.done() else "stopped"
+    def health_status(self) -> dict[str, object]:
+        return {
+            "running": self._task is not None and not self._task.done(),
+            "last_success": self._last_success,
+            "last_error": self._last_error,
+        }
 
     async def run_due_once(self) -> tuple[AccountCheckResult, ...]:
         now = _as_utc(self._now())
@@ -157,12 +163,14 @@ class AccountScheduler:
         while True:
             try:
                 await self.run_due_once()
+                self._last_success = _as_utc(self._now()).isoformat(timespec="seconds")
+                self._last_error = None
             except asyncio.CancelledError:
                 raise
-            except Exception:
+            except Exception as exc:
                 # Per-account errors are handled in _check_account. A defensive
                 # loop guard keeps unrelated accounts schedulable after bugs.
-                pass
+                self._last_error = _safe_error(exc)
             await asyncio.sleep(self._config.poll_seconds)
 
     async def _check_account(self, account_id: str, *, force: bool = False, trigger_type: str = "scheduler") -> AccountCheckResult:

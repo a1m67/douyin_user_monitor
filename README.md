@@ -208,6 +208,8 @@ python -m douyin_user_monitor db-stats --checkpoint
 
 默认启用轻量维护 worker：每 24 小时按 SQLite online backup API 创建一次备份、保留最近 14 份，按既有保留期清理巡检运行记录，并以 PASSIVE 模式低频回收 WAL frame。它不会自动 `VACUUM`，也不会删除 Episode、UpdateEvent 或用户数据。
 
+诊断页只读取文件/WAL 大小、轻量 `SELECT 1` 延迟、持久化的最近 doctor/备份/维护时间、worker 状态和队列计数；不会在 GET 请求中执行 `integrity_check` 或 `foreign_key_check`。完整检查只由 `POST /api/short-drama/diagnostics/doctor` 或上述 CLI 命令触发。
+
 ```bash
 .venv/Scripts/python -m unittest discover -s tests -v
 ```

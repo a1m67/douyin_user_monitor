@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import secrets
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -53,12 +54,8 @@ def create_short_drama_router(
         return {
             "status": "ok",
             "database": "ok",
-            "scheduler": scheduler.health_status() if scheduler is not None else "not_started",
-            "history_backfill_worker": (
-                history_backfill_worker.health_status()
-                if history_backfill_worker is not None
-                else "not_started"
-            ),
+            "scheduler": _worker_state_label(scheduler),
+            "history_backfill_worker": _worker_state_label(history_backfill_worker),
         }
 
     @router.get("/health")
@@ -294,16 +291,38 @@ def create_short_drama_router(
     @api.get("/diagnostics")
     async def diagnostics() -> dict[str, Any]:
         path = repository.database_path
-        doctor = doctor_database(path)
+        state = repository.get_service_state(
+            "last_doctor_at", "last_doctor_ok", "last_doctor_summary",
+            "last_backup_at", "last_maintenance_at", "last_checkpoint_at",
+        )
+        snapshot = repository.diagnostics_snapshot()
+        wal_path = Path(f"{path}-wal")
         return {"database": {"path": path.name, "size_bytes": path.stat().st_size,
-                "schema_version": repository.schema_version(), "doctor_ok": doctor.ok,
+                "wal_size_bytes": wal_path.stat().st_size if wal_path.is_file() else 0,
+                "schema_version": repository.schema_version(),
+                "database_latency_ms": snapshot["database_latency_ms"],
+                "last_doctor_at": state.get("last_doctor_at"),
+                "last_doctor_ok": state.get("last_doctor_ok"),
+                "last_doctor_summary": state.get("last_doctor_summary"),
                 "backup_count": len(list((path.parent / "backups").glob("app-*.db")))},
-                "scheduler": scheduler.health_status() if scheduler else "not_started",
+                "scheduler": _worker_health(scheduler),
                 "crawler": scheduler.crawler_status() if scheduler and hasattr(scheduler,"crawler_status") else {},
                 "cookie": cookie_manager.status() if cookie_manager else {"status":"not_configured"},
                 "features": {"llm": "configured_or_disabled", "ocr": "configured_or_disabled"},
-                "parser_metrics_24h": repository.system_status()["scan_runs_24h"],
-                "maintenance": maintenance_worker.health_status() if maintenance_worker else {"enabled": False}}
+                "parser_metrics_24h": snapshot["parser_metrics_24h"],
+                "queues": {key: snapshot[key] for key in ("notification_queue", "review_queue", "history_queue")},
+                "workers": {
+                    "scheduler": _worker_health(scheduler),
+                    "history": _worker_health(history_backfill_worker),
+                    "notification": _worker_health(dispatcher),
+                    "maintenance": _worker_health(maintenance_worker),
+                },
+                "maintenance": {
+                    **_worker_health(maintenance_worker),
+                    "last_backup_at": state.get("last_backup_at"),
+                    "last_maintenance_at": state.get("last_maintenance_at"),
+                    "last_checkpoint_at": state.get("last_checkpoint_at"),
+                }}
 
     @api.get("/quality")
     async def data_quality(stale_days: int = Query(default=30, ge=1, le=3650)) -> dict[str, Any]:
@@ -312,11 +331,19 @@ def create_short_drama_router(
     @api.post("/diagnostics/doctor")
     async def run_doctor() -> dict[str, Any]:
         report = doctor_database(repository.database_path)
+        repository.set_service_state(
+            last_doctor_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            last_doctor_ok=report.ok,
+            last_doctor_summary=report.checks,
+        )
         return {"ok": report.ok, "checks": report.checks}
 
     @api.post("/diagnostics/backup")
     async def create_backup() -> dict[str, Any]:
         path = backup_database(repository.database_path)
+        repository.set_service_state(
+            last_backup_at=datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).isoformat(timespec="seconds")
+        )
         return {"created": True, "filename": path.name}
 
     @api.put("/settings/crawler/cookie")
@@ -529,3 +556,27 @@ def create_short_drama_router(
 
     router.include_router(api)
     return router
+
+
+def _worker_health(worker: object | None) -> dict[str, Any]:
+    if worker is None:
+        return {"running": False, "last_success": None, "last_error": None}
+    status = worker.health_status() if hasattr(worker, "health_status") else "stopped"
+    if isinstance(status, dict):
+        return {
+            "running": bool(status.get("running")),
+            "last_success": status.get("last_success") or status.get("last_run_at"),
+            "last_error": status.get("last_error"),
+            **status,
+        }
+    return {
+        "running": status in {"ok", "running"},
+        "last_success": None,
+        "last_error": None,
+    }
+
+
+def _worker_state_label(worker: object | None) -> str:
+    if worker is None:
+        return "not_started"
+    return "ok" if _worker_health(worker)["running"] else "stopped"

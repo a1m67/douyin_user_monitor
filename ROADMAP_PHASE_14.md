@@ -5,8 +5,8 @@ Transactional reliability, lightweight operations, parser governance, bounded AI
 ## Progress
 
 - [x] Phase 1: Transactional notification outbox
-- [ ] Phase 2: Lightweight diagnostics and persistent service state (in progress)
-- [ ] Phase 3: Per-account adaptive scheduling
+- [x] Phase 2: Lightweight diagnostics and persistent service state
+- [ ] Phase 3: Per-account adaptive scheduling (in progress)
 - [ ] Phase 4: Verified database restore
 - [ ] Phase 5: Parser processing versioning
 - [ ] Phase 6: Parser golden regression suite
@@ -27,11 +27,16 @@ Transactional reliability, lightweight operations, parser governance, bounded AI
 
 ### Phase 2
 
-- Status: in progress
+- Status: complete
+- Main design: diagnostics GET uses bounded aggregate queries and a `SELECT 1` latency probe; full doctor remains explicit, while doctor and maintenance timestamps survive process restarts through `app_meta`. Scheduler, history, notification, and maintenance workers expose a common health shape.
+- Schema changes: none; `app_meta` stores service state.
+- Tests: GET doctor isolation, explicit POST doctor execution, persisted doctor/backup/checkpoint/maintenance state, worker and queue payloads, focused worker/Web suites, and full suite.
+- Commit: `fix: make diagnostics lightweight`.
+- Production verification still needed: compare diagnostics latency on the production-sized database and confirm persisted times across a container restart.
 
 ### Phase 3
 
-- Status: pending
+- Status: in progress
 
 ### Phase 4
 

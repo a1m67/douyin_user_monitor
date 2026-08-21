@@ -138,6 +138,83 @@ class ShortDramaRepository:
     def schema_version(self) -> int:
         return SCHEMA_VERSION
 
+    def get_service_state(self, *keys: str) -> dict[str, Any]:
+        requested = tuple(dict.fromkeys(str(key).strip() for key in keys if str(key).strip()))
+        if not requested:
+            return {}
+        placeholders = ",".join("?" for _ in requested)
+        with self._read_connection() as connection:
+            rows = connection.execute(
+                f"SELECT key, value FROM app_meta WHERE key IN ({placeholders})",
+                requested,
+            ).fetchall()
+        return {str(row["key"]): _decode_meta_value(str(row["value"])) for row in rows}
+
+    def set_service_state(self, **values: Any) -> None:
+        with self._transaction() as connection:
+            for key, value in values.items():
+                if value is None:
+                    continue
+                encoded = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+                self._set_meta(connection, str(key), encoded)
+
+    def diagnostics_snapshot(self) -> dict[str, Any]:
+        started = datetime.now(timezone.utc)
+        since = (started - timedelta(hours=24)).isoformat(timespec="seconds")
+        with self._read_connection() as connection:
+            connection.execute("SELECT 1").fetchone()
+            deliveries = {
+                str(row["status"]): int(row["count"])
+                for row in connection.execute(
+                    "SELECT status, COUNT(*) AS count FROM notification_deliveries "
+                    "WHERE status IN ('pending','processing','retry','dead') GROUP BY status"
+                )
+            }
+            sent_24h = int(connection.execute(
+                "SELECT COUNT(*) FROM notification_deliveries WHERE status='sent' AND sent_at >= ?",
+                (since,),
+            ).fetchone()[0])
+            pending_review = int(connection.execute(
+                "SELECT COUNT(*) FROM videos WHERE classification_status='review'"
+            ).fetchone()[0])
+            history = {
+                str(row["history_sync_status"]): int(row["count"])
+                for row in connection.execute(
+                    "SELECT history_sync_status, COUNT(*) AS count FROM accounts "
+                    "WHERE history_sync_status IN ('running','failed') GROUP BY history_sync_status"
+                )
+            }
+            scan = connection.execute(
+                """SELECT COUNT(*) runs, COALESCE(SUM(success),0) successes,
+                    COALESCE(SUM(CASE WHEN success=0 THEN 1 ELSE 0 END),0) failures,
+                    COALESCE(SUM(new_videos),0) new_videos, COALESCE(SUM(new_episodes),0) new_episodes,
+                    COALESCE(SUM(review_videos),0) review_videos,
+                    COALESCE(SUM(regex_calls),0) regex_calls, COALESCE(SUM(context_calls),0) context_calls,
+                    COALESCE(SUM(llm_calls),0) llm_calls, COALESCE(SUM(ocr_calls),0) ocr_calls,
+                    COALESCE(SUM(ocr_successes),0) ocr_successes,
+                    COALESCE(SUM(llm_latency_ms_total),0) llm_latency_ms_total,
+                    COALESCE(SUM(ocr_latency_ms_total),0) ocr_latency_ms_total
+                    FROM scan_runs WHERE started_at >= ?""",
+                (since,),
+            ).fetchone()
+        latency_ms = max(0.0, (datetime.now(timezone.utc) - started).total_seconds() * 1000)
+        return {
+            "database_latency_ms": round(latency_ms, 3),
+            "notification_queue": {
+                "pending": deliveries.get("pending", 0),
+                "processing": deliveries.get("processing", 0),
+                "retry": deliveries.get("retry", 0),
+                "dead": deliveries.get("dead", 0),
+                "sent_24h": sent_24h,
+            },
+            "review_queue": {"pending": pending_review},
+            "history_queue": {
+                "running": history.get("running", 0),
+                "failed": history.get("failed", 0),
+            },
+            "parser_metrics_24h": dict(scan),
+        }
+
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.database_path, timeout=SQLITE_BUSY_TIMEOUT_MS / 1000)
         connection.row_factory = sqlite3.Row
@@ -3549,6 +3626,13 @@ def _schema_version(value: str | None) -> int:
         return int(value or 0)
     except ValueError:
         return 0
+
+
+def _decode_meta_value(value: str) -> Any:
+    try:
+        return json.loads(value)
+    except json.JSONDecodeError:
+        return value
 
 
 def _non_negative_int(value: Any) -> int:

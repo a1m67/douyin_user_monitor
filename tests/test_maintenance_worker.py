@@ -54,6 +54,15 @@ class MaintenanceWorkerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["raw_payloads_compacted"], 1)
         self.assertTrue((self.repository.database_path.parent / "backups" / result["backup"]).is_file())
         self.assertIsNotNone(worker.health_status()["last_backup_at"])
+        restarted_repository = ShortDramaRepository(self.repository.database_path)
+        restarted_worker = MaintenanceWorker(
+            restarted_repository,
+            MaintenanceWorkerConfig(backup_retention_count=2, backup_interval_hours=24),
+        )
+        restarted_health = restarted_worker.health_status()
+        self.assertEqual(restarted_health["last_backup_at"], "2026-08-22T00:00:00+00:00")
+        self.assertEqual(restarted_health["last_checkpoint_at"], "2026-08-22T00:00:00+00:00")
+        self.assertEqual(restarted_health["last_run_at"], "2026-08-22T00:00:00+00:00")
 
     async def test_recent_backup_is_not_duplicated_until_due(self):
         worker = MaintenanceWorker(

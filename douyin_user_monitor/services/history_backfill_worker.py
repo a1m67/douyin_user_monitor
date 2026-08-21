@@ -6,6 +6,7 @@ import logging
 import random
 import re
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Awaitable, Callable
 
 from douyin_user_monitor.repositories.sqlite import ShortDramaRepository
@@ -56,6 +57,8 @@ class HistoryBackfillWorker:
         self._wake_event = asyncio.Event()
         self._coordinator_task: asyncio.Task[None] | None = None
         self._account_tasks: dict[str, asyncio.Task[None]] = {}
+        self._last_success: str | None = None
+        self._last_error: str | None = None
 
     async def start(self) -> None:
         if self._coordinator_task is not None and not self._coordinator_task.done():
@@ -82,12 +85,12 @@ class HistoryBackfillWorker:
     def wake(self) -> None:
         self._wake_event.set()
 
-    def health_status(self) -> str:
-        return (
-            "ok"
-            if self._coordinator_task is not None and not self._coordinator_task.done()
-            else "stopped"
-        )
+    def health_status(self) -> dict[str, object]:
+        return {
+            "running": self._coordinator_task is not None and not self._coordinator_task.done(),
+            "last_success": self._last_success,
+            "last_error": self._last_error,
+        }
 
     async def wait_until_idle(self, *, timeout: float = 5.0) -> None:
         async def wait() -> None:
@@ -160,6 +163,8 @@ class HistoryBackfillWorker:
                             mark_failed_on_error=False,
                         )
                         succeeded = True
+                        self._last_success = datetime.now(timezone.utc).isoformat(timespec="seconds")
+                        self._last_error = None
                         break
                     except asyncio.CancelledError:
                         raise
@@ -177,6 +182,7 @@ class HistoryBackfillWorker:
                             if current is None or current["history_sync_status"] != "running":
                                 return
                             error = _safe_error(exc)
+                            self._last_error = error
                             self._repository.fail_history_backfill(account_id, error=error)
                             logger.warning(
                                 "[history-worker] failed account_id=%s cursor=%s reason=%s",

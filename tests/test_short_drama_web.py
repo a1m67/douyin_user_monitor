@@ -3,6 +3,7 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -593,11 +594,34 @@ class ShortDramaWebTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(reparsed.json()["reparsed_count"], 1)
 
     async def test_diagnostics_are_redacted_and_doctor_is_read_only(self):
-        data = self.client.get("/api/short-drama/diagnostics").json()
+        with patch("douyin_user_monitor.web.short_drama.doctor_database") as doctor:
+            data = self.client.get("/api/short-drama/diagnostics").json()
+        doctor.assert_not_called()
         self.assertEqual(data["database"]["schema_version"], 20)
+        self.assertIsNone(data["database"]["last_doctor_at"])
+        self.assertGreaterEqual(data["database"]["database_latency_ms"], 0)
+        self.assertEqual(
+            set(data["queues"]),
+            {"notification_queue", "review_queue", "history_queue"},
+        )
+        self.assertEqual(
+            set(data["workers"]),
+            {"scheduler", "history", "notification", "maintenance"},
+        )
         self.assertIn("llm_calls", data["parser_metrics_24h"])
         self.assertNotIn("token", str(data).lower())
-        self.assertTrue(self.client.post("/api/short-drama/diagnostics/doctor").json()["ok"])
+        with patch("douyin_user_monitor.web.short_drama.doctor_database") as doctor:
+            doctor.return_value.ok = True
+            doctor.return_value.checks = {"integrity": "ok"}
+            self.assertTrue(self.client.post("/api/short-drama/diagnostics/doctor").json()["ok"])
+            doctor.assert_called_once_with(self.repository.database_path)
+        restarted = ShortDramaRepository(self.repository.database_path)
+        persisted = restarted.get_service_state(
+            "last_doctor_at", "last_doctor_ok", "last_doctor_summary"
+        )
+        self.assertIsNotNone(persisted["last_doctor_at"])
+        self.assertTrue(persisted["last_doctor_ok"])
+        self.assertEqual(persisted["last_doctor_summary"], {"integrity": "ok"})
 
     async def test_quality_page_and_api_expose_all_categories(self):
         self.assertEqual(self.client.get("/quality").status_code, 200)
