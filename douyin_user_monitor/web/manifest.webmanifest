@@ -1,0 +1,11 @@
+{
+  "name": "AI 短剧追更",
+  "short_name": "短剧追更",
+  "description": "个人 AI 短剧更新追踪器",
+  "start_url": "/following",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f7f8fa",
+  "theme_color": "#183440",
+  "icons": [{"src": "/pwa-icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable"}]
+}

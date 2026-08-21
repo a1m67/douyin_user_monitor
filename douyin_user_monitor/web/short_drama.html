@@ -3,6 +3,10 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#183440" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <link rel="icon" href="/pwa-icon.svg" type="image/svg+xml" />
   <title>AI 短剧追更</title>
   <style>
     :root {
@@ -146,8 +150,10 @@
     .notice { position: fixed; right: 20px; bottom: 20px; max-width: min(380px, calc(100vw - 40px)); background: #20313b; color: #fff; border-radius: var(--radius); padding: 12px 14px; box-shadow: 0 6px 20px rgba(0,0,0,.18); display: none; }
     .notice.error { background: #8d3636; }
     .muted { color: var(--muted); }
-    @media (max-width: 900px) { .shell { grid-template-columns: 1fr; align-content: start; } .sidebar { min-height: auto; display: block; overflow: visible; padding: 14px 12px; } .brand { min-width: 0; } .nav { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); } .nav a { white-space: normal; } .sidebar-footer { display: none; } .summary { grid-template-columns: repeat(2, 1fr); } .metric:nth-child(2) { border-right: 0; } .detail, .status-layout { grid-template-columns: 1fr; } .review { grid-template-columns: 55px 1fr; } .cover { width: 55px; height: 74px; } .review-form { grid-column: 1 / -1; } }
+    .bottom-nav { display: none; }
+    @media (max-width: 900px) { .shell { grid-template-columns: 1fr; align-content: start; } .sidebar { min-height: auto; padding: 10px 12px; } .sidebar .nav { display: none; } .brand { min-width: 0; padding: 3px 6px; } .brand span { display: none; } .sidebar-footer { display: none; } .topbar { min-height: 52px; } .page { padding: 16px 12px calc(88px + env(safe-area-inset-bottom)); } .bottom-nav { position: fixed; z-index: 20; left: 0; right: 0; bottom: 0; display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); padding: 6px 6px calc(6px + env(safe-area-inset-bottom)); border-top: 1px solid var(--line); background: rgba(255,255,255,.98); box-shadow: 0 -4px 14px rgba(0,0,0,.08); } .bottom-nav a { min-width: 0; padding: 8px 3px; color: var(--muted); text-align: center; text-decoration: none; font-size: 12px; } .bottom-nav a.active { color: var(--accent); font-weight: 700; } .summary { grid-template-columns: repeat(2, 1fr); } .metric:nth-child(2) { border-right: 0; } .detail, .status-layout { grid-template-columns: 1fr; } .review { grid-template-columns: 55px 1fr; } .cover { width: 55px; height: 74px; } .review-form { grid-column: 1 / -1; } .update-item { grid-template-columns: 54px minmax(0,1fr); } .update-item .table-actions { grid-column: 2; } }
     @media (max-width: 560px) { .summary { grid-template-columns: 1fr; } .metric { border-right: 0; border-bottom: 1px solid var(--line); } .metric:last-child { border-bottom: 0; } .page-head { align-items: start; flex-direction: column; } .review { grid-template-columns: 1fr; } .cover { display: none; } .account-edit-fields { grid-template-columns: 1fr; } }
+    @media (max-width: 900px) { .notice { bottom: calc(58px + env(safe-area-inset-bottom)); } }
   </style>
 </head>
 <body>
@@ -173,6 +179,7 @@
     </main>
   </div>
   <div class="notice" id="notice" role="status"></div>
+  <nav class="bottom-nav" aria-label="主导航"><a href="/following" data-bottom-nav="following">追更</a><a href="/updates" data-bottom-nav="updates">动态</a><a href="/shows" data-bottom-nav="shows">全部</a><a href="/review" data-bottom-nav="review">审核</a></nav>
   <script>
     const API = "/api/short-drama";
     const app = document.getElementById("app");
@@ -207,6 +214,7 @@
     }
     function nav(name, title) {
       document.querySelectorAll("[data-nav]").forEach(item => item.classList.toggle("active", item.dataset.nav === name));
+      document.querySelectorAll("[data-bottom-nav]").forEach(item => item.classList.toggle("active", item.dataset.bottomNav === name));
       document.getElementById("topTitle").textContent = title;
     }
     async function refreshStatus() {
@@ -406,6 +414,7 @@
     async function testCrawlerCookie() { try { const data=await request("/settings/crawler/test",{method:"POST"}); message(`${data.result.status}：${data.result.reason}`); await renderCrawlerSettings(); } catch(error) { message(error.message,true); } }
     async function renderQuality() { nav("quality","数据质量"); const data=await request("/quality"); const labels={review:"待人工审核",missing_episodes:"缺失剧集",suspicious_jumps:"异常跳集",expected_count_conflicts:"总集数矛盾",source_less_episodes:"无来源剧集",low_confidence:"低置信度",ocr_only:"仅 OCR 命中",stale_shows:"长期未更新"}; const sections=Object.entries(data.categories).map(([key,value])=>`<section class="panel"><div class="page-head"><h2>${labels[key]}</h2><strong>${value.count}</strong></div>${value.items.length?value.items.map(item=>`<div class="error-item"><strong>${escapeHtml(item.title||item.nickname||`记录 ${item.id}`)}</strong><br><span class="muted">${key.includes("show")||key.includes("episode")?`<a href="/shows/${item.show_id||item.id}">查看并纠正</a>`:`<a href="${key==="review"?"/review":"/videos"}">查看作品</a>`}</span></div>`).join(""): '<p class="muted">暂无问题</p>'}</section>`).join(""); app.innerHTML=`<div class="page-head"><div><h1>数据质量</h1><p class="subtitle">共 ${data.total_issues} 项需要关注</p></div><button class="secondary" onclick="renderQuality()">刷新</button></div><div class="status-layout">${sections}</div>`; }
     async function boot() { await refreshStatus(); try { const match=route.match(/^\/shows\/(\d+)$/); if(match) return renderShowDetail(match[1]); if(route==="/updates") return renderUpdates(); if(route==="/accounts") return renderAccounts(); if(route==="/videos") return renderVideos(); if(route==="/review") return renderReview(); if(route==="/status") return renderStatus(); if(route==="/settings/crawler") return renderCrawlerSettings(); if(route==="/quality") return renderQuality(); return renderShows(); } catch(error) { app.innerHTML=empty(error.message); } }
+    if ("serviceWorker" in navigator) window.addEventListener("load", () => navigator.serviceWorker.register("/sw.js"));
     boot();
   </script>
 </body>

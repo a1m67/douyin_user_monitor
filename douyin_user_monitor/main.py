@@ -27,7 +27,7 @@ app.include_router(
 
 @app.get("/", include_in_schema=False)
 async def index() -> RedirectResponse:
-    return RedirectResponse(url="/shows")
+    return RedirectResponse(url="/following")
 
 
 @app.on_event("startup")

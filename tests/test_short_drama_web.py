@@ -561,6 +561,17 @@ class ShortDramaWebTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(set(data["categories"]), {"review", "missing_episodes", "suspicious_jumps",
             "expected_count_conflicts", "source_less_episodes", "low_confidence", "ocr_only", "stale_shows"})
 
+    async def test_pwa_metadata_assets_and_mobile_navigation(self):
+        page = self.client.get("/following")
+        manifest = self.client.get("/manifest.webmanifest")
+        worker = self.client.get("/sw.js")
+        self.assertIn('rel="manifest"', page.text)
+        self.assertIn("bottom-nav", page.text)
+        self.assertIn("serviceWorker.register", page.text)
+        self.assertEqual(manifest.json()["start_url"], "/following")
+        self.assertIn('url.pathname.startsWith("/api/")', worker.text)
+        self.assertNotIn("caches.match(event.request)", worker.text.split('url.pathname.startsWith("/api/")', 1)[1].split("return;", 1)[0])
+
 
 if __name__ == "__main__":
     unittest.main()

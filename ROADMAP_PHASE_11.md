@@ -80,17 +80,17 @@ and production behavior that has not yet been verified.
 - Main design: `/quality` reports eight bounded, read-only issue categories with counts and links into existing review, video, Show settings, and correction workflows: review, gaps, suspicious jumps, expected-count conflicts, source-less Episodes, confidence below 0.90, OCR-only matches, and stale updating Shows.
 - Schema changes: none.
 - Tests: focused repository/web quality tests - 2 passed; full suite - 194 passed.
-- Commit: this phase commit (SHA recorded during final roadmap pass)
+- Commit: `3ea4bd3`
 - Not yet verified: threshold tuning against the production library's age and episode distribution.
 
 ### Phase 8
 
-- Status: pending
-- Main design: pending
-- Schema changes: pending
-- Tests: pending
-- Commit: pending
-- Not yet verified: pending
+- Status: complete
+- Main design: Mobile-first daily-use routes now expose a fixed four-item bottom navigation while retaining the desktop sidebar. The application ships an installable manifest, self-owned SVG icon, and service worker that caches only the app shell/static assets; API and health requests remain network-only so stale operational data is never presented as current.
+- Schema changes: none.
+- Tests: focused PWA metadata/route test - 1 passed; full suite - 195 passed. Browser QA at 390x844 confirmed no horizontal overflow on Following or Updates, safe bottom content padding, and a toast offset above the mobile navigation.
+- Commit: this phase commit (SHA recorded during final roadmap pass)
+- Not yet verified: installation and offline shell behavior on a physical iOS/Android device behind the production reverse proxy.
 
 ### Phase 9
 

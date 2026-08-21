@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, Response
 from pydantic import BaseModel, Field
 
 from douyin_user_monitor.notifiers.dispatcher import NotificationDispatcher
@@ -130,6 +130,7 @@ def create_short_drama_router(
 ) -> APIRouter:
     router = APIRouter()
     html_path = page_path or Path(__file__).with_name("short_drama.html")
+    asset_dir = html_path.parent
 
     def page() -> HTMLResponse:
         if not html_path.is_file():
@@ -149,6 +150,18 @@ def create_short_drama_router(
     async def show_detail_page(show_id: int) -> HTMLResponse:
         _ = show_id
         return page()
+
+    @router.get("/manifest.webmanifest", include_in_schema=False)
+    async def pwa_manifest() -> Response:
+        return Response((asset_dir / "manifest.webmanifest").read_text(encoding="utf-8"), media_type="application/manifest+json")
+
+    @router.get("/sw.js", include_in_schema=False)
+    async def service_worker() -> Response:
+        return Response((asset_dir / "sw.js").read_text(encoding="utf-8"), media_type="application/javascript", headers={"Service-Worker-Allowed": "/", "Cache-Control": "no-cache"})
+
+    @router.get("/pwa-icon.svg", include_in_schema=False)
+    async def pwa_icon() -> Response:
+        return Response((asset_dir / "pwa-icon.svg").read_text(encoding="utf-8"), media_type="image/svg+xml", headers={"Cache-Control": "public, max-age=86400"})
 
     @router.get("/following", response_class=HTMLResponse, include_in_schema=False)
     async def following_page() -> HTMLResponse:
