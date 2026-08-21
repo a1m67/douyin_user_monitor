@@ -3,12 +3,11 @@ from __future__ import annotations
 
 import asyncio
 import secrets
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Protocol
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse, Response
+from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 from douyin_user_monitor.notifiers.dispatcher import NotificationDispatcher
@@ -19,6 +18,8 @@ from douyin_user_monitor.services.episode_pipeline import (
     ShortDramaPipeline,
     SyncResult,
 )
+from douyin_user_monitor.web.pages import create_page_router
+from douyin_user_monitor.web.update_grouping import group_update_events
 
 
 class SchedulerStatus(Protocol):
@@ -141,75 +142,12 @@ def create_short_drama_router(
     admin_api_token: str = "",
 ) -> APIRouter:
     router = APIRouter()
-    html_path = page_path or Path(__file__).with_name("short_drama.html")
-    asset_dir = html_path.parent
-
-    def page() -> HTMLResponse:
-        if not html_path.is_file():
-            raise HTTPException(status_code=500, detail="短剧 Dashboard 文件不存在")
-        return HTMLResponse(
-            html_path.read_text(encoding="utf-8").replace(
-                "{{DEFAULT_CHECK_INTERVAL_MINUTES}}", str(default_check_interval_minutes)
-            ),
-            headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"},
+    router.include_router(
+        create_page_router(
+            page_path=page_path,
+            default_check_interval_minutes=default_check_interval_minutes,
         )
-
-    @router.get("/shows", response_class=HTMLResponse, include_in_schema=False)
-    async def shows_page() -> HTMLResponse:
-        return page()
-
-    @router.get("/shows/{show_id}", response_class=HTMLResponse, include_in_schema=False)
-    async def show_detail_page(show_id: int) -> HTMLResponse:
-        _ = show_id
-        return page()
-
-    @router.get("/manifest.webmanifest", include_in_schema=False)
-    async def pwa_manifest() -> Response:
-        return Response((asset_dir / "manifest.webmanifest").read_text(encoding="utf-8"), media_type="application/manifest+json")
-
-    @router.get("/sw.js", include_in_schema=False)
-    async def service_worker() -> Response:
-        return Response((asset_dir / "sw.js").read_text(encoding="utf-8"), media_type="application/javascript", headers={"Service-Worker-Allowed": "/", "Cache-Control": "no-cache"})
-
-    @router.get("/pwa-icon.svg", include_in_schema=False)
-    async def pwa_icon() -> Response:
-        return Response((asset_dir / "pwa-icon.svg").read_text(encoding="utf-8"), media_type="image/svg+xml", headers={"Cache-Control": "public, max-age=86400"})
-
-    @router.get("/following", response_class=HTMLResponse, include_in_schema=False)
-    async def following_page() -> HTMLResponse:
-        return page()
-
-    @router.get("/updates", response_class=HTMLResponse, include_in_schema=False)
-    async def updates_page() -> HTMLResponse:
-        return page()
-
-    @router.get("/accounts", response_class=HTMLResponse, include_in_schema=False)
-    async def accounts_page() -> HTMLResponse:
-        return page()
-
-    @router.get("/videos", response_class=HTMLResponse, include_in_schema=False)
-    async def videos_page() -> HTMLResponse:
-        return page()
-
-    @router.get("/review", response_class=HTMLResponse, include_in_schema=False)
-    async def review_page() -> HTMLResponse:
-        return page()
-
-    @router.get("/status", response_class=HTMLResponse, include_in_schema=False)
-    async def status_page() -> HTMLResponse:
-        return page()
-
-    @router.get("/settings/crawler", response_class=HTMLResponse, include_in_schema=False)
-    async def crawler_settings_page() -> HTMLResponse:
-        return page()
-
-    @router.get("/diagnostics", response_class=HTMLResponse, include_in_schema=False)
-    async def diagnostics_page() -> HTMLResponse:
-        return page()
-
-    @router.get("/quality", response_class=HTMLResponse, include_in_schema=False)
-    async def quality_page() -> HTMLResponse:
-        return page()
+    )
 
     def health_payload() -> dict[str, str]:
         repository.counts()
@@ -350,7 +288,7 @@ def create_short_drama_router(
         result["following_unread_count"] = repository.unread_update_count(
             following_only=True
         )
-        result["groups"] = _group_update_events(result["events"])
+        result["groups"] = group_update_events(result["events"])
         return result
 
     @api.post("/updates/read-all")
@@ -688,43 +626,6 @@ def create_short_drama_router(
 
     router.include_router(api)
     return router
-
-
-def _group_update_events(events: list[dict[str, Any]], *, window_hours: int = 24) -> list[dict[str, Any]]:
-    """Group adjacent events for presentation only; database events stay intact."""
-    groups: list[dict[str, Any]] = []
-    for event in events:
-        occurred = str(event.get("occurred_at") or "")
-        try:
-            timestamp = datetime.fromisoformat(occurred.replace("Z", "+00:00"))
-        except ValueError:
-            timestamp = None
-        key = (int(event["show_id"]), int(event.get("season_number") or 1))
-        target = groups[-1] if groups and groups[-1]["key"] == key else None
-        if target is not None and timestamp is not None and target.get("_timestamp") is not None:
-            if abs((target["_timestamp"] - timestamp).total_seconds()) > window_hours * 3600:
-                target = None
-        if target is None:
-            target = {
-                "key": key,
-                "show_id": event["show_id"],
-                "show_title": event["show_title"],
-                "season_number": event.get("season_number", 1),
-                "episode_numbers": [],
-                "events": [],
-                "_timestamp": timestamp,
-            }
-            groups.append(target)
-        target["episode_numbers"].append(int(event["episode_number"]))
-        target["events"].append(event)
-    for group in groups:
-        group.pop("key", None)
-        group.pop("_timestamp", None)
-        numbers = group["episode_numbers"]
-        group["episode_start"] = min(numbers)
-        group["episode_end"] = max(numbers)
-        group["count"] = len(numbers)
-    return groups
 
 
 def _sync_result(result: SyncResult) -> dict[str, Any]:

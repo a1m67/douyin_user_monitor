@@ -14,7 +14,7 @@ tested, and committed independently without pushing during the phase.
 - [x] Phase 6: SQLite and scheduler concurrency
 - [x] Phase 7: Parser execution metrics
 - [x] Phase 8: Episode watch progress
-- [ ] Phase 9: Modular short-drama web application
+- [x] Phase 9: Modular short-drama web application
 
 ## Phase Records
 
@@ -87,14 +87,14 @@ tested, and committed independently without pushing during the phase.
 - Main design: per-show/per-season watch progress with explicit rollback support; following and detail views show watched and recorded-unwatched counts. `read_at` remains independent. Update API adds presentation-only burst groups without changing stored events.
 - Schema changes: v18 adds `watch_progress` with unique `(show_id, season_number)`, non-negative progress, and cascading Show ownership.
 - Tests: progress counting with missing episodes and Episode 0 exclusion, rollback, API read/write independence from update reads, burst grouping, doctor orphan check, and full suite.
-- Commit: `feat: add episode watch progress` (SHA recorded after commit)
+- Commit: `0123250` (`feat: add episode watch progress`)
 - Production verification still needed: validate progress semantics with real user workflows and confirm grouped update rendering on mobile browsers.
 
 ### Phase 9
 
-- Status: pending
-- Main design: pending
-- Schema changes: pending
-- Tests: pending
-- Commit: pending
-- Production verification still needed: pending
+- Status: complete
+- Main design: extracted the dashboard CSS and application JavaScript into stable `/static/app.css`, `/static/api.js`, and `/static/app.js` resources; kept the server-rendered shell and all existing routes; moved update burst grouping into a presentation helper; replaced startup/shutdown event handlers with FastAPI lifespan; and deferred default runtime/crawler construction until lifespan startup while preserving explicit runtime injection and legacy lifecycle helpers.
+- Schema changes: none; schema remains v18.
+- Tests: static asset and PWA tests, page/API compatibility tests, lifecycle tests including deferred runtime construction, dashboard UI tests, and full suite (226 tests passed).
+- Commit: recorded after the Phase 9 implementation commit.
+- Production verification still needed: exercise the static-resource cache behavior and lifespan start/stop on the VPS, then verify all dashboard routes and service-worker updates after deployment.
