@@ -35,6 +35,9 @@ class InProcessDouyinClient:
     async def aclose(self) -> None:
         return None
 
+    def set_cookie_override(self, cookie: str) -> None:
+        self._crawler.set_cookie_override(cookie)
+
     async def get_douyin_headers(self) -> Dict[str, Dict[str, str]]:
         try:
             kwargs = await self._crawler.get_douyin_headers()

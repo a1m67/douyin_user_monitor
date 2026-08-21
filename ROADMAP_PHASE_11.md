@@ -9,7 +9,7 @@ short-drama tracker. Phases are implemented, tested, and committed in order.
 - [x] Phase 2: Personal show following
 - [x] Phase 3: Episode update feed and unread state
 - [x] Phase 4: Advanced episode corrections
-- [ ] Phase 5: Web cookie management
+- [x] Phase 5: Web cookie management
 - [ ] Phase 6: System diagnostics dashboard
 - [ ] Phase 7: Data quality center
 - [ ] Phase 8: Mobile and PWA experience
@@ -53,17 +53,17 @@ and production behavior that has not yet been verified.
 - Main design: Transactional Episode and EpisodeSource moves support cross-Show/season/number corrections and deterministic conflict merging. Notifications are only relinked, update events are reconciled without duplication, Show latest/missing state is recalculated, Videos and Episodes have batch actions, and every operation remains notification-free.
 - Schema changes: schema v14 adds the append-only `manual_corrections` JSON audit table and a newest-first index.
 - Tests: focused repository/web/pipeline suite - 65 passed; full suite - 189 passed.
-- Commit: this phase commit (SHA recorded during final roadmap pass)
+- Commit: `7b2ed64`
 - Not yet verified: high-volume correction UX and audit review against production data.
 
 ### Phase 5
 
-- Status: pending
-- Main design: pending
-- Schema changes: pending
-- Tests: pending
-- Commit: pending
-- Not yet verified: pending
+- Status: complete
+- Main design: `/settings/crawler` accepts a Cookie header or browser-export JSON, writes a private runtime file with temp/fsync/replace, reloads the in-process crawler immediately, exposes only masked status/timestamps, and probes one enabled account on demand. Existing admin write authentication protects save and test actions.
+- Schema changes: none.
+- Tests: focused cookie/settings/web suite - 21 passed; full suite - 191 passed.
+- Commit: this phase commit (SHA recorded during final roadmap pass)
+- Not yet verified: a live VPS browser export, real Douyin login/risk-control classification, and filesystem ownership in the production container.
 
 ### Phase 6
 

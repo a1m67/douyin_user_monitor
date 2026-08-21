@@ -18,6 +18,7 @@ app.include_router(
         dispatcher=SHORT_DRAMA_RUNTIME.dispatcher,
         scheduler=SHORT_DRAMA_RUNTIME.scheduler,
         history_backfill_worker=SHORT_DRAMA_RUNTIME.history_backfill_worker,
+        cookie_manager=SHORT_DRAMA_RUNTIME.cookie_manager,
         default_check_interval_minutes=SHORT_DRAMA_RUNTIME.settings.check_interval_minutes,
         admin_api_token=SHORT_DRAMA_RUNTIME.settings.admin_api_token,
     )

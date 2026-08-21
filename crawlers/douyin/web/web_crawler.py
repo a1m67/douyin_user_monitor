@@ -73,6 +73,12 @@ class DouyinWebCrawler:
         # memory so neither credentials nor webhooks are written to logs.
         self._cookie_override = str(cookie_override or "").strip() or None
 
+    def set_cookie_override(self, cookie: str) -> None:
+        cleaned = str(cookie or "").strip()
+        if not cleaned:
+            raise ValueError("Cookie 不能为空")
+        self._cookie_override = cleaned
+
     # 从配置文件中获取抖音的请求头
     async def get_douyin_headers(self):
         config = get_config()

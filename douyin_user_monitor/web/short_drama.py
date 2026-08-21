@@ -38,6 +38,12 @@ class HistoryBackfillWorkerControl(Protocol):
         ...
 
 
+class CookieManagerControl(Protocol):
+    def status(self) -> dict[str, Any]: ...
+    def save(self, value: object) -> dict[str, Any]: ...
+    async def test(self) -> dict[str, Any]: ...
+
+
 class AddAccountPayload(BaseModel):
     homepage_url: str = Field(min_length=1)
     check_interval_minutes: int | None = Field(default=None, ge=1, le=1440)
@@ -105,6 +111,10 @@ class ReparseAccountPayload(BaseModel):
     )
 
 
+class CookieUpdatePayload(BaseModel):
+    cookie: Any
+
+
 def create_short_drama_router(
     *,
     repository: ShortDramaRepository,
@@ -112,6 +122,7 @@ def create_short_drama_router(
     dispatcher: NotificationDispatcher | None = None,
     scheduler: SchedulerStatus | None = None,
     history_backfill_worker: HistoryBackfillWorkerControl | None = None,
+    cookie_manager: CookieManagerControl | None = None,
     page_path: Path | None = None,
     default_check_interval_minutes: int = 10,
     admin_api_token: str = "",
@@ -162,6 +173,10 @@ def create_short_drama_router(
     async def status_page() -> HTMLResponse:
         return page()
 
+    @router.get("/settings/crawler", response_class=HTMLResponse, include_in_schema=False)
+    async def crawler_settings_page() -> HTMLResponse:
+        return page()
+
     def health_payload() -> dict[str, str]:
         repository.counts()
         return {
@@ -198,7 +213,6 @@ def create_short_drama_router(
         tags=["Short drama"],
         dependencies=[Depends(require_admin_token)],
     )
-
     @api.get("/shows")
     async def list_shows(
         account_id: str | None = None,
@@ -358,6 +372,26 @@ def create_short_drama_router(
     @api.get("/accounts")
     async def list_accounts() -> dict[str, Any]:
         return {"accounts": repository.list_accounts()}
+
+    @api.get("/settings/crawler")
+    async def crawler_settings() -> dict[str, Any]:
+        empty = {"configured": False, "status": "not_configured", "last_validated_at": None, "last_updated_at": None}
+        return {"cookie": cookie_manager.status() if cookie_manager else empty}
+
+    @api.put("/settings/crawler/cookie")
+    async def update_crawler_cookie(payload: CookieUpdatePayload) -> dict[str, Any]:
+        if cookie_manager is None:
+            raise HTTPException(status_code=503, detail="Cookie 管理未启用")
+        try:
+            return {"cookie": cookie_manager.save(payload.cookie)}
+        except (ValueError, OSError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @api.post("/settings/crawler/test")
+    async def test_crawler_cookie() -> dict[str, Any]:
+        if cookie_manager is None:
+            raise HTTPException(status_code=503, detail="Cookie 管理未启用")
+        return {"result": await cookie_manager.test(), "cookie": cookie_manager.status()}
 
     @api.post("/accounts", status_code=201)
     async def add_account(payload: AddAccountPayload) -> dict[str, Any]:

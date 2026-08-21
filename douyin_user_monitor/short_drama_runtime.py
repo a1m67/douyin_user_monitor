@@ -18,6 +18,7 @@ from douyin_user_monitor.services.history_backfill_worker import (
     HistoryBackfillWorkerConfig,
 )
 from douyin_user_monitor.services.scheduler import AccountScheduler, SchedulerConfig
+from douyin_user_monitor.services.cookie_manager import CookieManager
 from douyin_user_monitor.short_drama_settings import (
     ShortDramaSettings,
     load_cookie_header,
@@ -35,6 +36,7 @@ class ShortDramaRuntime:
     pipeline: ShortDramaPipeline
     scheduler: AccountScheduler
     history_backfill_worker: HistoryBackfillWorker
+    cookie_manager: CookieManager
 
     async def start(self) -> None:
         self.repository.prune_scan_runs(retention_days=self.settings.scan_run_retention_days)
@@ -124,6 +126,18 @@ def build_short_drama_runtime(settings: ShortDramaSettings | None = None) -> Sho
             delay_max_seconds=resolved_settings.history_backfill_delay_max_seconds,
         ),
     )
+    async def test_cookie() -> dict[str, str]:
+        account = next((item for item in repository.list_accounts() if item["enabled"]), None)
+        if account is None:
+            return {"status": "unknown", "reason": "没有可用的启用账号"}
+        await crawler.fetch_user_post_videos(str(account["sec_uid"]), 0, 1)
+        return {"status": "healthy", "reason": "验证请求成功"}
+
+    cookie_manager = CookieManager(
+        resolved_settings.cookie_file,
+        reload_cookie=crawler.set_cookie_override,
+        test_cookie=test_cookie,
+    )
     return ShortDramaRuntime(
         settings=resolved_settings,
         repository=repository,
@@ -132,4 +146,5 @@ def build_short_drama_runtime(settings: ShortDramaSettings | None = None) -> Sho
         pipeline=pipeline,
         scheduler=scheduler,
         history_backfill_worker=history_backfill_worker,
+        cookie_manager=cookie_manager,
     )
