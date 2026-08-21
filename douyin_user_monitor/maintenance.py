@@ -335,7 +335,10 @@ def doctor_database(database_path: Path, *, repair: bool = False) -> DoctorRepor
             WHERE ss.id IS NULL)""").fetchone()[0])
         watch_progress_orphans = int(connection.execute("""SELECT COUNT(*) FROM watch_progress wp
             LEFT JOIN shows s ON s.id=wp.show_id WHERE s.id IS NULL""").fetchone()[0])
+        ai_usage_duplicates = int(connection.execute("""SELECT COUNT(*) FROM (
+            SELECT usage_date,provider,COUNT(*) n FROM ai_usage_daily
+            GROUP BY usage_date,provider HAVING n>1)""").fetchone()[0])
     finally:
         connection.close()
-    checks = {"integrity": integrity, "foreign_key_errors": foreign_keys, "first_source_mismatch": first_source_mismatch, "duplicate_logical_episodes": duplicate_episodes, "stale_show_summary": stale_shows, "missing_show_seasons": missing_show_seasons, "watch_progress_orphans": watch_progress_orphans}
-    return DoctorReport(ok=integrity == "ok" and not foreign_keys and first_source_mismatch == 0 and duplicate_episodes == 0 and stale_shows == 0 and missing_show_seasons == 0 and watch_progress_orphans == 0, checks=checks, repaired=repair)
+    checks = {"integrity": integrity, "foreign_key_errors": foreign_keys, "first_source_mismatch": first_source_mismatch, "duplicate_logical_episodes": duplicate_episodes, "stale_show_summary": stale_shows, "missing_show_seasons": missing_show_seasons, "watch_progress_orphans": watch_progress_orphans, "ai_usage_duplicates": ai_usage_duplicates}
+    return DoctorReport(ok=integrity == "ok" and not foreign_keys and first_source_mismatch == 0 and duplicate_episodes == 0 and stale_shows == 0 and missing_show_seasons == 0 and watch_progress_orphans == 0 and ai_usage_duplicates == 0, checks=checks, repaired=repair)

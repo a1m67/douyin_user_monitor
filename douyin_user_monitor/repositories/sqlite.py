@@ -18,7 +18,7 @@ from douyin_user_monitor.maintenance import backup_database
 from douyin_user_monitor.raw_payload import compact_video_raw
 
 
-SCHEMA_VERSION = 22
+SCHEMA_VERSION = 23
 SQLITE_BUSY_TIMEOUT_MS = 30_000
 SHOW_STATUSES = frozenset({"updating", "completed", "paused"})
 VIDEO_CLASSIFICATIONS = frozenset({"matched", "ignored", "review"})
@@ -215,6 +215,94 @@ class ShortDramaRepository:
                 "failed": history.get("failed", 0),
             },
             "parser_metrics_24h": dict(scan),
+        }
+
+    def reserve_ai_request(
+        self,
+        *,
+        provider: str,
+        usage_date: str,
+        daily_call_limit: int = 0,
+    ) -> bool:
+        provider_name = str(provider or "").strip().lower()
+        if not provider_name:
+            raise ValueError("AI provider 不能为空")
+        if daily_call_limit < 0:
+            raise ValueError("AI 每日调用额度不能小于 0")
+        now = utc_now()
+        with self._transaction() as connection:
+            connection.execute(
+                """INSERT OR IGNORE INTO ai_usage_daily(
+                    usage_date, provider, calls, successes, failures, latency_ms, updated_at
+                ) VALUES (?, ?, 0, 0, 0, 0, ?)""",
+                (usage_date, provider_name, now),
+            )
+            row = connection.execute(
+                "SELECT calls FROM ai_usage_daily WHERE usage_date=? AND provider=?",
+                (usage_date, provider_name),
+            ).fetchone()
+            if row is None:
+                raise RuntimeError("无法读取 AI 用量记录")
+            if daily_call_limit and int(row["calls"]) >= daily_call_limit:
+                return False
+            connection.execute(
+                "UPDATE ai_usage_daily SET calls=calls+1, updated_at=? "
+                "WHERE usage_date=? AND provider=?",
+                (now, usage_date, provider_name),
+            )
+        return True
+
+    def complete_ai_request(
+        self,
+        *,
+        provider: str,
+        usage_date: str,
+        success: bool,
+        latency_ms: int,
+    ) -> None:
+        column = "successes" if success else "failures"
+        with self._transaction() as connection:
+            cursor = connection.execute(
+                f"UPDATE ai_usage_daily SET {column}={column}+1, "
+                "latency_ms=latency_ms+?, updated_at=? WHERE usage_date=? AND provider=?",
+                (
+                    max(0, int(latency_ms)),
+                    utc_now(),
+                    usage_date,
+                    str(provider or "").strip().lower(),
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise RuntimeError("AI 用量完成记录缺少对应 reservation")
+
+    def ai_usage_snapshot(
+        self,
+        *,
+        usage_date: str | None = None,
+        daily_limits: Mapping[str, int] | None = None,
+    ) -> dict[str, dict[str, Any]]:
+        target_date = usage_date or datetime.now(timezone.utc).date().isoformat()
+        limits = daily_limits or {"llm": 0, "ocr": 0}
+        providers = tuple(dict.fromkeys(limits.keys()))
+        if not providers:
+            return {}
+        placeholders = ",".join("?" for _ in providers)
+        with self._read_connection() as connection:
+            rows = connection.execute(
+                f"SELECT provider,calls,successes,failures,latency_ms FROM ai_usage_daily "
+                f"WHERE usage_date=? AND provider IN ({placeholders})",
+                (target_date, *providers),
+            ).fetchall()
+        stored = {str(row["provider"]): dict(row) for row in rows}
+        return {
+            provider: {
+                "calls": int(stored.get(provider, {}).get("calls", 0)),
+                "limit": max(0, int(limits.get(provider, 0))),
+                "successes": int(stored.get(provider, {}).get("successes", 0)),
+                "failures": int(stored.get(provider, {}).get("failures", 0)),
+                "latency_ms": int(stored.get(provider, {}).get("latency_ms", 0)),
+            }
+            for provider in providers
         }
 
     def _connect(self) -> sqlite3.Connection:
@@ -481,6 +569,21 @@ class ShortDramaRepository:
                 created_at TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS ai_usage_daily (
+                usage_date TEXT NOT NULL,
+                provider TEXT NOT NULL,
+                calls INTEGER NOT NULL DEFAULT 0,
+                successes INTEGER NOT NULL DEFAULT 0,
+                failures INTEGER NOT NULL DEFAULT 0,
+                latency_ms INTEGER NOT NULL DEFAULT 0,
+                updated_at TEXT NOT NULL,
+                UNIQUE(usage_date, provider),
+                CHECK (calls >= 0),
+                CHECK (successes >= 0),
+                CHECK (failures >= 0),
+                CHECK (latency_ms >= 0)
+            );
+
             CREATE TABLE IF NOT EXISTS update_events (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 show_id INTEGER NOT NULL REFERENCES shows(id) ON DELETE CASCADE,
@@ -539,6 +642,8 @@ class ShortDramaRepository:
             CREATE INDEX IF NOT EXISTS idx_scan_runs_account_order
                 ON scan_runs(account_id, started_at DESC, id DESC);
             CREATE INDEX IF NOT EXISTS idx_scan_runs_started ON scan_runs(started_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_ai_usage_daily_date
+                ON ai_usage_daily(usage_date DESC, provider);
             CREATE INDEX IF NOT EXISTS idx_update_events_occurred
                 ON update_events(occurred_at DESC, id DESC);
             CREATE INDEX IF NOT EXISTS idx_update_events_unread
@@ -3073,6 +3178,7 @@ class ShortDramaRepository:
             "low_confidence": ("""SELECT videos.id,accounts.nickname,COALESCE(videos.display_title,videos.description) title,videos.parser_confidence FROM videos JOIN accounts ON accounts.id=videos.account_id WHERE videos.classification_status!='ignored' AND videos.parser_confidence<0.90 ORDER BY videos.parser_confidence ASC""", ()),
             "ocr_only": ("""SELECT videos.id,accounts.nickname,COALESCE(videos.display_title,videos.description) title,videos.ocr_confidence FROM videos JOIN accounts ON accounts.id=videos.account_id WHERE videos.ocr_text IS NOT NULL AND videos.ocr_text!='' AND videos.parser_method LIKE 'ocr:%' ORDER BY videos.created_at DESC""", ()),
             "outdated_parser": ("""SELECT videos.id,accounts.nickname,COALESCE(videos.display_title,videos.description) title,videos.classification_status,videos.parser_version FROM videos JOIN accounts ON accounts.id=videos.account_id WHERE videos.parser_version IS NULL OR videos.parser_version != ? ORDER BY videos.created_at DESC""", (PARSER_VERSION,)),
+            "ai_guard_review": ("""SELECT videos.id,accounts.nickname,COALESCE(videos.display_title,videos.description) title,videos.parser_reason FROM videos JOIN accounts ON accounts.id=videos.account_id WHERE videos.classification_status='review' AND videos.parser_reason IN ('llm_budget_exhausted','llm_circuit_open','ocr_budget_exhausted','ocr_circuit_open') ORDER BY videos.created_at DESC""", ()),
             "stale_shows": ("""SELECT id,title,latest_update_at FROM shows WHERE is_ignored=0 AND status='updating' AND (latest_update_at IS NULL OR latest_update_at<?) ORDER BY latest_update_at""", (cutoff,)),
         }
         result: dict[str, Any] = {"stale_days": max(1, stale_days), "categories": {}}

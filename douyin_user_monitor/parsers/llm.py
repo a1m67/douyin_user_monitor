@@ -171,14 +171,14 @@ class LLMParser:
             raw = self._client.complete(input_payload)
             decision = _validate_decision(raw)
         except LLMTimeoutError:
-            return _failed_result(regex_result, "llm_timeout")
+            return llm_failure_result(regex_result, "llm_timeout")
         except LLMHTTPError:
-            return _failed_result(regex_result, "llm_http_error")
+            return llm_failure_result(regex_result, "llm_http_error")
         except (LLMResponseError, ValueError, TypeError, json.JSONDecodeError):
-            return _failed_result(regex_result, "llm_invalid_response")
+            return llm_failure_result(regex_result, "llm_invalid_response")
         except Exception:
             # A model integration must never abort account inspection.
-            return _failed_result(regex_result, "llm_call_failed")
+            return llm_failure_result(regex_result, "llm_call_failed")
 
         decision_dict = decision.to_dict()
         matched_show = _match_known_show(decision, candidates)
@@ -395,7 +395,7 @@ def _match_known_show(
     return match
 
 
-def _failed_result(base: EpisodeParseResult, reason: str) -> EpisodeParseResult:
+def llm_failure_result(base: EpisodeParseResult, reason: str) -> EpisodeParseResult:
     return EpisodeParseResult(
         status=REVIEW,
         show_title=base.show_title,

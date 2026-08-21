@@ -5,7 +5,7 @@ import asyncio
 import logging
 import re
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Mapping, Protocol, Sequence
 
 from douyin_user_monitor.monitor.history_sync import (
@@ -30,6 +30,7 @@ from douyin_user_monitor.providers.base import (
 from douyin_user_monitor.repositories.sqlite import EpisodeWriteResult, ShortDramaRepository
 from douyin_user_monitor.video_text import build_video_text_metadata
 from douyin_user_monitor.ocr import OCRBackend, run_ocr
+from douyin_user_monitor.services.ai_request_guard import AIRequestUnavailable
 
 logger = logging.getLogger(__name__)
 
@@ -779,6 +780,10 @@ class ShortDramaPipeline:
                     ocr_text = ocr_result.text if ocr_result.confidence >= 0.8 else ""
                     if metrics is not None:
                         metrics.ocr_successes += 1
+                except AIRequestUnavailable as exc:
+                    video = self._repository.save_video_ocr(int(video["id"]), text=None, confidence=None)
+                    ocr_text = ""
+                    parsed = replace(parsed, status=REVIEW, reason=exc.reason)
                 except Exception:
                     video = self._repository.save_video_ocr(int(video["id"]), text=None, confidence=None)
                     ocr_text = ""

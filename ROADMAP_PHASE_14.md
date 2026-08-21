@@ -7,10 +7,10 @@ Transactional reliability, lightweight operations, parser governance, bounded AI
 - [x] Phase 1: Transactional notification outbox
 - [x] Phase 2: Lightweight diagnostics and persistent service state
 - [x] Phase 3: Per-account adaptive scheduling
-- [ ] Phase 4: Verified database restore
-- [ ] Phase 5: Parser processing versioning
-- [ ] Phase 6: Parser golden regression suite
-- [ ] Phase 7: AI request budgets and guards
+- [x] Phase 4: Verified database restore
+- [x] Phase 5: Parser processing versioning
+- [x] Phase 6: Parser golden regression suite
+- [x] Phase 7: AI request budgets and guards
 - [ ] Phase 8: Bounded avatar and cover media cache
 - [ ] Phase 9: Global search and show pagination
 
@@ -74,7 +74,13 @@ Transactional reliability, lightweight operations, parser governance, bounded AI
 
 ### Phase 7
 
-- Status: pending
+- Status: complete
+- Main design: independent LLM/OCR guards reserve durable UTC-day usage before each external call, enforce separate process-wide concurrency, open a per-provider cooldown circuit after consecutive failures, and degrade budget/circuit denials into review reasons without failing account scans.
+- Schema changes: v23 adds `ai_usage_daily` with one durable aggregate row per UTC date/provider.
+- New settings: `LLM_MAX_CONCURRENT_REQUESTS`, `OCR_MAX_CONCURRENT_REQUESTS`, `LLM_DAILY_CALL_LIMIT`, `OCR_DAILY_CALL_LIMIT`, `AI_FAILURE_THRESHOLD`, and `AI_COOLDOWN_MINUTES`.
+- Tests: unlimited and exhausted budgets, UTC reset, independent concurrency, LLM/OCR circuits, scan degradation, diagnostics redaction, quality categorization, migration, focused suites, and the complete 278-test suite.
+- Commit: `feat: add ai request budgets and guards`.
+- Production verification still needed: verify configured provider limits, observe daily counters/cooldown state, and confirm no real credentials or raw AI payloads appear in diagnostics.
 
 ### Phase 8
 

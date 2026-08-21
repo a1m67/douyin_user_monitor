@@ -31,6 +31,8 @@ class ShortDramaSettings:
     llm_model: str
     llm_timeout_seconds: float
     llm_auto_accept_confidence: float
+    llm_max_concurrent_requests: int
+    llm_daily_call_limit: int
     max_backoff_minutes: int
     scheduler_poll_seconds: float
     adaptive_scheduler_enabled: bool
@@ -66,6 +68,10 @@ class ShortDramaSettings:
     ocr_timeout_seconds: float
     ocr_api_url: str
     ocr_api_key: str
+    ocr_max_concurrent_requests: int
+    ocr_daily_call_limit: int
+    ai_failure_threshold: int
+    ai_cooldown_minutes: int
 
 
 def load_short_drama_settings(
@@ -118,6 +124,8 @@ def load_short_drama_settings(
         llm_auto_accept_confidence=_confidence(
             values, "LLM_AUTO_ACCEPT_CONFIDENCE", 0.90
         ),
+        llm_max_concurrent_requests=_positive_int(values, "LLM_MAX_CONCURRENT_REQUESTS", 2),
+        llm_daily_call_limit=_non_negative_int(values, "LLM_DAILY_CALL_LIMIT", 0),
         max_backoff_minutes=_positive_int(values, "MAX_BACKOFF_MINUTES", 60),
         scheduler_poll_seconds=_positive_float(values, "SCHEDULER_POLL_SECONDS", 15.0),
         adaptive_scheduler_enabled=_boolean(values, "ADAPTIVE_SCHEDULER_ENABLED", False),
@@ -167,6 +175,10 @@ def load_short_drama_settings(
         ocr_timeout_seconds=_positive_float(values, "OCR_TIMEOUT_SECONDS", 15),
         ocr_api_url=_value(values, "OCR_API_URL", ""),
         ocr_api_key=_value(values, "OCR_API_KEY", ""),
+        ocr_max_concurrent_requests=_positive_int(values, "OCR_MAX_CONCURRENT_REQUESTS", 2),
+        ocr_daily_call_limit=_non_negative_int(values, "OCR_DAILY_CALL_LIMIT", 0),
+        ai_failure_threshold=_positive_int(values, "AI_FAILURE_THRESHOLD", 5),
+        ai_cooldown_minutes=_positive_int(values, "AI_COOLDOWN_MINUTES", 10),
     )
     if settings.llm_enabled:
         missing = [
@@ -297,6 +309,17 @@ def _positive_float(values: Mapping[str, str], key: str, default: float) -> floa
         raise ValueError(f"{key} 必须是正数") from exc
     if result <= 0:
         raise ValueError(f"{key} 必须大于 0")
+    return result
+
+
+def _non_negative_int(values: Mapping[str, str], key: str, default: int) -> int:
+    raw = _value(values, key, str(default))
+    try:
+        result = int(raw)
+    except ValueError as exc:
+        raise ValueError(f"{key} 必须是非负整数") from exc
+    if result < 0:
+        raise ValueError(f"{key} 不能小于 0")
     return result
 
 

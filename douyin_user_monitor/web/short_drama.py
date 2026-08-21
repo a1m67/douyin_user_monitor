@@ -5,7 +5,7 @@ import asyncio
 import secrets
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import Response
@@ -37,6 +37,8 @@ def create_short_drama_router(
     history_backfill_worker: HistoryBackfillWorkerControl | None = None,
     cookie_manager: CookieManagerControl | None = None,
     maintenance_worker: MaintenanceWorkerStatus | None = None,
+    ai_guards: Mapping[str, Any] | None = None,
+    ai_daily_limits: Mapping[str, int] | None = None,
     page_path: Path | None = None,
     default_check_interval_minutes: int = 10,
     admin_api_token: str = "",
@@ -296,6 +298,17 @@ def create_short_drama_router(
             "last_backup_at", "last_maintenance_at", "last_checkpoint_at",
         )
         snapshot = repository.diagnostics_snapshot()
+        usage = repository.ai_usage_snapshot(
+            daily_limits=ai_daily_limits or {"llm": 0, "ocr": 0}
+        )
+        for provider, item in usage.items():
+            guard = (ai_guards or {}).get(provider)
+            guard_status = guard.status() if guard is not None else {"status": "healthy"}
+            item.update({
+                "status": guard_status.get("status", "healthy"),
+                "cooldown_until": guard_status.get("cooldown_until"),
+                "consecutive_failures": guard_status.get("consecutive_failures", 0),
+            })
         wal_path = Path(f"{path}-wal")
         return {"database": {"path": path.name, "size_bytes": path.stat().st_size,
                 "wal_size_bytes": wal_path.stat().st_size if wal_path.is_file() else 0,
@@ -309,6 +322,7 @@ def create_short_drama_router(
                 "crawler": scheduler.crawler_status() if scheduler and hasattr(scheduler,"crawler_status") else {},
                 "cookie": cookie_manager.status() if cookie_manager else {"status":"not_configured"},
                 "features": {"llm": "configured_or_disabled", "ocr": "configured_or_disabled"},
+                "ai_services": usage,
                 "parser_metrics_24h": snapshot["parser_metrics_24h"],
                 "queues": {key: snapshot[key] for key in ("notification_queue", "review_queue", "history_queue")},
                 "workers": {

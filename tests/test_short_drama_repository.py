@@ -405,7 +405,7 @@ class ShortDramaRepositoryTests(unittest.TestCase):
 
         migrated = ShortDramaRepository(self.repository.database_path)
 
-        self.assertEqual(migrated.schema_version(), 22)
+        self.assertEqual(migrated.schema_version(), 23)
         self.assertIsNone(migrated.get_account(account["id"])["avatar_url"])
 
     def test_v20_migration_preserves_account_schedule_behavior(self):
@@ -417,7 +417,7 @@ class ShortDramaRepositoryTests(unittest.TestCase):
         migrated = ShortDramaRepository(self.repository.database_path)
         stored = migrated.get_account(account["id"])
 
-        self.assertEqual(migrated.schema_version(), 22)
+        self.assertEqual(migrated.schema_version(), 23)
         self.assertEqual(stored["schedule_mode"], "inherit")
         self.assertIsNone(stored["adaptive_min_interval_minutes"])
         self.assertIsNone(stored["adaptive_max_interval_minutes"])
@@ -1367,7 +1367,7 @@ class ShortDramaRepositoryTests(unittest.TestCase):
         migrated = ShortDramaRepository(self.repository.database_path)
         stored = migrated.get_video(video["id"])
 
-        self.assertEqual(migrated.schema_version(), 22)
+        self.assertEqual(migrated.schema_version(), 23)
         self.assertIsNone(stored["parser_version"])
         self.assertIsNone(stored["parser_input_hash"])
         self.assertIsNone(stored["processed_build_sha"])
@@ -1440,12 +1440,14 @@ class ShortDramaRepositoryTests(unittest.TestCase):
                 video_id=video["id"], account_id=account["id"], published_at=video["publish_time"])
         review = self.create_video(account["id"], "quality-review")
         self.repository.update_video_processing(review["id"], is_processed=False, needs_review=True,
-            classification_status="review", parser_confidence=0.4, parser_method="regex:test")
+            classification_status="review", parser_confidence=0.4, parser_method="llm",
+            parser_reason="llm_budget_exhausted")
         report = self.repository.data_quality_report(stale_days=1)
         self.assertEqual(report["categories"]["review"]["count"], 1)
         self.assertEqual(report["categories"]["low_confidence"]["count"], 3)
         self.assertEqual(report["categories"]["missing_episodes"]["count"], 1)
         self.assertEqual(report["categories"]["outdated_parser"]["count"], 3)
+        self.assertEqual(report["categories"]["ai_guard_review"]["count"], 1)
         self.assertEqual(report["categories"]["stale_shows"]["count"], 1)
 
 

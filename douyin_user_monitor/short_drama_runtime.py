@@ -15,6 +15,11 @@ from douyin_user_monitor.repositories.sqlite import ShortDramaRepository
 from douyin_user_monitor.services.episode_pipeline import ShortDramaPipeline
 from douyin_user_monitor.services.crawler_circuit_breaker import CrawlerCircuitBreaker
 from douyin_user_monitor.services.douyin_request_guard import DouyinRequestGuard
+from douyin_user_monitor.services.ai_request_guard import (
+    AIRequestGuard,
+    GuardedLLMParser,
+    GuardedOCRBackend,
+)
 from douyin_user_monitor.services.history_backfill_worker import (
     HistoryBackfillWorker,
     HistoryBackfillWorkerConfig,
@@ -41,6 +46,7 @@ class ShortDramaRuntime:
     history_backfill_worker: HistoryBackfillWorker
     cookie_manager: CookieManager
     maintenance_worker: MaintenanceWorker
+    ai_guards: dict[str, AIRequestGuard]
 
     async def start(self) -> None:
         self.repository.prune_scan_runs(retention_days=self.settings.scan_run_retention_days)
@@ -95,9 +101,27 @@ def build_short_drama_runtime(settings: ShortDramaSettings | None = None) -> Sho
         max_backoff_seconds=resolved_settings.notification_max_backoff_seconds,
         claim_timeout_seconds=resolved_settings.notification_claim_timeout_seconds,
     )
+    ai_guards = {
+        "llm": AIRequestGuard(
+            repository,
+            provider="llm",
+            max_concurrent_requests=resolved_settings.llm_max_concurrent_requests,
+            daily_call_limit=resolved_settings.llm_daily_call_limit,
+            failure_threshold=resolved_settings.ai_failure_threshold,
+            cooldown_minutes=resolved_settings.ai_cooldown_minutes,
+        ),
+        "ocr": AIRequestGuard(
+            repository,
+            provider="ocr",
+            max_concurrent_requests=resolved_settings.ocr_max_concurrent_requests,
+            daily_call_limit=resolved_settings.ocr_daily_call_limit,
+            failure_threshold=resolved_settings.ai_failure_threshold,
+            cooldown_minutes=resolved_settings.ai_cooldown_minutes,
+        ),
+    }
     llm_backend = None
     if resolved_settings.llm_enabled:
-        llm_backend = LLMParser(
+        llm_backend = GuardedLLMParser(LLMParser(
             OpenAICompatibleLLMClient(
                 api_key=resolved_settings.llm_api_key,
                 base_url=resolved_settings.llm_base_url,
@@ -105,12 +129,19 @@ def build_short_drama_runtime(settings: ShortDramaSettings | None = None) -> Sho
                 timeout_seconds=resolved_settings.llm_timeout_seconds,
             ),
             auto_accept_confidence=resolved_settings.llm_auto_accept_confidence,
-        )
+        ), ai_guards["llm"])
     parser = EpisodeParser(
         llm_backend=llm_backend,
         auto_accept_confidence=resolved_settings.auto_accept_confidence,
     )
-    ocr_backend = HttpOCRBackend(api_url=resolved_settings.ocr_api_url, api_key=resolved_settings.ocr_api_key, timeout_seconds=resolved_settings.ocr_timeout_seconds) if resolved_settings.ocr_enabled else None
+    ocr_backend = GuardedOCRBackend(
+        HttpOCRBackend(
+            api_url=resolved_settings.ocr_api_url,
+            api_key=resolved_settings.ocr_api_key,
+            timeout_seconds=resolved_settings.ocr_timeout_seconds,
+        ),
+        ai_guards["ocr"],
+    ) if resolved_settings.ocr_enabled else None
     pipeline = ShortDramaPipeline(
         repository=repository,
         provider=provider,
@@ -185,6 +216,7 @@ def build_short_drama_runtime(settings: ShortDramaSettings | None = None) -> Sho
         history_backfill_worker=history_backfill_worker,
         cookie_manager=cookie_manager,
         maintenance_worker=maintenance_worker,
+        ai_guards=ai_guards,
     )
 
 

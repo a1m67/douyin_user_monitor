@@ -92,6 +92,11 @@ def create_app(runtime: ShortDramaRuntime | None = None, *, include_legacy_route
             history_backfill_worker=_RuntimeAttributeProxy(holder, "history_backfill_worker"),
             cookie_manager=_RuntimeAttributeProxy(holder, "cookie_manager"),
             maintenance_worker=_RuntimeAttributeProxy(holder, "maintenance_worker"),
+            ai_guards=_RuntimeAttributeProxy(holder, "ai_guards"),
+            ai_daily_limits={
+                "llm": getattr(settings, "llm_daily_call_limit", 0),
+                "ocr": getattr(settings, "ocr_daily_call_limit", 0),
+            },
             default_check_interval_minutes=settings.check_interval_minutes,
             admin_api_token=settings.admin_api_token,
         )

@@ -132,6 +132,10 @@ PowerShell 下可将 `.venv/Scripts/python` 替换为 `.venv\Scripts\python.exe`
 | `OCR_ENABLED` | `false` | 是否为仍需审核且有封面的作品启用 OCR fallback。 |
 | `OCR_TIMEOUT_SECONDS` | `15` | 单次封面 OCR 超时。 |
 | `OCR_API_URL` / `OCR_API_KEY` | 空 | HTTP-compatible OCR 服务地址及可选密钥；密钥不记录。 |
+| `OCR_MAX_CONCURRENT_REQUESTS` | `2` | OCR 独立并发上限。 |
+| `OCR_DAILY_CALL_LIMIT` | `0` | UTC 日 OCR 调用额度；`0` 表示不限额。 |
+| `AI_FAILURE_THRESHOLD` | `5` | LLM/OCR 连续失败后进入冷却的阈值。 |
+| `AI_COOLDOWN_MINUTES` | `10` | AI 服务熔断后的冷却分钟数。 |
 | `CHECK_INTERVAL_MINUTES` | `10` | 新账号默认检查间隔，可按账号覆盖。 |
 | `MAX_CONCURRENT_CHECKS` | `3` | 同时请求的账号上限。 |
 | `MAX_BACKOFF_MINUTES` | `60` | 连续失败时的退避上限。 |
@@ -157,6 +161,8 @@ PowerShell 下可将 `.venv/Scripts/python` 替换为 `.venv\Scripts\python.exe`
 | `LLM_MODEL` | 空 | 模型名称，不绑定具体厂商。 |
 | `LLM_TIMEOUT_SECONDS` | `20` | 单次 LLM 请求超时秒数。 |
 | `LLM_AUTO_ACCEPT_CONFIDENCE` | `0.90` | AI 建议自动归档最低置信度。 |
+| `LLM_MAX_CONCURRENT_REQUESTS` | `2` | LLM 独立并发上限。 |
+| `LLM_DAILY_CALL_LIMIT` | `0` | UTC 日 LLM 调用额度；`0` 表示不限额。 |
 | `DOUYIN_COOKIE_FILE` | `data/cookies.json` | Cookie 文件路径。 |
 | `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` | 空 | 两者都配置后启用 Telegram。 |
 | `FEISHU_WEBHOOK_URL` | 空 | 配置后启用飞书通知。 |

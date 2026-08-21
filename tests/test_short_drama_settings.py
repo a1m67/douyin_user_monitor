@@ -39,6 +39,12 @@ class ShortDramaSettingsTests(unittest.TestCase):
                 "LLM_MODEL": "episode-model",
                 "LLM_TIMEOUT_SECONDS": "12",
                 "LLM_AUTO_ACCEPT_CONFIDENCE": "0.92",
+                "LLM_MAX_CONCURRENT_REQUESTS": "3",
+                "LLM_DAILY_CALL_LIMIT": "40",
+                "OCR_MAX_CONCURRENT_REQUESTS": "4",
+                "OCR_DAILY_CALL_LIMIT": "50",
+                "AI_FAILURE_THRESHOLD": "6",
+                "AI_COOLDOWN_MINUTES": "12",
                 "ADMIN_API_TOKEN": "test-admin-token",
                 "ADAPTIVE_SCHEDULER_ENABLED": "true",
                 "ADAPTIVE_MIN_INTERVAL_MINUTES": "7",
@@ -61,6 +67,12 @@ class ShortDramaSettingsTests(unittest.TestCase):
         self.assertEqual(settings.llm_model, "episode-model")
         self.assertEqual(settings.llm_timeout_seconds, 12.0)
         self.assertEqual(settings.llm_auto_accept_confidence, 0.92)
+        self.assertEqual(settings.llm_max_concurrent_requests, 3)
+        self.assertEqual(settings.llm_daily_call_limit, 40)
+        self.assertEqual(settings.ocr_max_concurrent_requests, 4)
+        self.assertEqual(settings.ocr_daily_call_limit, 50)
+        self.assertEqual(settings.ai_failure_threshold, 6)
+        self.assertEqual(settings.ai_cooldown_minutes, 12)
         self.assertEqual(settings.admin_api_token, "test-admin-token")
         self.assertTrue(settings.adaptive_scheduler_enabled)
         self.assertEqual(settings.adaptive_min_interval_minutes, 7)
@@ -113,6 +125,18 @@ class ShortDramaSettingsTests(unittest.TestCase):
             load_short_drama_settings(
                 project_root=self.root,
                 environ={"LLM_ENABLED": "true"},
+            )
+
+    def test_ai_daily_limits_allow_zero_but_not_negative(self):
+        settings = load_short_drama_settings(
+            project_root=self.root,
+            environ={"LLM_DAILY_CALL_LIMIT": "0", "OCR_DAILY_CALL_LIMIT": "0"},
+        )
+        self.assertEqual(settings.llm_daily_call_limit, 0)
+        self.assertEqual(settings.ocr_daily_call_limit, 0)
+        with self.assertRaisesRegex(ValueError, "LLM_DAILY_CALL_LIMIT"):
+            load_short_drama_settings(
+                project_root=self.root, environ={"LLM_DAILY_CALL_LIMIT": "-1"}
             )
 
     def test_cookie_reader_supports_browser_export_list_and_plain_header(self):
