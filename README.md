@@ -122,6 +122,10 @@ PowerShell 下可将 `.venv/Scripts/python` 替换为 `.venv\Scripts\python.exe`
 | `LEGACY_MONITOR_ENABLED` | `false` | 仅迁移兼容时启动旧 JSON Monitor；新 SQLite 短剧调度器始终启用。 |
 | `SCAN_RUN_RETENTION_DAYS` | `30` | 巡检历史保留天数；启动时清理过期记录。 |
 | `BACKUP_RETENTION_COUNT` | `14` | `data/backups/app-*.db` 在线备份保留数量。 |
+| `AUTO_MAINTENANCE_ENABLED` | `true` | 启用自动备份和轻量 SQLite 维护 worker。 |
+| `AUTO_BACKUP_INTERVAL_HOURS` | `24` | 自动在线备份间隔。 |
+| `MAINTENANCE_POLL_SECONDS` | `300` | 维护任务到期检查间隔。 |
+| `WAL_CHECKPOINT_INTERVAL_HOURS` | `6` | PASSIVE WAL checkpoint 最小间隔。 |
 | `OCR_ENABLED` | `false` | 是否为仍需审核且有封面的作品启用 OCR fallback。 |
 | `OCR_TIMEOUT_SECONDS` | `15` | 单次封面 OCR 超时。 |
 | `OCR_API_URL` / `OCR_API_KEY` | 空 | HTTP-compatible OCR 服务地址及可选密钥；密钥不记录。 |
@@ -194,7 +198,9 @@ python -m douyin_user_monitor db-stats
 python -m douyin_user_monitor db-stats --checkpoint
 ```
 
-`db-stats` 只输出数据库/WAL 大小、页统计、业务表行数和索引定义，不读取用户数据内容。WAL checkpoint 仅在显式传入 `--checkpoint` 时执行；系统不会自动频繁 `VACUUM`，也不会自动删除更新动态。
+`db-stats` 只输出数据库/WAL 大小、页统计、业务表行数和索引定义，不读取用户数据内容。`--checkpoint` 执行显式 TRUNCATE checkpoint；后台维护只使用低频 PASSIVE checkpoint。系统不会自动频繁 `VACUUM`，也不会自动删除更新动态。
+
+默认启用轻量维护 worker：每 24 小时按 SQLite online backup API 创建一次备份、保留最近 14 份，按既有保留期清理巡检运行记录，并以 PASSIVE 模式低频回收 WAL frame。它不会自动 `VACUUM`，也不会删除 Episode、UpdateEvent 或用户数据。
 
 ```bash
 .venv/Scripts/python -m unittest discover -s tests -v

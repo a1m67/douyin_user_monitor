@@ -23,6 +23,10 @@ class CookieManagerControl(Protocol):
     async def test(self) -> dict[str, Any]: ...
 
 
+class MaintenanceWorkerStatus(Protocol):
+    def health_status(self) -> dict[str, Any]: ...
+
+
 class AddAccountPayload(BaseModel):
     homepage_url: str = Field(min_length=1)
     check_interval_minutes: int | None = Field(default=None, ge=1, le=1440)

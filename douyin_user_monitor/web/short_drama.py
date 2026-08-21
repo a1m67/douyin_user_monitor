@@ -18,6 +18,7 @@ from douyin_user_monitor.web.api_types import (
     AddAccountPayload, BatchEpisodeSeasonPayload, BatchIgnoreReviewPayload,
     BatchVideoPayload, CookieManagerControl, CookieUpdatePayload,
     HistoryBackfillWorkerControl, IgnoreShowPayload, MergeShowPayload,
+    MaintenanceWorkerStatus,
     MoveEpisodePayload, MoveEpisodeSourcePayload, ReparseAccountPayload,
     ReviewPayload, SchedulerStatus, UpdateAccountPayload, UpdateShowPayload,
     UpdateShowSeasonPayload, WatchProgressPayload,
@@ -34,6 +35,7 @@ def create_short_drama_router(
     scheduler: SchedulerStatus | None = None,
     history_backfill_worker: HistoryBackfillWorkerControl | None = None,
     cookie_manager: CookieManagerControl | None = None,
+    maintenance_worker: MaintenanceWorkerStatus | None = None,
     page_path: Path | None = None,
     default_check_interval_minutes: int = 10,
     admin_api_token: str = "",
@@ -300,7 +302,8 @@ def create_short_drama_router(
                 "crawler": scheduler.crawler_status() if scheduler and hasattr(scheduler,"crawler_status") else {},
                 "cookie": cookie_manager.status() if cookie_manager else {"status":"not_configured"},
                 "features": {"llm": "configured_or_disabled", "ocr": "configured_or_disabled"},
-                "parser_metrics_24h": repository.system_status()["scan_runs_24h"]}
+                "parser_metrics_24h": repository.system_status()["scan_runs_24h"],
+                "maintenance": maintenance_worker.health_status() if maintenance_worker else {"enabled": False}}
 
     @api.get("/quality")
     async def data_quality(stale_days: int = Query(default=30, ge=1, le=3650)) -> dict[str, Any]:
@@ -517,6 +520,7 @@ def create_short_drama_router(
             else "not_started"
         )
         result["enabled_notification_channels"] = list(dispatcher.enabled_channels) if dispatcher else []
+        result["maintenance"] = maintenance_worker.health_status() if maintenance_worker else {"enabled": False}
         return result
 
     @api.get("/health")

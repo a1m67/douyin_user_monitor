@@ -20,6 +20,7 @@ from douyin_user_monitor.services.history_backfill_worker import (
     HistoryBackfillWorkerConfig,
 )
 from douyin_user_monitor.services.scheduler import AccountScheduler, SchedulerConfig
+from douyin_user_monitor.services.maintenance_worker import MaintenanceWorker, MaintenanceWorkerConfig
 from douyin_user_monitor.services.cookie_manager import CookieManager
 from douyin_user_monitor.short_drama_settings import (
     ShortDramaSettings,
@@ -39,16 +40,19 @@ class ShortDramaRuntime:
     scheduler: AccountScheduler
     history_backfill_worker: HistoryBackfillWorker
     cookie_manager: CookieManager
+    maintenance_worker: MaintenanceWorker
 
     async def start(self) -> None:
         self.repository.prune_scan_runs(retention_days=self.settings.scan_run_retention_days)
         await self.dispatcher.start()
+        await self.maintenance_worker.start()
         await self.history_backfill_worker.start()
         await self.scheduler.start()
 
     async def shutdown(self) -> None:
         await self.scheduler.stop()
         await self.history_backfill_worker.stop()
+        await self.maintenance_worker.stop()
         await self.dispatcher.aclose()
         await self.provider.aclose()
 
@@ -156,6 +160,17 @@ def build_short_drama_runtime(settings: ShortDramaSettings | None = None) -> Sho
         reload_cookie=crawler.set_cookie_override,
         test_cookie=test_cookie,
     )
+    maintenance_worker = MaintenanceWorker(
+        repository,
+        MaintenanceWorkerConfig(
+            enabled=resolved_settings.auto_maintenance_enabled,
+            poll_seconds=resolved_settings.maintenance_poll_seconds,
+            backup_interval_hours=resolved_settings.auto_backup_interval_hours,
+            checkpoint_interval_hours=resolved_settings.wal_checkpoint_interval_hours,
+            backup_retention_count=resolved_settings.backup_retention_count,
+            scan_run_retention_days=resolved_settings.scan_run_retention_days,
+        ),
+    )
     return ShortDramaRuntime(
         settings=resolved_settings,
         repository=repository,
@@ -165,6 +180,7 @@ def build_short_drama_runtime(settings: ShortDramaSettings | None = None) -> Sho
         scheduler=scheduler,
         history_backfill_worker=history_backfill_worker,
         cookie_manager=cookie_manager,
+        maintenance_worker=maintenance_worker,
     )
 
 

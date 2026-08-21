@@ -91,6 +91,7 @@ def create_app(runtime: ShortDramaRuntime | None = None, *, include_legacy_route
             scheduler=_RuntimeAttributeProxy(holder, "scheduler"),
             history_backfill_worker=_RuntimeAttributeProxy(holder, "history_backfill_worker"),
             cookie_manager=_RuntimeAttributeProxy(holder, "cookie_manager"),
+            maintenance_worker=_RuntimeAttributeProxy(holder, "maintenance_worker"),
             default_check_interval_minutes=settings.check_interval_minutes,
             admin_api_token=settings.admin_api_token,
         )

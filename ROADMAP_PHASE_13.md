@@ -9,7 +9,7 @@ Security, delivery reliability, maintainability, long-running storage, and daily
 - [x] Phase 3: Reliable notification outbox
 - [x] Phase 4: Complete web module split
 - [x] Phase 5: Build identity and cache-safe PWA delivery
-- [ ] Phase 6: Automatic backups and maintenance worker
+- [x] Phase 6: Automatic backups and maintenance worker
 - [ ] Phase 7: Bounded Douyin raw payload storage
 - [ ] Phase 8: Avatar, cover, and continue-watching UX
 - [ ] Phase 9: Optional adaptive scheduler
@@ -63,12 +63,12 @@ Security, delivery reliability, maintainability, long-running storage, and daily
 
 ### Phase 6
 
-- Status: pending
-- Main design: lightweight maintenance worker for scheduled online backups and bounded cleanup/checkpoint tasks.
-- Schema changes: none expected.
-- Tests: pending.
-- Commit: pending.
-- Production verification still needed: pending.
+- Status: complete
+- Main design: low-frequency worker reuses SQLite online backup, prunes only bounded scan-run history, applies passive WAL checkpoints, retains named backups, and exposes redacted health state.
+- Schema changes: none; schema remains v19.
+- Tests: online backup creation, due-time suppression, passive checkpoint, disabled lifecycle, existing maintenance CLI, settings, diagnostics, compile checks, and full suite.
+- Commit: recorded after implementation commit.
+- Production verification still needed: backup filesystem capacity/permissions and WAL behavior under the VPS workload.
 
 ### Phase 7
 

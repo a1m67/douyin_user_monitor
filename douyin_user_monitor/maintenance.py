@@ -34,6 +34,16 @@ def backup_database(database_path: Path, *, backup_dir: Path | None = None, rete
     return target
 
 
+def passive_wal_checkpoint(database_path: Path) -> dict[str, int]:
+    """Checkpoint reusable WAL frames without truncating or blocking writers."""
+    connection = sqlite3.connect(database_path, timeout=MAINTENANCE_BUSY_TIMEOUT_MS / 1000)
+    try:
+        row = connection.execute("PRAGMA wal_checkpoint(PASSIVE)").fetchone()
+        return {"busy": int(row[0]), "log_frames": int(row[1]), "checkpointed_frames": int(row[2])}
+    finally:
+        connection.close()
+
+
 @dataclass(frozen=True)
 class DoctorReport:
     ok: bool

@@ -54,6 +54,10 @@ class ShortDramaSettings:
     legacy_monitor_enabled: bool
     scan_run_retention_days: int
     backup_retention_count: int
+    auto_maintenance_enabled: bool
+    auto_backup_interval_hours: int
+    maintenance_poll_seconds: float
+    wal_checkpoint_interval_hours: int
     ocr_enabled: bool
     ocr_timeout_seconds: float
     ocr_api_url: str
@@ -143,6 +147,10 @@ def load_short_drama_settings(
         legacy_monitor_enabled=_boolean(values, "LEGACY_MONITOR_ENABLED", False),
         scan_run_retention_days=_positive_int(values, "SCAN_RUN_RETENTION_DAYS", 30),
         backup_retention_count=_positive_int(values, "BACKUP_RETENTION_COUNT", 14),
+        auto_maintenance_enabled=_boolean(values, "AUTO_MAINTENANCE_ENABLED", True),
+        auto_backup_interval_hours=_positive_int(values, "AUTO_BACKUP_INTERVAL_HOURS", 24),
+        maintenance_poll_seconds=_positive_float(values, "MAINTENANCE_POLL_SECONDS", 300),
+        wal_checkpoint_interval_hours=_positive_int(values, "WAL_CHECKPOINT_INTERVAL_HOURS", 6),
         ocr_enabled=_boolean(values, "OCR_ENABLED", False),
         ocr_timeout_seconds=_positive_float(values, "OCR_TIMEOUT_SECONDS", 15),
         ocr_api_url=_value(values, "OCR_API_URL", ""),
