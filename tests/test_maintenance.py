@@ -1,9 +1,14 @@
 import sqlite3
 import tempfile
 import unittest
+from contextlib import redirect_stdout
+from io import StringIO
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
-from douyin_user_monitor.maintenance import backup_database, doctor_database
+from douyin_user_monitor.__main__ import main
+from douyin_user_monitor.maintenance import backup_database, database_stats, doctor_database
 from douyin_user_monitor.repositories.sqlite import ShortDramaRepository
 
 
@@ -41,6 +46,37 @@ class MaintenanceTests(unittest.TestCase):
             connection.execute("UPDATE shows SET latest_episode=99 WHERE id=?", (show["id"],))
         self.assertFalse(doctor_database(self.database).ok)
         self.assertTrue(doctor_database(self.database, repair=True).ok)
+
+    def test_database_stats_reports_wal_rows_indexes_and_explicit_checkpoint(self):
+        account = self.repository.create_account(
+            sec_uid="stats", nickname="stats", homepage_url="url"
+        )
+        report = database_stats(self.database, checkpoint=True)
+        self.assertEqual(report["journal_mode"], "wal")
+        self.assertEqual(report["table_rows"]["accounts"], 1)
+        self.assertEqual(report["table_rows"]["update_events"], 0)
+        self.assertGreater(report["database_size_bytes"], 0)
+        self.assertIsNotNone(report["checkpoint"])
+        self.assertIn(
+            "idx_update_events_unread_order",
+            {index["name"] for index in report["indexes"]},
+        )
+        self.assertEqual(self.repository.get_account(account["id"])["nickname"], "stats")
+
+    def test_db_stats_cli_prints_json_report(self):
+        output = StringIO()
+        settings = SimpleNamespace(database_path=self.database, backup_retention_count=14)
+        with (
+            patch("sys.argv", ["douyin_user_monitor", "db-stats"]),
+            patch(
+                "douyin_user_monitor.__main__.load_short_drama_settings",
+                return_value=settings,
+            ),
+            redirect_stdout(output),
+        ):
+            self.assertEqual(main(), 0)
+        self.assertIn('"journal_mode": "wal"', output.getvalue())
+        self.assertIn('"table_rows"', output.getvalue())
 
 
 if __name__ == "__main__":

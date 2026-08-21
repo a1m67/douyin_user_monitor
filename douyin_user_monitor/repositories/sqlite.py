@@ -16,6 +16,7 @@ from douyin_user_monitor.maintenance import backup_database
 
 
 SCHEMA_VERSION = 14
+SQLITE_BUSY_TIMEOUT_MS = 30_000
 SHOW_STATUSES = frozenset({"updating", "completed", "paused"})
 VIDEO_CLASSIFICATIONS = frozenset({"matched", "ignored", "review"})
 VIDEO_CONTENT_TYPES = frozenset({"episode", "trailer", "show_content", "unknown", "non_drama"})
@@ -55,8 +56,13 @@ class ShortDramaRepository:
         self.initialize()
 
     def initialize(self) -> None:
+        journal = self._connect()
+        try:
+            journal.execute("PRAGMA journal_mode = WAL").fetchone()
+        finally:
+            journal.close()
         if self.database_path.is_file() and self.database_path.stat().st_size:
-            probe = sqlite3.connect(self.database_path)
+            probe = self._connect()
             try:
                 row = probe.execute("SELECT value FROM app_meta WHERE key='schema_version'").fetchone()
                 existing_version = _schema_version(str(row[0]) if row else None)
@@ -80,12 +86,17 @@ class ShortDramaRepository:
     def schema_version(self) -> int:
         return SCHEMA_VERSION
 
+    def _connect(self) -> sqlite3.Connection:
+        connection = sqlite3.connect(self.database_path, timeout=SQLITE_BUSY_TIMEOUT_MS / 1000)
+        connection.row_factory = sqlite3.Row
+        connection.execute(f"PRAGMA busy_timeout = {SQLITE_BUSY_TIMEOUT_MS}")
+        connection.execute("PRAGMA foreign_keys = ON")
+        return connection
+
     @contextmanager
     def _transaction(self) -> Iterator[sqlite3.Connection]:
         with self._lock:
-            connection = sqlite3.connect(self.database_path, timeout=30)
-            connection.row_factory = sqlite3.Row
-            connection.execute("PRAGMA foreign_keys = ON")
+            connection = self._connect()
             try:
                 yield connection
                 connection.commit()
@@ -273,19 +284,37 @@ class ShortDramaRepository:
                 ON videos(content_type, created_at DESC);
             CREATE INDEX IF NOT EXISTS idx_videos_parser_created
                 ON videos(parser_method, created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_videos_published
+                ON videos(COALESCE(publish_time, created_at) DESC, id DESC);
+            CREATE INDEX IF NOT EXISTS idx_videos_account_published
+                ON videos(account_id, COALESCE(publish_time, created_at) DESC, id DESC);
+            CREATE INDEX IF NOT EXISTS idx_videos_classification_published
+                ON videos(classification_status, COALESCE(publish_time, created_at) DESC, id DESC);
             CREATE INDEX IF NOT EXISTS idx_episodes_show_number
                 ON episodes(show_id, episode_number DESC);
+            CREATE INDEX IF NOT EXISTS idx_episode_sources_episode_published
+                ON episode_sources(
+                    episode_id,
+                    COALESCE(published_at, created_at) ASC,
+                    id ASC
+                );
             CREATE INDEX IF NOT EXISTS idx_notifications_episode
                 ON notifications(episode_id, sent_at DESC);
             CREATE INDEX IF NOT EXISTS idx_scan_runs_account_started
                 ON scan_runs(account_id, started_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_scan_runs_account_order
+                ON scan_runs(account_id, started_at DESC, id DESC);
             CREATE INDEX IF NOT EXISTS idx_scan_runs_started ON scan_runs(started_at DESC);
             CREATE INDEX IF NOT EXISTS idx_update_events_occurred
                 ON update_events(occurred_at DESC, id DESC);
             CREATE INDEX IF NOT EXISTS idx_update_events_unread
                 ON update_events(read_at, occurred_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_update_events_unread_order
+                ON update_events(read_at, occurred_at DESC, id DESC);
             CREATE INDEX IF NOT EXISTS idx_update_events_show
                 ON update_events(show_id, occurred_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_update_events_show_order
+                ON update_events(show_id, occurred_at DESC, id DESC);
             CREATE INDEX IF NOT EXISTS idx_manual_corrections_created
                 ON manual_corrections(created_at DESC, id DESC);
             """
@@ -350,6 +379,10 @@ class ShortDramaRepository:
         }.items():
             if not _table_has_column(connection, "shows", column):
                 connection.execute(f"ALTER TABLE shows ADD COLUMN {column} {definition}")
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_shows_quality_stale "
+            "ON shows(is_ignored, status, latest_update_at)"
+        )
         connection.execute(
             "CREATE INDEX IF NOT EXISTS idx_videos_classification "
             "ON videos(classification_status, created_at DESC)"
@@ -1607,12 +1640,23 @@ class ShortDramaRepository:
         return result
 
     def get_show_detail(self, show_id: int) -> dict[str, Any] | None:
-        show = self.get_show(show_id)
-        if show is None:
-            return None
-        episodes = self.get_show_episodes(show_id)
-        for episode in episodes:
-            episode["sources"] = self.get_episode_sources(int(episode["id"]))
+        with self._transaction() as connection:
+            show_row = connection.execute("SELECT * FROM shows WHERE id = ?", (show_id,)).fetchone()
+            if show_row is None:
+                return None
+            show = _show_row(show_row)
+            episode_rows = connection.execute(
+                "SELECT * FROM episodes WHERE show_id = ? "
+                "ORDER BY season_number DESC, episode_number DESC",
+                (show_id,),
+            ).fetchall()
+            episodes = [_episode_row(row) for row in episode_rows]
+            sources = self._sources_for_episodes(
+                connection, [int(episode["id"]) for episode in episodes]
+            )
+            for episode in episodes:
+                episode["sources"] = sources.get(int(episode["id"]), [])
+            source_accounts = self._source_accounts_for_shows(connection, [show_id])
         show["episodes"] = episodes
         latest_season = int(show.get("latest_season") or 1)
         latest_episode = int(show["latest_episode"] or 0)
@@ -1658,11 +1702,34 @@ class ShortDramaRepository:
             }
             for season_number, season_episodes in sorted(seasons.items(), reverse=True)
         ]
-        with self._transaction() as connection:
-            source_accounts = self._source_accounts_for_shows(connection, [show_id])
         show["source_accounts"] = source_accounts.get(show_id, [])
         show["source_account_count"] = len(show["source_accounts"])
         return show
+
+    def _sources_for_episodes(
+        self, connection: sqlite3.Connection, episode_ids: Sequence[int]
+    ) -> dict[int, list[dict[str, Any]]]:
+        if not episode_ids:
+            return {}
+        placeholders = ",".join("?" for _ in episode_ids)
+        rows = connection.execute(
+            f"""
+            SELECT episode_sources.*, videos.aweme_id, videos.video_url, videos.cover_url,
+                   videos.description, accounts.nickname AS account_nickname
+            FROM episode_sources
+            JOIN videos ON videos.id = episode_sources.video_id
+            JOIN accounts ON accounts.id = episode_sources.account_id
+            WHERE episode_sources.episode_id IN ({placeholders})
+            ORDER BY episode_sources.episode_id,
+                     COALESCE(episode_sources.published_at, episode_sources.created_at),
+                     episode_sources.id
+            """,
+            tuple(episode_ids),
+        ).fetchall()
+        result: dict[int, list[dict[str, Any]]] = {}
+        for row in rows:
+            result.setdefault(int(row["episode_id"]), []).append(_episode_source_row(row))
+        return result
 
     def search_videos(self, *, page: int = 1, page_size: int = 50, account_id: str | None = None, show_id: int | None = None, classification_status: str | None = None, parser_method: str | None = None, content_type: str | None = None, q: str | None = None, date_from: str | None = None, date_to: str | None = None, needs_review: bool | None = None) -> dict[str, Any]:
         safe_page, safe_size = max(1, int(page)), max(1, min(int(page_size), 200))
@@ -1682,7 +1749,7 @@ class ShortDramaRepository:
         where = " WHERE " + " AND ".join(clauses) if clauses else ""
         with self._transaction() as connection:
             total = int(connection.execute("SELECT COUNT(DISTINCT videos.id)" + joins + where, params).fetchone()[0])
-            rows = connection.execute("SELECT videos.*,accounts.nickname account_nickname,accounts.sec_uid account_sec_uid,shows.id show_id,shows.title show_title" + joins + where + " GROUP BY videos.id ORDER BY COALESCE(videos.publish_time,videos.created_at) DESC,videos.id DESC LIMIT ? OFFSET ?", (*params, safe_size, (safe_page - 1) * safe_size)).fetchall()
+            rows = connection.execute("SELECT videos.*,accounts.nickname account_nickname,accounts.sec_uid account_sec_uid,shows.id show_id,shows.title show_title" + joins + where + " ORDER BY COALESCE(videos.publish_time,videos.created_at) DESC,videos.id DESC LIMIT ? OFFSET ?", (*params, safe_size, (safe_page - 1) * safe_size)).fetchall()
         return {"videos": [_video_row(row) | {"show_id": row["show_id"], "show_title": row["show_title"]} for row in rows], "total": total, "page": safe_page, "page_size": safe_size, "total_pages": (total + safe_size - 1) // safe_size}
 
     def list_show_candidates(self) -> list[dict[str, Any]]:
@@ -2127,8 +2194,14 @@ class ShortDramaRepository:
         result: dict[str, Any] = {"stale_days": max(1, stale_days), "categories": {}}
         with self._transaction() as connection:
             for name, (query, params) in definitions.items():
-                rows = connection.execute(query, params).fetchall()
-                result["categories"][name] = {"count": len(rows), "items": [dict(row) for row in rows[:safe_limit]]}
+                count = int(
+                    connection.execute(f"SELECT COUNT(*) FROM ({query})", params).fetchone()[0]
+                )
+                rows = connection.execute(f"{query} LIMIT ?", (*params, safe_limit)).fetchall()
+                result["categories"][name] = {
+                    "count": count,
+                    "items": [dict(row) for row in rows],
+                }
         result["total_issues"] = sum(item["count"] for item in result["categories"].values())
         return result
 

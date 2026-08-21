@@ -8,6 +8,11 @@ from typing import Any
 
 
 BACKUP_PREFIX = "app-"
+MAINTENANCE_BUSY_TIMEOUT_MS = 30_000
+
+
+def _quote_identifier(value: str) -> str:
+    return '"' + value.replace('"', '""') + '"'
 
 
 def backup_database(database_path: Path, *, backup_dir: Path | None = None, retention_count: int = 14) -> Path:
@@ -34,6 +39,73 @@ class DoctorReport:
     ok: bool
     checks: dict[str, Any]
     repaired: bool = False
+
+
+def database_stats(database_path: Path, *, checkpoint: bool = False) -> dict[str, Any]:
+    """Return bounded operational SQLite statistics without exposing row data."""
+    path = Path(database_path).resolve()
+    connection = sqlite3.connect(path, timeout=MAINTENANCE_BUSY_TIMEOUT_MS / 1000)
+    connection.row_factory = sqlite3.Row
+    connection.execute(f"PRAGMA busy_timeout = {MAINTENANCE_BUSY_TIMEOUT_MS}")
+    connection.execute("PRAGMA foreign_keys = ON")
+    checkpoint_result: dict[str, int] | None = None
+    try:
+        if checkpoint:
+            row = connection.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+            checkpoint_result = {
+                "busy": int(row[0]),
+                "log_frames": int(row[1]),
+                "checkpointed_frames": int(row[2]),
+            }
+        table_names = [
+            str(row["name"])
+            for row in connection.execute(
+                """
+                SELECT name FROM sqlite_master
+                WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
+                ORDER BY name
+                """
+            )
+        ]
+        table_rows = {
+            name: int(
+                connection.execute(f"SELECT COUNT(*) FROM {_quote_identifier(name)}").fetchone()[0]
+            )
+            for name in table_names
+        }
+        indexes = [
+            {
+                "name": str(row["name"]),
+                "table": str(row["tbl_name"]),
+                "sql": str(row["sql"] or ""),
+            }
+            for row in connection.execute(
+                """
+                SELECT name, tbl_name, sql FROM sqlite_master
+                WHERE type = 'index' AND name NOT LIKE 'sqlite_%'
+                ORDER BY tbl_name, name
+                """
+            )
+        ]
+        journal_mode = str(connection.execute("PRAGMA journal_mode").fetchone()[0])
+        page_size = int(connection.execute("PRAGMA page_size").fetchone()[0])
+        page_count = int(connection.execute("PRAGMA page_count").fetchone()[0])
+        freelist_count = int(connection.execute("PRAGMA freelist_count").fetchone()[0])
+    finally:
+        connection.close()
+    wal_path = Path(f"{path}-wal")
+    return {
+        "database_path": str(path),
+        "database_size_bytes": path.stat().st_size if path.is_file() else 0,
+        "wal_size_bytes": wal_path.stat().st_size if wal_path.is_file() else 0,
+        "journal_mode": journal_mode,
+        "page_size_bytes": page_size,
+        "page_count": page_count,
+        "freelist_count": freelist_count,
+        "table_rows": table_rows,
+        "indexes": indexes,
+        "checkpoint": checkpoint_result,
+    }
 
 
 def doctor_database(database_path: Path, *, repair: bool = False) -> DoctorReport:

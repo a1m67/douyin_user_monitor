@@ -176,7 +176,11 @@ Episode 1 --- * Notification
 python -m douyin_user_monitor backup
 python -m douyin_user_monitor doctor
 python -m douyin_user_monitor doctor --repair
+python -m douyin_user_monitor db-stats
+python -m douyin_user_monitor db-stats --checkpoint
 ```
+
+`db-stats` 只输出数据库/WAL 大小、页统计、业务表行数和索引定义，不读取用户数据内容。WAL checkpoint 仅在显式传入 `--checkpoint` 时执行；系统不会自动频繁 `VACUUM`，也不会自动删除更新动态。
 
 ```bash
 .venv/Scripts/python -m unittest discover -s tests -v
