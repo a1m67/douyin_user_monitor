@@ -183,6 +183,34 @@ class ShortDramaWebTests(unittest.IsolatedAsyncioTestCase):
         ).json()["shows"]
         self.assertEqual(empty[0]["id"], show_id)
 
+    async def test_update_feed_endpoints_and_page(self):
+        show = self.repository.list_show_summaries()[0]
+        account = self.repository.list_accounts()[0]
+        update_video = self.repository.create_video(
+            aweme_id="web-update", account_id=account["id"], description="第13集",
+            hashtags=[], publish_time="2026-08-16T00:00:00+00:00",
+            video_url="https://www.douyin.com/video/web-update", cover_url=None, raw={},
+        )[0]
+        self.repository.record_episode_source(
+            show_id=show["id"], episode_number=13, video_id=update_video["id"],
+            account_id=account["id"], published_at=update_video["publish_time"],
+            create_update_event=True,
+        )
+
+        self.assertEqual(self.client.get("/updates").status_code, 200)
+        feed = self.client.get(
+            "/api/short-drama/updates", params={"following_only": False}
+        ).json()
+        self.assertEqual(feed["total"], 1)
+        event_id = feed["events"][0]["id"]
+        self.assertIsNotNone(
+            self.client.post(f"/api/short-drama/updates/{event_id}/read")
+            .json()["event"]["read_at"]
+        )
+        self.assertEqual(
+            self.client.post("/api/short-drama/updates/read-all").json()["marked_read"], 0
+        )
+
     async def test_show_merge_and_consistency_repair_endpoints(self):
         target = self.client.get("/api/short-drama/shows").json()["shows"][0]
         account = self.repository.list_accounts()[0]

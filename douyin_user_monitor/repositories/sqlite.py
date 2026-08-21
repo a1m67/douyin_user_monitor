@@ -15,7 +15,7 @@ from douyin_user_monitor.parsers.regex import normalize_title
 from douyin_user_monitor.maintenance import backup_database
 
 
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 13
 SHOW_STATUSES = frozenset({"updating", "completed", "paused"})
 VIDEO_CLASSIFICATIONS = frozenset({"matched", "ignored", "review"})
 VIDEO_CONTENT_TYPES = frozenset({"episode", "trailer", "show_content", "unknown", "non_drama"})
@@ -237,6 +237,21 @@ class ShortDramaRepository:
                 created_at TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS update_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                show_id INTEGER NOT NULL REFERENCES shows(id) ON DELETE CASCADE,
+                episode_id INTEGER NOT NULL REFERENCES episodes(id) ON DELETE CASCADE,
+                season_number INTEGER NOT NULL,
+                episode_number INTEGER NOT NULL,
+                account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+                video_id INTEGER NOT NULL REFERENCES videos(id) ON DELETE CASCADE,
+                event_type TEXT NOT NULL DEFAULT 'new_episode',
+                occurred_at TEXT NOT NULL,
+                read_at TEXT,
+                created_at TEXT NOT NULL,
+                UNIQUE(episode_id, event_type)
+            );
+
             CREATE INDEX IF NOT EXISTS idx_accounts_due
                 ON accounts(enabled, next_check_at);
             CREATE INDEX IF NOT EXISTS idx_videos_account_created
@@ -254,6 +269,12 @@ class ShortDramaRepository:
             CREATE INDEX IF NOT EXISTS idx_scan_runs_account_started
                 ON scan_runs(account_id, started_at DESC);
             CREATE INDEX IF NOT EXISTS idx_scan_runs_started ON scan_runs(started_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_update_events_occurred
+                ON update_events(occurred_at DESC, id DESC);
+            CREATE INDEX IF NOT EXISTS idx_update_events_unread
+                ON update_events(read_at, occurred_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_update_events_show
+                ON update_events(show_id, occurred_at DESC);
             """
         )
 
@@ -1928,6 +1949,7 @@ class ShortDramaRepository:
         account_id: str,
         published_at: str | None,
         season_number: int = 1,
+        create_update_event: bool = False,
     ) -> EpisodeWriteResult:
         if episode_number < 0:
             raise ValueError("集数不能小于 0")
@@ -1974,6 +1996,25 @@ class ShortDramaRepository:
             ).fetchone()
             if source_row is None:
                 raise RuntimeError("保存剧集来源后无法读取记录")
+            if is_new_episode and create_update_event:
+                connection.execute(
+                    """
+                    INSERT OR IGNORE INTO update_events(
+                        show_id, episode_id, season_number, episode_number,
+                        account_id, video_id, event_type, occurred_at, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, 'new_episode', ?, ?)
+                    """,
+                    (
+                        show_id,
+                        episode_id,
+                        season_number,
+                        episode_number,
+                        account_id,
+                        video_id,
+                        _optional_text(published_at) or now,
+                        now,
+                    ),
+                )
             self._repair_episode_first_source(connection, episode_id)
             self._refresh_show_latest(connection, {show_id})
             episode_row = connection.execute("SELECT * FROM episodes WHERE id = ?", (episode_id,)).fetchone()
@@ -1985,6 +2026,80 @@ class ShortDramaRepository:
                 is_new_episode=is_new_episode,
                 is_new_source=source_cursor.rowcount == 1,
             )
+
+    def list_update_events(
+        self,
+        *,
+        following_only: bool = False,
+        unread_only: bool = False,
+        page: int = 1,
+        page_size: int = 50,
+    ) -> dict[str, Any]:
+        safe_page = max(1, int(page))
+        safe_page_size = max(1, min(int(page_size), 200))
+        conditions: list[str] = []
+        if following_only:
+            conditions.append("shows.is_following = 1")
+        if unread_only:
+            conditions.append("update_events.read_at IS NULL")
+        where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+        with self._transaction() as connection:
+            total = int(connection.execute(
+                f"SELECT COUNT(*) FROM update_events JOIN shows ON shows.id = update_events.show_id {where}"
+            ).fetchone()[0])
+            rows = connection.execute(
+                f"""
+                SELECT update_events.*, shows.title AS show_title,
+                       shows.is_following, accounts.nickname AS account_nickname,
+                       videos.video_url, videos.cover_url
+                FROM update_events
+                JOIN shows ON shows.id = update_events.show_id
+                JOIN accounts ON accounts.id = update_events.account_id
+                JOIN videos ON videos.id = update_events.video_id
+                {where}
+                ORDER BY update_events.occurred_at DESC, update_events.id DESC
+                LIMIT ? OFFSET ?
+                """,
+                (safe_page_size, (safe_page - 1) * safe_page_size),
+            ).fetchall()
+        return {
+            "events": [_update_event_row(row) for row in rows],
+            "page": safe_page,
+            "page_size": safe_page_size,
+            "total": total,
+            "has_more": safe_page * safe_page_size < total,
+        }
+
+    def unread_update_count(self, *, following_only: bool = False) -> int:
+        query = """SELECT COUNT(*) FROM update_events
+                   JOIN shows ON shows.id = update_events.show_id
+                   WHERE update_events.read_at IS NULL"""
+        if following_only:
+            query += " AND shows.is_following = 1"
+        with self._transaction() as connection:
+            return int(connection.execute(query).fetchone()[0])
+
+    def mark_update_read(self, event_id: int) -> dict[str, Any]:
+        with self._transaction() as connection:
+            cursor = connection.execute(
+                "UPDATE update_events SET read_at = COALESCE(read_at, ?) WHERE id = ?",
+                (utc_now(), event_id),
+            )
+            if cursor.rowcount == 0:
+                raise KeyError("更新事件不存在")
+            row = connection.execute(
+                "SELECT * FROM update_events WHERE id = ?", (event_id,)
+            ).fetchone()
+            return _update_event_row(row)
+
+    def mark_updates_read(self, *, show_id: int | None = None) -> int:
+        query = "UPDATE update_events SET read_at = ? WHERE read_at IS NULL"
+        params: tuple[Any, ...] = (utc_now(),)
+        if show_id is not None:
+            query += " AND show_id = ?"
+            params = (*params, show_id)
+        with self._transaction() as connection:
+            return int(connection.execute(query, params).rowcount)
 
     def get_show_episodes(self, show_id: int) -> list[dict[str, Any]]:
         with self._transaction() as connection:
@@ -2710,4 +2825,11 @@ def _episode_source_row(row: sqlite3.Row) -> dict[str, Any]:
 def _notification_row(row: sqlite3.Row) -> dict[str, Any]:
     result = _row_to_dict(row)
     result["success"] = bool(result["success"])
+    return result
+
+
+def _update_event_row(row: sqlite3.Row) -> dict[str, Any]:
+    result = _row_to_dict(row)
+    if "is_following" in result:
+        result["is_following"] = bool(result["is_following"])
     return result

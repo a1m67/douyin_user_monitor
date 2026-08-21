@@ -99,6 +99,7 @@ class ShortDramaPipelineTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result.initial_sync)
         self.assertEqual(result.new_videos, 3)
         self.assertEqual(result.new_episode_updates, ())
+        self.assertEqual(self.repository.list_update_events()["events"], [])
         return account
 
     async def test_acceptance_scenarios_a_to_d(self):
@@ -133,6 +134,9 @@ class ShortDramaPipelineTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(updated_result.new_episode_updates), 1)
         self.assertEqual(updated_result.new_episode_updates[0].episode["episode_number"], 17)
         self.assertEqual(self.repository.get_show(show["id"])["latest_episode"], 17)
+        events = self.repository.list_update_events()["events"]
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["episode_number"], 17)
 
     async def test_cover_ocr_reuses_parser_and_caches_result(self):
         self.repository.create_show(title="归墟", normalized_title="归墟")
@@ -362,6 +366,7 @@ class ShortDramaPipelineTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(initial.ignored_videos, 1)
         self.assertEqual(initial.new_episode_updates, ())
         self.assertEqual(dispatcher.updates, [])
+        self.assertEqual(self.repository.list_update_events()["events"], [])
         self.assertEqual(ignored_video["classification_status"], "ignored")
         self.assertEqual(ignored_video["parser_reason"], "ignored_show")
         self.assertEqual(self.repository.get_show_episodes(ignored_show["id"]), [])

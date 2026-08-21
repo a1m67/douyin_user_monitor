@@ -189,6 +189,7 @@ class ShortDramaPipeline:
             account=account,
             provider_videos=videos,
             collect_updates=not initial_sync or self._notify_on_initial_sync,
+            create_update_events=not initial_sync,
         )
         logger.info(
             "[dedupe] account_id=%s new_videos=%s duplicate_videos=%s review_videos=%s ignored_videos=%s",
@@ -266,6 +267,7 @@ class ShortDramaPipeline:
                 account=account,
                 provider_videos=page.videos,
                 collect_updates=False,
+                create_update_events=False,
             )
             cursor_history = list(history.get("cursor_history") or [cursor])
             if next_cursor not in cursor_history:
@@ -465,6 +467,7 @@ class ShortDramaPipeline:
         account: dict[str, Any],
         provider_videos: Sequence[ProviderVideo],
         collect_updates: bool,
+        create_update_events: bool,
     ) -> _VideoBatchResult:
         new_videos = 0
         duplicate_videos = 0
@@ -515,6 +518,7 @@ class ShortDramaPipeline:
                     self._process_video,
                     account=account,
                     video=refreshed_video,
+                    create_update_event=False,
                 )
                 if outcome.status == REVIEW:
                     review_videos += 1
@@ -526,6 +530,7 @@ class ShortDramaPipeline:
                 self._process_video,
                 account=account,
                 video=video,
+                create_update_event=create_update_events,
             )
             if outcome.status == REVIEW:
                 review_videos += 1
@@ -546,6 +551,7 @@ class ShortDramaPipeline:
         *,
         account: dict[str, Any],
         video: dict[str, Any],
+        create_update_event: bool = False,
     ) -> _VideoProcessingOutcome:
         text_metadata = build_video_text_metadata(
             video.get("raw_json"),
@@ -706,6 +712,7 @@ class ShortDramaPipeline:
                 video_id=int(video["id"]),
                 account_id=str(account["id"]),
                 published_at=video.get("publish_time"),
+                create_update_event=create_update_event,
             )
         except ValueError as exc:
             # A user may ignore the Show between matching and the write

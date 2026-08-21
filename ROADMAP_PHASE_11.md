@@ -7,7 +7,7 @@ short-drama tracker. Phases are implemented, tested, and committed in order.
 
 - [x] Phase 1: Smart Douyin account and share-link input
 - [x] Phase 2: Personal show following
-- [ ] Phase 3: Episode update feed and unread state
+- [x] Phase 3: Episode update feed and unread state
 - [ ] Phase 4: Advanced episode corrections
 - [ ] Phase 5: Web cookie management
 - [ ] Phase 6: System diagnostics dashboard
@@ -35,17 +35,17 @@ and production behavior that has not yet been verified.
 - Main design: Following is an independent Show preference exposed through idempotent follow/unfollow endpoints, boolean filtering, a dedicated `/following` page, stars on library cards, and detail actions. It does not alter ignored-Show behavior or notification dispatch.
 - Schema changes: schema v12 adds `shows.is_following` defaulting to false and nullable `followed_at`; existing rows remain unfollowed.
 - Tests: focused repository/web suite - 42 passed; full suite - 184 passed.
-- Commit: this phase commit (SHA recorded during final roadmap pass)
+- Commit: `bf9c6e2`
 - Not yet verified: mobile interaction and production migration against the VPS database.
 
 ### Phase 3
 
-- Status: pending
-- Main design: pending
-- Schema changes: pending
-- Tests: pending
-- Commit: pending
-- Not yet verified: pending
+- Status: complete
+- Main design: New Episodes discovered by normal incremental scans create one transactional `new_episode` event. Initial sync, history backfill, manual corrections, and additional sources do not create events. The `/updates` feed supports following and unread filters, per-event/read-all actions, an unread navigation count, and marks a Show's events read when its detail page is opened.
+- Schema changes: schema v13 adds `update_events` with a unique `(episode_id, event_type)` key and indexes for time, unread, and Show lookups. Existing Episodes are not backfilled, so migration creates no false unread state.
+- Tests: focused pipeline/repository/web suite - 62 passed; full suite - 186 passed.
+- Commit: this phase commit (SHA recorded during final roadmap pass)
+- Not yet verified: production incremental scan event creation and the update-feed layout with real long-running data.
 
 ### Phase 4
 

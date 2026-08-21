@@ -832,6 +832,40 @@ class ShortDramaRepositoryTests(unittest.TestCase):
         self.assertFalse(unfollowed["is_following"])
         self.assertIsNone(unfollowed["followed_at"])
 
+    def test_update_events_are_unique_filterable_and_readable(self):
+        account = self.create_account("updates")
+        followed = self.repository.create_show(title="在追", normalized_title="在追")
+        other = self.repository.create_show(title="发现", normalized_title="发现")
+        self.repository.set_show_following(followed["id"], following=True)
+        first_video = self.create_video(account["id"], "update-one")
+        second_video = self.create_video(account["id"], "update-two")
+        duplicate_source = self.create_video(account["id"], "update-one-source")
+        first = self.repository.record_episode_source(
+            show_id=followed["id"], season_number=2, episode_number=3,
+            video_id=first_video["id"], account_id=account["id"],
+            published_at=first_video["publish_time"], create_update_event=True,
+        )
+        self.repository.record_episode_source(
+            show_id=followed["id"], season_number=2, episode_number=3,
+            video_id=duplicate_source["id"], account_id=account["id"],
+            published_at=duplicate_source["publish_time"], create_update_event=True,
+        )
+        self.repository.record_episode_source(
+            show_id=other["id"], episode_number=1, video_id=second_video["id"],
+            account_id=account["id"], published_at=second_video["publish_time"],
+            create_update_event=True,
+        )
+
+        self.assertEqual(self.repository.list_update_events()["total"], 2)
+        followed_feed = self.repository.list_update_events(following_only=True)
+        self.assertEqual(followed_feed["total"], 1)
+        self.assertEqual(followed_feed["events"][0]["episode_id"], first.episode["id"])
+        event_id = followed_feed["events"][0]["id"]
+        self.assertIsNotNone(self.repository.mark_update_read(event_id)["read_at"])
+        self.assertEqual(self.repository.unread_update_count(), 1)
+        self.assertEqual(self.repository.mark_updates_read(), 1)
+        self.assertEqual(self.repository.list_update_events(unread_only=True)["events"], [])
+
     def test_remove_episode_and_source_preserve_videos_and_refresh_show(self):
         first = self.create_account("remove-a")
         second = self.create_account("remove-b")

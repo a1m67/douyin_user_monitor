@@ -121,6 +121,10 @@ def create_short_drama_router(
     async def following_page() -> HTMLResponse:
         return page()
 
+    @router.get("/updates", response_class=HTMLResponse, include_in_schema=False)
+    async def updates_page() -> HTMLResponse:
+        return page()
+
     @router.get("/accounts", response_class=HTMLResponse, include_in_schema=False)
     async def accounts_page() -> HTMLResponse:
         return page()
@@ -220,6 +224,36 @@ def create_short_drama_router(
         except (ValueError, KeyError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"show": show}
+
+    @api.get("/updates")
+    async def list_updates(
+        following_only: bool = True,
+        unread_only: bool = False,
+        page: int = Query(default=1, ge=1),
+        page_size: int = Query(default=50, ge=1, le=200),
+    ) -> dict[str, Any]:
+        result = repository.list_update_events(
+            following_only=following_only,
+            unread_only=unread_only,
+            page=page,
+            page_size=page_size,
+        )
+        result["unread_count"] = repository.unread_update_count()
+        result["following_unread_count"] = repository.unread_update_count(
+            following_only=True
+        )
+        return result
+
+    @api.post("/updates/read-all")
+    async def mark_updates_read(show_id: int | None = None) -> dict[str, int]:
+        return {"marked_read": repository.mark_updates_read(show_id=show_id)}
+
+    @api.post("/updates/{event_id}/read")
+    async def mark_update_read(event_id: int) -> dict[str, Any]:
+        try:
+            return {"event": repository.mark_update_read(event_id)}
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     @api.post("/shows/{show_id}/ignore")
     async def ignore_show(
