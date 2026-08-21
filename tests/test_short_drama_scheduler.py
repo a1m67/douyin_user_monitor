@@ -12,6 +12,7 @@ from douyin_user_monitor.services.crawler_circuit_breaker import CrawlerCircuitB
 from douyin_user_monitor.services.scheduler import (
     AccountScheduler,
     SchedulerConfig,
+    calculate_adaptive_interval_minutes,
     calculate_backoff_minutes,
 )
 
@@ -26,6 +27,7 @@ class StubSyncResult:
     ocr_successes: int = 0
     llm_latency_ms_total: int = 0
     ocr_latency_ms_total: int = 0
+    new_episode_updates: tuple[object, ...] = ()
 
 
 class StubPipeline:
@@ -130,6 +132,120 @@ class AccountSchedulerTests(unittest.IsolatedAsyncioTestCase):
             "2026-08-15T12:10:00+00:00",
         )
 
+    async def test_adaptive_scheduler_is_optional_and_expands_after_inactivity(self):
+        disabled = self.add_account("adaptive-disabled")
+        enabled = self.add_account("adaptive-enabled")
+        old_success = (self.now - timedelta(hours=7)).isoformat(timespec="seconds")
+        for account in (disabled, enabled):
+            self.repository.record_scan_run(
+                account["id"], started_at=old_success, finished_at=old_success, success=1
+            )
+
+        fixed_scheduler = AccountScheduler(
+            repository=self.repository,
+            pipeline=StubPipeline(),
+            config=SchedulerConfig(jitter_ratio=0, poll_seconds=1),
+            now=lambda: self.now,
+        )
+        adaptive_scheduler = AccountScheduler(
+            repository=self.repository,
+            pipeline=StubPipeline(),
+            config=SchedulerConfig(
+                jitter_ratio=0,
+                poll_seconds=1,
+                adaptive_enabled=True,
+                adaptive_min_interval_minutes=5,
+                adaptive_max_interval_minutes=240,
+            ),
+            now=lambda: self.now,
+        )
+
+        await fixed_scheduler.run_account_once(disabled["id"])
+        await adaptive_scheduler.run_account_once(enabled["id"])
+
+        self.assertEqual(
+            self.repository.get_account(disabled["id"])["next_check_at"],
+            "2026-08-15T12:10:00+00:00",
+        )
+        self.assertEqual(
+            self.repository.get_account(enabled["id"])["next_check_at"],
+            "2026-08-15T12:20:00+00:00",
+        )
+
+    def test_adaptive_policy_uses_update_cadence_and_preserves_manual_baseline(self):
+        interval = calculate_adaptive_interval_minutes(
+            baseline_interval_minutes=10,
+            now=self.now,
+            first_success_at=self.now - timedelta(days=4),
+            update_started_at=(
+                self.now - timedelta(hours=24),
+                self.now - timedelta(hours=30),
+                self.now - timedelta(hours=36),
+            ),
+            current_new_episodes=0,
+            min_interval_minutes=5,
+            max_interval_minutes=240,
+        )
+        self.assertEqual(interval, 30)
+        self.assertEqual(
+            calculate_adaptive_interval_minutes(
+                baseline_interval_minutes=300,
+                now=self.now,
+                first_success_at=self.now - timedelta(days=5),
+                update_started_at=(),
+                current_new_episodes=0,
+                min_interval_minutes=5,
+                max_interval_minutes=240,
+            ),
+            300,
+        )
+        self.assertEqual(
+            calculate_adaptive_interval_minutes(
+                baseline_interval_minutes=10,
+                now=self.now,
+                first_success_at=self.now - timedelta(days=5),
+                update_started_at=(),
+                current_new_episodes=1,
+                min_interval_minutes=15,
+                max_interval_minutes=240,
+            ),
+            15,
+        )
+
+    def test_adaptive_policy_inactivity_tiers_are_deterministic_and_clamped(self):
+        cases = (
+            (timedelta(hours=5, minutes=59), 10),
+            (timedelta(hours=6), 20),
+            (timedelta(hours=24), 40),
+            (timedelta(hours=72), 80),
+        )
+        for inactivity, expected in cases:
+            with self.subTest(inactivity=inactivity):
+                self.assertEqual(
+                    calculate_adaptive_interval_minutes(
+                        baseline_interval_minutes=10,
+                        now=self.now,
+                        first_success_at=self.now - inactivity,
+                        update_started_at=(),
+                        current_new_episodes=0,
+                        min_interval_minutes=5,
+                        max_interval_minutes=240,
+                    ),
+                    expected,
+                )
+        self.assertEqual(
+            calculate_adaptive_interval_minutes(
+                baseline_interval_minutes=10,
+                now=self.now,
+                first_success_at=self.now - timedelta(days=30),
+                update_started_at=(),
+                current_new_episodes=0,
+                min_interval_minutes=5,
+                max_interval_minutes=50,
+            ),
+            50,
+        )
+
     async def test_failures_use_exponential_backoff_without_blocking_other_accounts(self):
         failing = self.add_account("failing")
         healthy = self.add_account("healthy")
@@ -137,7 +253,13 @@ class AccountSchedulerTests(unittest.IsolatedAsyncioTestCase):
         scheduler = AccountScheduler(
             repository=self.repository,
             pipeline=pipeline,
-            config=SchedulerConfig(max_concurrent_checks=2, max_backoff_minutes=60, jitter_ratio=0, poll_seconds=1),
+            config=SchedulerConfig(
+                max_concurrent_checks=2,
+                max_backoff_minutes=60,
+                jitter_ratio=0,
+                poll_seconds=1,
+                adaptive_enabled=True,
+            ),
             now=lambda: self.now,
         )
 

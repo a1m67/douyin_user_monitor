@@ -25,6 +25,7 @@
 - Telegram 和飞书 Webhook 通知；每个渠道的成功或失败都会记录，失败不会回滚 Video / Episode。
 - 通知先写入持久化 outbox，再由后台 worker 投递；同一剧集、事件和渠道只创建一个任务，失败按指数退避重试，服务重启可恢复超时任务。
 - 按账号的 `next_check_at` 错峰巡检，有限并发和指数退避避免单个账号错误影响其他账号。
+- 可选自适应调度只在成功巡检后根据近期更新节奏和静默时长放宽间隔；账号手工间隔仍是最快基线，失败继续使用独立指数退避。
 - Dashboard：`/shows`、`/shows/{id}`、`/accounts`、`/videos`、`/review`、`/status`，以及 JSON 健康检查 `/health`。
 - Web 层按 API 模型/序列化、页面资源和浏览器功能域拆分；静态模块保持无构建步骤，便于 VPS 直接部署和调试。
 - `/version` 返回非敏感应用版本和资源 build ID；HTML 与 service worker 自动引用带内容版本的静态资源，解决 PWA 升级时新旧 JS 混用。
@@ -134,6 +135,9 @@ PowerShell 下可将 `.venv/Scripts/python` 替换为 `.venv\Scripts\python.exe`
 | `CHECK_INTERVAL_MINUTES` | `10` | 新账号默认检查间隔，可按账号覆盖。 |
 | `MAX_CONCURRENT_CHECKS` | `3` | 同时请求的账号上限。 |
 | `MAX_BACKOFF_MINUTES` | `60` | 连续失败时的退避上限。 |
+| `ADAPTIVE_SCHEDULER_ENABLED` | `false` | 可选；按成功巡检历史动态放宽账号检查间隔。 |
+| `ADAPTIVE_MIN_INTERVAL_MINUTES` | `5` | 自适应调度的全局最小间隔；不会突破账号手工基线去增加流量。 |
+| `ADAPTIVE_MAX_INTERVAL_MINUTES` | `240` | 自适应放宽上限；若账号手工基线更慢，则保留手工基线。 |
 | `CRAWLER_CIRCUIT_BREAKER_ENABLED` | `true` | 是否启用全局抖音抓取熔断。 |
 | `CRAWLER_CIRCUIT_FAILURE_THRESHOLD` | `3` | 同类全局错误触发熔断所需的不同账号数。 |
 | `CRAWLER_CIRCUIT_OPEN_MINUTES` | `20` | OPEN 状态的冷却分钟数。 |

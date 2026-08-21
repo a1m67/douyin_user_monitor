@@ -40,6 +40,9 @@ class ShortDramaSettingsTests(unittest.TestCase):
                 "LLM_TIMEOUT_SECONDS": "12",
                 "LLM_AUTO_ACCEPT_CONFIDENCE": "0.92",
                 "ADMIN_API_TOKEN": "test-admin-token",
+                "ADAPTIVE_SCHEDULER_ENABLED": "true",
+                "ADAPTIVE_MIN_INTERVAL_MINUTES": "7",
+                "ADAPTIVE_MAX_INTERVAL_MINUTES": "180",
             },
         )
         self.assertEqual(settings.database_path, (self.root / "data" / "custom.db").resolve())
@@ -59,6 +62,9 @@ class ShortDramaSettingsTests(unittest.TestCase):
         self.assertEqual(settings.llm_timeout_seconds, 12.0)
         self.assertEqual(settings.llm_auto_accept_confidence, 0.92)
         self.assertEqual(settings.admin_api_token, "test-admin-token")
+        self.assertTrue(settings.adaptive_scheduler_enabled)
+        self.assertEqual(settings.adaptive_min_interval_minutes, 7)
+        self.assertEqual(settings.adaptive_max_interval_minutes, 180)
         self.assertFalse(settings.app_auth_enabled)
         self.assertEqual(settings.app_session_ttl_hours, 168)
         self.assertTrue(settings.crawler_circuit_breaker_enabled)
@@ -86,10 +92,21 @@ class ShortDramaSettingsTests(unittest.TestCase):
     def test_security_defaults_are_disabled_and_compose_binds_localhost(self):
         settings = load_short_drama_settings(project_root=self.root, environ={})
         self.assertEqual(settings.admin_api_token, "")
+        self.assertFalse(settings.adaptive_scheduler_enabled)
         compose = (Path(__file__).resolve().parents[1] / "docker-compose.yml").read_text(
             encoding="utf-8"
         )
         self.assertIn('"127.0.0.1:8900:8900"', compose)
+
+    def test_adaptive_scheduler_interval_bounds_are_validated(self):
+        with self.assertRaisesRegex(ValueError, "ADAPTIVE_MAX_INTERVAL_MINUTES"):
+            load_short_drama_settings(
+                project_root=self.root,
+                environ={
+                    "ADAPTIVE_MIN_INTERVAL_MINUTES": "60",
+                    "ADAPTIVE_MAX_INTERVAL_MINUTES": "30",
+                },
+            )
 
     def test_enabled_llm_requires_connection_settings(self):
         with self.assertRaisesRegex(ValueError, "LLM_API_KEY"):

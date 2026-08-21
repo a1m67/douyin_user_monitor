@@ -33,6 +33,9 @@ class ShortDramaSettings:
     llm_auto_accept_confidence: float
     max_backoff_minutes: int
     scheduler_poll_seconds: float
+    adaptive_scheduler_enabled: bool
+    adaptive_min_interval_minutes: int
+    adaptive_max_interval_minutes: int
     telegram_bot_token: str
     telegram_chat_id: str
     feishu_webhook_url: str
@@ -117,6 +120,13 @@ def load_short_drama_settings(
         ),
         max_backoff_minutes=_positive_int(values, "MAX_BACKOFF_MINUTES", 60),
         scheduler_poll_seconds=_positive_float(values, "SCHEDULER_POLL_SECONDS", 15.0),
+        adaptive_scheduler_enabled=_boolean(values, "ADAPTIVE_SCHEDULER_ENABLED", False),
+        adaptive_min_interval_minutes=_positive_int(
+            values, "ADAPTIVE_MIN_INTERVAL_MINUTES", 5
+        ),
+        adaptive_max_interval_minutes=_positive_int(
+            values, "ADAPTIVE_MAX_INTERVAL_MINUTES", 240
+        ),
         telegram_bot_token=_value(values, "TELEGRAM_BOT_TOKEN", ""),
         telegram_chat_id=_value(values, "TELEGRAM_CHAT_ID", ""),
         feishu_webhook_url=_value(values, "FEISHU_WEBHOOK_URL", ""),
@@ -180,6 +190,10 @@ def load_short_drama_settings(
     if settings.history_backfill_delay_max_seconds < settings.history_backfill_delay_min_seconds:
         raise ValueError(
             "HISTORY_BACKFILL_DELAY_MAX_SECONDS 不能小于 HISTORY_BACKFILL_DELAY_MIN_SECONDS"
+        )
+    if settings.adaptive_max_interval_minutes < settings.adaptive_min_interval_minutes:
+        raise ValueError(
+            "ADAPTIVE_MAX_INTERVAL_MINUTES 不能小于 ADAPTIVE_MIN_INTERVAL_MINUTES"
         )
     return settings
 

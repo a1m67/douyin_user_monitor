@@ -133,6 +133,9 @@ def build_short_drama_runtime(settings: ShortDramaSettings | None = None) -> Sho
             max_concurrent_checks=resolved_settings.max_concurrent_checks,
             max_backoff_minutes=resolved_settings.max_backoff_minutes,
             poll_seconds=resolved_settings.scheduler_poll_seconds,
+            adaptive_enabled=resolved_settings.adaptive_scheduler_enabled,
+            adaptive_min_interval_minutes=resolved_settings.adaptive_min_interval_minutes,
+            adaptive_max_interval_minutes=resolved_settings.adaptive_max_interval_minutes,
         ),
         request_guard=request_guard,
     )

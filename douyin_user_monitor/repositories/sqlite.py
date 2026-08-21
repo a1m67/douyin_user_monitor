@@ -1084,6 +1084,31 @@ class ShortDramaRepository:
         with self._transaction() as connection:
             return self._list_scan_runs(connection, account_id, limit)
 
+    def get_adaptive_schedule_history(self, account_id: str) -> dict[str, Any]:
+        with self._read_connection() as connection:
+            first_success = connection.execute(
+                """
+                SELECT MIN(started_at) AS started_at
+                FROM scan_runs
+                WHERE account_id=? AND success=1
+                """,
+                (account_id,),
+            ).fetchone()
+            update_rows = connection.execute(
+                """
+                SELECT started_at
+                FROM scan_runs
+                WHERE account_id=? AND success=1 AND new_episodes>0
+                ORDER BY started_at DESC, id DESC
+                LIMIT 6
+                """,
+                (account_id,),
+            ).fetchall()
+        return {
+            "first_success_at": first_success["started_at"] if first_success else None,
+            "update_started_at": [str(row["started_at"]) for row in update_rows],
+        }
+
     def prune_scan_runs(self, *, retention_days: int) -> int:
         cutoff = datetime.fromtimestamp(datetime.now(timezone.utc).timestamp() - max(1, retention_days) * 86400, timezone.utc).isoformat(timespec="seconds")
         with self._transaction() as connection:

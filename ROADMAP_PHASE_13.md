@@ -12,7 +12,7 @@ Security, delivery reliability, maintainability, long-running storage, and daily
 - [x] Phase 6: Automatic backups and maintenance worker
 - [x] Phase 7: Bounded Douyin raw payload storage
 - [x] Phase 8: Avatar, cover, and continue-watching UX
-- [ ] Phase 9: Optional adaptive scheduler
+- [x] Phase 9: Optional adaptive scheduler
 
 ## Phase Records
 
@@ -90,9 +90,9 @@ Security, delivery reliability, maintainability, long-running storage, and daily
 
 ### Phase 9
 
-- Status: pending
-- Main design: optional adaptive account scheduling based on recent update cadence and failures, bounded by operator configuration.
-- Schema changes: pending.
-- Tests: pending.
-- Commit: pending.
-- Production verification still needed: pending.
+- Status: complete
+- Main design: optional success-only adaptive scheduling keeps each account's manual interval as its fastest baseline, expands polling after 6/24/72 hours of inactivity, limits expansion to roughly twelve checks per observed update cadence, clamps the result to configured bounds, and leaves failure backoff authoritative.
+- Schema changes: none; schema remains v20.
+- Tests: disabled compatibility, deterministic inactivity tiers, cadence ceiling, manual baseline preservation, current-update reset, configuration validation, failure backoff priority, scheduler integration, compile checks, and full suite (248 tests passed).
+- Commit: recorded after implementation commit.
+- Production verification still needed: observe effective `next_check_at` values for active and inactive accounts for several days before enabling broadly on the VPS.

@@ -3,12 +3,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import random
 import re
+import statistics
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Awaitable, Callable
+from typing import Callable, Sequence
 
 from douyin_user_monitor.repositories.sqlite import ShortDramaRepository
 from douyin_user_monitor.services.crawler_circuit_breaker import (
@@ -31,6 +33,9 @@ class SchedulerConfig:
     max_backoff_minutes: int = 60
     jitter_ratio: float = 0.1
     poll_seconds: float = 15.0
+    adaptive_enabled: bool = False
+    adaptive_min_interval_minutes: int = 5
+    adaptive_max_interval_minutes: int = 240
 
     def __post_init__(self) -> None:
         if self.default_check_interval_minutes <= 0:
@@ -43,6 +48,12 @@ class SchedulerConfig:
             raise ValueError("jitter_ratio 必须在 0 到 1 之间")
         if self.poll_seconds <= 0:
             raise ValueError("poll_seconds 必须大于 0")
+        if self.adaptive_min_interval_minutes <= 0:
+            raise ValueError("adaptive_min_interval_minutes 必须大于 0")
+        if self.adaptive_max_interval_minutes < self.adaptive_min_interval_minutes:
+            raise ValueError(
+                "adaptive_max_interval_minutes 不能小于 adaptive_min_interval_minutes"
+            )
 
 
 @dataclass(frozen=True)
@@ -220,9 +231,33 @@ class AccountScheduler:
 
         if self._circuit_breaker is not None:
             self._circuit_breaker.record_success(account_id)
+        interval_minutes = int(account["check_interval_minutes"])
+        if self._config.adaptive_enabled:
+            try:
+                history = self._repository.get_adaptive_schedule_history(account_id)
+                interval_minutes = calculate_adaptive_interval_minutes(
+                    baseline_interval_minutes=interval_minutes,
+                    now=now,
+                    first_success_at=_parse_datetime(history.get("first_success_at")),
+                    update_started_at=tuple(
+                        parsed
+                        for value in history.get("update_started_at", ())
+                        if (parsed := _parse_datetime(value)) is not None
+                    ),
+                    current_new_episodes=len(
+                        getattr(sync_result, "new_episode_updates", ())
+                    ),
+                    min_interval_minutes=self._config.adaptive_min_interval_minutes,
+                    max_interval_minutes=self._config.adaptive_max_interval_minutes,
+                )
+            except Exception:
+                logger.exception(
+                    "adaptive scheduling failed; using account baseline account_id=%s",
+                    account_id,
+                )
         next_check_at = calculate_next_check_at(
             now=now,
-            interval_minutes=int(account["check_interval_minutes"]),
+            interval_minutes=interval_minutes,
             jitter_ratio=self._config.jitter_ratio,
             jitter=self._jitter,
         )
@@ -232,7 +267,12 @@ class AccountScheduler:
         )
         actual_trigger = "initial_sync" if getattr(sync_result, "initial_sync", False) else trigger_type
         self._record_scan(account_id, started_at, started_clock, actual_trigger, True, result=sync_result)
-        logger.info("[account] complete account_id=%s next_check_at=%s", account_id, stored["next_check_at"])
+        logger.info(
+            "[account] complete account_id=%s next_check_at=%s interval_minutes=%s",
+            account_id,
+            stored["next_check_at"],
+            interval_minutes,
+        )
         return AccountCheckResult(
             account_id=account_id,
             success=True,
@@ -283,10 +323,70 @@ def calculate_backoff_minutes(
     return min(delay, max_backoff_minutes)
 
 
+def calculate_adaptive_interval_minutes(
+    *,
+    baseline_interval_minutes: int,
+    now: datetime,
+    first_success_at: datetime | None,
+    update_started_at: Sequence[datetime],
+    current_new_episodes: int,
+    min_interval_minutes: int,
+    max_interval_minutes: int,
+) -> int:
+    if min_interval_minutes <= 0:
+        raise ValueError("min_interval_minutes 必须大于 0")
+    if max_interval_minutes < min_interval_minutes:
+        raise ValueError("max_interval_minutes 不能小于 min_interval_minutes")
+
+    lower = int(min_interval_minutes)
+    baseline = max(lower, int(baseline_interval_minutes))
+    upper = max(baseline, int(max_interval_minutes))
+    if current_new_episodes > 0:
+        return baseline
+
+    current = _as_utc(now)
+    updates = sorted((_as_utc(value) for value in update_started_at), reverse=True)
+    updates = [value for value in updates if value <= current]
+    activity_start = updates[0] if updates else first_success_at
+    if activity_start is None:
+        return baseline
+    inactive_hours = max(0.0, (current - _as_utc(activity_start)).total_seconds() / 3600)
+    if inactive_hours >= 72:
+        inactivity_multiplier = 8
+    elif inactive_hours >= 24:
+        inactivity_multiplier = 4
+    elif inactive_hours >= 6:
+        inactivity_multiplier = 2
+    else:
+        inactivity_multiplier = 1
+    candidate = baseline * inactivity_multiplier
+
+    if len(updates) >= 2:
+        gaps = [
+            (newer - older).total_seconds() / 60
+            for newer, older in zip(updates, updates[1:])
+            if newer > older
+        ]
+        if gaps:
+            cadence_ceiling = max(baseline, math.ceil(statistics.median(gaps) / 12))
+            candidate = min(candidate, cadence_ceiling)
+    return min(upper, max(lower, int(candidate)))
+
+
 def _as_utc(value: datetime) -> datetime:
     if value.tzinfo is None:
         return value.replace(tzinfo=timezone.utc)
     return value.astimezone(timezone.utc)
+
+
+def _parse_datetime(value: object) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        return _as_utc(datetime.fromisoformat(text.replace("Z", "+00:00")))
+    except ValueError:
+        return None
 
 
 def _safe_error(exc: Exception) -> str:
