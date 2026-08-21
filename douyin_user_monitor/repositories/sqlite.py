@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 import threading
 import uuid
@@ -15,7 +16,7 @@ from douyin_user_monitor.parsers.regex import normalize_title
 from douyin_user_monitor.maintenance import backup_database
 
 
-SCHEMA_VERSION = 15
+SCHEMA_VERSION = 16
 SQLITE_BUSY_TIMEOUT_MS = 30_000
 SHOW_STATUSES = frozenset({"updating", "completed", "paused"})
 VIDEO_CLASSIFICATIONS = frozenset({"matched", "ignored", "review"})
@@ -23,6 +24,7 @@ VIDEO_CONTENT_TYPES = frozenset({"episode", "trailer", "show_content", "unknown"
 HISTORY_SYNC_STATUSES = frozenset({"idle", "pending", "running", "paused", "completed", "failed"})
 _PLACEHOLDER_NICKNAMES = frozenset({"", "nan", "none", "null", "undefined", "n/a"})
 _UNSET = object()
+logger = logging.getLogger(__name__)
 
 
 def utc_now() -> str:
@@ -254,6 +256,15 @@ class ShortDramaRepository:
                 CHECK (status IN ('updating', 'completed', 'paused'))
             );
 
+            CREATE TABLE IF NOT EXISTS show_aliases (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                show_id INTEGER NOT NULL REFERENCES shows(id) ON DELETE CASCADE,
+                alias TEXT NOT NULL,
+                normalized_alias TEXT NOT NULL UNIQUE,
+                created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_show_aliases_show ON show_aliases(show_id, id);
+
             CREATE TABLE IF NOT EXISTS scan_runs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
@@ -431,6 +442,8 @@ class ShortDramaRepository:
                 """,
                 (now, now),
             )
+        if previous_version < 16:
+            self._migrate_show_aliases(connection)
         if previous_version >= SCHEMA_VERSION:
             return
         if previous_version < 3:
@@ -770,6 +783,37 @@ class ShortDramaRepository:
                 if row is None:
                     raise KeyError("账号不存在")
             return self._require_account(connection, account_id)
+
+    def _migrate_show_aliases(self, connection: sqlite3.Connection) -> None:
+        """Expand legacy JSON aliases, retaining the earliest normalized owner."""
+        rows = connection.execute("SELECT id, title, aliases, created_at FROM shows ORDER BY id").fetchall()
+        canonical_owners = {
+            normalize_title(str(row["title"])): int(row["id"])
+            for row in rows
+            if normalize_title(str(row["title"]))
+        }
+        for row in rows:
+            accepted_aliases: list[str] = []
+            for alias in _merge_show_aliases(str(row["title"]), _json_list(row["aliases"])):
+                normalized = normalize_title(alias)
+                if not normalized:
+                    continue
+                canonical_owner = canonical_owners.get(normalized)
+                if canonical_owner is not None and canonical_owner != int(row["id"]):
+                    logger.warning("show alias migration conflict with canonical title normalized_alias=%s show_id=%s owner_id=%s", normalized, row["id"], canonical_owner)
+                    continue
+                try:
+                    connection.execute(
+                        "INSERT INTO show_aliases(show_id, alias, normalized_alias, created_at) VALUES (?, ?, ?, ?)",
+                        (int(row["id"]), alias, normalized, str(row["created_at"])),
+                    )
+                    accepted_aliases.append(alias)
+                except sqlite3.IntegrityError:
+                    logger.warning("show alias migration conflict normalized_alias=%s show_id=%s", normalized, row["id"])
+            connection.execute(
+                "UPDATE shows SET aliases=? WHERE id=?",
+                (_json_array(accepted_aliases), int(row["id"])),
+            )
 
     def advance_history_backfill_page(
         self,
@@ -1487,18 +1531,37 @@ class ShortDramaRepository:
             raise ValueError("剧名和标准化剧名不能为空")
         if status not in SHOW_STATUSES:
             raise ValueError("短剧状态无效")
+        cleaned_aliases = _merge_show_aliases(safe_title, aliases)
         now = utc_now()
         with self._transaction() as connection:
+            alias_owner = connection.execute(
+                """
+                SELECT shows.title FROM show_aliases
+                JOIN shows ON shows.id=show_aliases.show_id
+                WHERE show_aliases.normalized_alias=?
+                """,
+                (safe_normalized,),
+            ).fetchone()
+            if alias_owner is not None:
+                raise ValueError(f"标准化剧名已被《{alias_owner['title']}》用作别名")
             connection.execute(
                 """
                 INSERT INTO shows(title, normalized_title, aliases, status, created_at, updated_at)
                 VALUES (?, ?, ?, ?, ?, ?)
                 """,
-                (safe_title, safe_normalized, _json_array(aliases), status, now, now),
+                (safe_title, safe_normalized, _json_array(cleaned_aliases), status, now, now),
             )
             row = connection.execute("SELECT * FROM shows WHERE normalized_title = ?", (safe_normalized,)).fetchone()
             if row is None:
                 raise RuntimeError("保存短剧后无法读取记录")
+            for alias in cleaned_aliases:
+                conflict = self._find_alias_conflict(connection, alias, int(row["id"]))
+                if conflict is not None:
+                    raise ValueError(f"该别名已属于《{conflict['title']}》")
+                connection.execute(
+                    "INSERT INTO show_aliases(show_id, alias, normalized_alias, created_at) VALUES (?, ?, ?, ?)",
+                    (int(row["id"]), alias, normalize_title(alias), now),
+                )
             return _show_row(row)
 
     def get_show(self, show_id: int) -> dict[str, Any] | None:
@@ -1611,13 +1674,33 @@ class ShortDramaRepository:
         if not normalized:
             return None
         with self._transaction() as connection:
-            rows = connection.execute("SELECT * FROM shows ORDER BY id").fetchall()
-            for row in rows:
-                show = _show_row(row)
-                candidates = [show["title"], *show["aliases"]]
-                if any(normalize_title(str(candidate)) == normalized for candidate in candidates):
-                    return show
+            row = connection.execute(
+                "SELECT * FROM shows WHERE normalized_title = ? ORDER BY id LIMIT 1", (normalized,)
+            ).fetchone()
+            if row is None:
+                row = connection.execute(
+                    """
+                    SELECT shows.* FROM show_aliases
+                    JOIN shows ON shows.id=show_aliases.show_id
+                    WHERE show_aliases.normalized_alias=?
+                    ORDER BY show_aliases.id LIMIT 1
+                    """,
+                    (normalized,),
+                ).fetchone()
+            if row is not None:
+                return _show_row(row)
         return None
+
+    def find_show_by_normalized_name(self, normalized_name: str) -> dict[str, Any] | None:
+        return self.get_show_by_title_or_alias(normalized_name)
+
+    def list_show_aliases(self, show_id: int) -> list[dict[str, Any]]:
+        with self._transaction() as connection:
+            rows = connection.execute(
+                "SELECT id, show_id, alias, normalized_alias, created_at FROM show_aliases WHERE show_id=? ORDER BY id",
+                (int(show_id),),
+            ).fetchall()
+            return [dict(row) for row in rows]
 
     def list_shows(self, *, limit: int = 100) -> list[dict[str, Any]]:
         safe_limit = max(1, min(int(limit), 500))
@@ -1678,7 +1761,8 @@ class ShortDramaRepository:
         if search:
             conditions.append(
                 "(shows.title LIKE ? COLLATE NOCASE OR shows.normalized_title LIKE ? "
-                "COLLATE NOCASE OR shows.aliases LIKE ? COLLATE NOCASE)"
+                "COLLATE NOCASE OR EXISTS (SELECT 1 FROM show_aliases sa "
+                "WHERE sa.show_id=shows.id AND sa.alias LIKE ? COLLATE NOCASE))"
             )
             params.extend((f"%{search}%", f"%{normalize_title(search)}%", f"%{search}%"))
         where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
@@ -1918,7 +2002,26 @@ class ShortDramaRepository:
             rows = connection.execute(
                 "SELECT * FROM shows WHERE is_ignored = 0 ORDER BY title COLLATE NOCASE"
             ).fetchall()
-            return [_show_row(row) for row in rows]
+            shows = [_show_row(row) for row in rows]
+            aliases = self._aliases_for_shows(connection, [int(show["id"]) for show in shows])
+            for show in shows:
+                show["aliases"] = aliases.get(int(show["id"]), [])
+            return shows
+
+    def _aliases_for_shows(
+        self, connection: sqlite3.Connection, show_ids: Sequence[int]
+    ) -> dict[int, list[str]]:
+        if not show_ids:
+            return {}
+        placeholders = ",".join("?" for _ in show_ids)
+        rows = connection.execute(
+            f"SELECT show_id, alias FROM show_aliases WHERE show_id IN ({placeholders}) ORDER BY id",
+            tuple(show_ids),
+        ).fetchall()
+        result: dict[int, list[str]] = {}
+        for row in rows:
+            result.setdefault(int(row["show_id"]), []).append(str(row["alias"]))
+        return result
 
     def update_show(
         self,
@@ -1930,6 +2033,7 @@ class ShortDramaRepository:
         expected_episode_count: int | None | object = _UNSET,
     ) -> dict[str, Any]:
         changes: dict[str, Any] = {}
+        replace_aliases = aliases is not None
         if title is not None:
             cleaned_title = title.strip()
             if not cleaned_title:
@@ -1958,7 +2062,6 @@ class ShortDramaRepository:
                 raise KeyError("短剧不存在")
             return existing
         changes["updated_at"] = utc_now()
-        assignments = ", ".join(f"{key} = ?" for key in changes)
         with self._transaction() as connection:
             existing = connection.execute("SELECT * FROM shows WHERE id = ?", (show_id,)).fetchone()
             if existing is None:
@@ -1973,16 +2076,51 @@ class ShortDramaRepository:
                     raise ValueError(
                         f"标准化剧名已被“{conflict['title']}”占用，请使用短剧合并"
                     )
-            if aliases is not None:
+                alias_conflict = connection.execute(
+                    """
+                    SELECT shows.title FROM show_aliases
+                    JOIN shows ON shows.id=show_aliases.show_id
+                    WHERE show_aliases.normalized_alias=? AND shows.id!=?
+                    """,
+                    (normalized_title, int(show_id)),
+                ).fetchone()
+                if alias_conflict is not None:
+                    raise ValueError(f"标准化剧名已被《{alias_conflict['title']}》用作别名")
+            if normalized_title is not None and aliases is None:
+                current_aliases = [
+                    row["alias"]
+                    for row in connection.execute(
+                        "SELECT alias FROM show_aliases WHERE show_id=? ORDER BY id",
+                        (int(show_id),),
+                    ).fetchall()
+                ]
+                cleaned_aliases = _merge_show_aliases(str(changes["title"]), current_aliases)
+                if cleaned_aliases != current_aliases:
+                    changes["aliases"] = _json_array(cleaned_aliases)
+                    replace_aliases = True
+            if replace_aliases:
+                cleaned_aliases = _merge_show_aliases(
+                    str(changes.get("title") or existing["title"]),
+                    aliases if aliases is not None else cleaned_aliases,
+                )
+                changes["aliases"] = _json_array(cleaned_aliases)
                 for alias in cleaned_aliases:
                     conflict = self._find_alias_conflict(connection, alias, show_id)
                     if conflict is not None:
                         raise ValueError(f"该别名已用于《{conflict['title']}》")
+            assignments = ", ".join(f"{key} = ?" for key in changes)
             cursor = connection.execute(
                 f"UPDATE shows SET {assignments} WHERE id = ?", (*changes.values(), show_id)
             )
             if cursor.rowcount == 0:
                 raise KeyError("短剧不存在")
+            if replace_aliases:
+                connection.execute("DELETE FROM show_aliases WHERE show_id=?", (int(show_id),))
+                for alias in cleaned_aliases:
+                    connection.execute(
+                        "INSERT INTO show_aliases(show_id, alias, normalized_alias, created_at) VALUES (?, ?, ?, ?)",
+                        (int(show_id), alias, normalize_title(alias), utc_now()),
+                    )
             row = connection.execute("SELECT * FROM shows WHERE id = ?", (show_id,)).fetchone()
             return _show_row(row)
 
@@ -1997,19 +2135,50 @@ class ShortDramaRepository:
             show = _show_row(row)
             if normalize_title(cleaned) == normalize_title(str(show["title"])):
                 return show
+            own_alias = connection.execute(
+                "SELECT 1 FROM show_aliases WHERE show_id=? AND normalized_alias=?",
+                (int(show_id), normalize_title(cleaned)),
+            ).fetchone()
+            if own_alias is not None:
+                return show
             conflict = self._find_alias_conflict(connection, cleaned, show_id)
             if conflict is not None:
                 raise ValueError(f"该别名已用于《{conflict['title']}》")
             aliases = _merge_show_aliases(str(show["title"]), show["aliases"], [cleaned])
-            connection.execute("UPDATE shows SET aliases=?,updated_at=? WHERE id=?", (_json_array(aliases), utc_now(), show_id))
+            now = utc_now()
+            connection.execute("UPDATE shows SET aliases=?,updated_at=? WHERE id=?", (_json_array(aliases), now, show_id))
+            connection.execute(
+                "INSERT INTO show_aliases(show_id, alias, normalized_alias, created_at) VALUES (?, ?, ?, ?)",
+                (int(show_id), cleaned, normalize_title(cleaned), now),
+            )
             return _show_row(connection.execute("SELECT * FROM shows WHERE id=?", (show_id,)).fetchone())
+
+    def remove_show_alias(self, show_id: int, alias: str) -> dict[str, Any]:
+        normalized = normalize_title(alias)
+        if not normalized:
+            raise ValueError("别名不能为空")
+        with self._transaction() as connection:
+            show_row = connection.execute("SELECT * FROM shows WHERE id=?", (int(show_id),)).fetchone()
+            if show_row is None:
+                raise KeyError("短剧不存在")
+            connection.execute("DELETE FROM show_aliases WHERE show_id=? AND normalized_alias=?", (int(show_id), normalized))
+            aliases = [row["alias"] for row in connection.execute("SELECT alias FROM show_aliases WHERE show_id=? ORDER BY id", (int(show_id),)).fetchall()]
+            connection.execute("UPDATE shows SET aliases=?,updated_at=? WHERE id=?", (_json_array(aliases), utc_now(), int(show_id)))
+            return _show_row(connection.execute("SELECT * FROM shows WHERE id=?", (int(show_id),)).fetchone())
 
     def _find_alias_conflict(self, connection: sqlite3.Connection, alias: str, show_id: int) -> sqlite3.Row | None:
         normalized = normalize_title(alias)
-        for row in connection.execute("SELECT id,title,normalized_title,aliases FROM shows WHERE id!=?", (show_id,)):
-            if normalized in {normalize_title(str(row["title"])), str(row["normalized_title"]), *(normalize_title(item) for item in _json_list(row["aliases"]))}:
-                return row
-        return None
+        return connection.execute(
+            """
+            SELECT id, title FROM shows WHERE id != ? AND normalized_title = ?
+            UNION ALL
+            SELECT shows.id, shows.title FROM show_aliases
+            JOIN shows ON shows.id=show_aliases.show_id
+            WHERE shows.id != ? AND show_aliases.normalized_alias = ?
+            LIMIT 1
+            """,
+            (int(show_id), normalized, int(show_id), normalized),
+        ).fetchone()
 
     def ignore_show(self, show_id: int, *, reason: str | None = None) -> dict[str, Any]:
         now = utc_now()
@@ -2087,6 +2256,18 @@ class ShortDramaRepository:
                 [str(source_show["title"])],
                 _json_list(source_show["aliases"]),
             )
+            connection.execute(
+                "DELETE FROM show_aliases WHERE show_id IN (?, ?)",
+                (source_show_id, target_show_id),
+            )
+            for alias in aliases:
+                conflict = self._find_alias_conflict(connection, alias, target_show_id)
+                if conflict is not None and int(conflict["id"]) != source_show_id:
+                    raise ValueError(f"该别名已属于《{conflict['title']}》")
+                connection.execute(
+                    "INSERT INTO show_aliases(show_id, alias, normalized_alias, created_at) VALUES (?, ?, ?, ?)",
+                    (target_show_id, alias, normalize_title(alias), now),
+                )
             connection.execute(
                 "UPDATE shows SET aliases = ?, updated_at = ? WHERE id = ?",
                 (_json_array(aliases), now, target_show_id),

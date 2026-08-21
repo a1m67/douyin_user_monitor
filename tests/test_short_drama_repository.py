@@ -835,6 +835,58 @@ class ShortDramaRepositoryTests(unittest.TestCase):
         removed = self.repository.update_show(first["id"], aliases=[])
         self.assertEqual(removed["aliases"], [])
 
+    def test_normalized_alias_table_is_source_of_truth_for_lookup_and_removal(self):
+        show = self.repository.create_show(
+            title="归墟", normalized_title="归墟", aliases=["归虚世界"]
+        )
+        aliases = self.repository.list_show_aliases(show["id"])
+        self.assertEqual([item["normalized_alias"] for item in aliases], ["归虚世界"])
+        self.assertEqual(
+            self.repository.find_show_by_normalized_name("归虚世界")["id"], show["id"]
+        )
+        removed = self.repository.remove_show_alias(show["id"], "归虚世界")
+        self.assertEqual(removed["aliases"], [])
+        self.assertIsNone(self.repository.find_show_by_normalized_name("归虚世界"))
+
+    def test_alias_cannot_conflict_with_another_canonical_title(self):
+        first = self.repository.create_show(title="归墟", normalized_title="归墟")
+        second = self.repository.create_show(title="另一部", normalized_title="另一部")
+        with self.assertRaisesRegex(ValueError, "已用于"):
+            self.repository.add_show_alias(first["id"], "另一部")
+
+    def test_v15_json_alias_migration_keeps_earliest_owner_and_skips_canonical_conflict(self):
+        first = self.repository.create_show(title="第一部", normalized_title="第一部")
+        second = self.repository.create_show(title="第二部", normalized_title="第二部")
+        database_path = self.root / "app.db"
+        connection = sqlite3.connect(database_path)
+        try:
+            connection.execute("DROP TABLE show_aliases")
+            connection.execute(
+                "UPDATE shows SET aliases=? WHERE id=?",
+                ('["共同别名", "第二部"]', first["id"]),
+            )
+            connection.execute(
+                "UPDATE shows SET aliases=? WHERE id=?",
+                ('["共同别名", "独有别名"]', second["id"]),
+            )
+            connection.execute(
+                "UPDATE app_meta SET value='15' WHERE key='schema_version'"
+            )
+            connection.commit()
+        finally:
+            connection.close()
+
+        migrated = ShortDramaRepository(database_path)
+        self.assertEqual(
+            migrated.find_show_by_normalized_name("共同别名")["id"], first["id"]
+        )
+        self.assertEqual(
+            migrated.find_show_by_normalized_name("独有别名")["id"], second["id"]
+        )
+        self.assertEqual(
+            migrated.find_show_by_normalized_name("第二部")["id"], second["id"]
+        )
+
     def test_ignored_shows_are_hidden_from_library_and_parser_candidates_until_restored(self):
         account = self.create_account("ignored-library")
         show = self.repository.create_show(title="活动名称", normalized_title="活动名称")
