@@ -1,7 +1,7 @@
 """Protocols and request models shared by short-drama API route modules."""
 from __future__ import annotations
 
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 from pydantic import BaseModel, Field
 
@@ -37,6 +37,9 @@ class UpdateAccountPayload(BaseModel):
     homepage_url: str | None = None
     enabled: bool | None = None
     check_interval_minutes: int | None = Field(default=None, ge=1, le=1440)
+    schedule_mode: Literal["inherit", "fixed", "adaptive"] | None = None
+    adaptive_min_interval_minutes: int | None = Field(default=None, ge=1, le=1440)
+    adaptive_max_interval_minutes: int | None = Field(default=None, ge=1, le=10080)
 
 
 class UpdateShowPayload(BaseModel):

@@ -240,7 +240,11 @@ class AccountScheduler:
         if self._circuit_breaker is not None:
             self._circuit_breaker.record_success(account_id)
         interval_minutes = int(account["check_interval_minutes"])
-        if self._config.adaptive_enabled:
+        schedule_mode = str(account.get("schedule_mode") or "inherit")
+        use_adaptive = schedule_mode == "adaptive" or (
+            schedule_mode == "inherit" and self._config.adaptive_enabled
+        )
+        if use_adaptive:
             try:
                 history = self._repository.get_adaptive_schedule_history(account_id)
                 interval_minutes = calculate_adaptive_interval_minutes(
@@ -255,8 +259,14 @@ class AccountScheduler:
                     current_new_episodes=len(
                         getattr(sync_result, "new_episode_updates", ())
                     ),
-                    min_interval_minutes=self._config.adaptive_min_interval_minutes,
-                    max_interval_minutes=self._config.adaptive_max_interval_minutes,
+                    min_interval_minutes=int(
+                        account.get("adaptive_min_interval_minutes")
+                        or self._config.adaptive_min_interval_minutes
+                    ),
+                    max_interval_minutes=int(
+                        account.get("adaptive_max_interval_minutes")
+                        or self._config.adaptive_max_interval_minutes
+                    ),
                 )
             except Exception:
                 logger.exception(
@@ -272,6 +282,7 @@ class AccountScheduler:
         stored = self._repository.mark_account_sync_success(
             account_id,
             next_check_at=next_check_at.isoformat(timespec="seconds"),
+            effective_interval_minutes=interval_minutes,
         )
         actual_trigger = "initial_sync" if getattr(sync_result, "initial_sync", False) else trigger_type
         self._record_scan(account_id, started_at, started_clock, actual_trigger, True, result=sync_result)

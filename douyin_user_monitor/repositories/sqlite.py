@@ -17,12 +17,13 @@ from douyin_user_monitor.maintenance import backup_database
 from douyin_user_monitor.raw_payload import compact_video_raw
 
 
-SCHEMA_VERSION = 20
+SCHEMA_VERSION = 21
 SQLITE_BUSY_TIMEOUT_MS = 30_000
 SHOW_STATUSES = frozenset({"updating", "completed", "paused"})
 VIDEO_CLASSIFICATIONS = frozenset({"matched", "ignored", "review"})
 VIDEO_CONTENT_TYPES = frozenset({"episode", "trailer", "show_content", "unknown", "non_drama"})
 HISTORY_SYNC_STATUSES = frozenset({"idle", "pending", "running", "paused", "completed", "failed"})
+ACCOUNT_SCHEDULE_MODES = frozenset({"inherit", "fixed", "adaptive"})
 _PLACEHOLDER_NICKNAMES = frozenset({"", "nan", "none", "null", "undefined", "n/a"})
 _UNSET = object()
 logger = logging.getLogger(__name__)
@@ -275,6 +276,11 @@ class ShortDramaRepository:
                 homepage_url TEXT NOT NULL,
                 enabled INTEGER NOT NULL DEFAULT 1,
                 check_interval_minutes INTEGER NOT NULL DEFAULT 10,
+                schedule_mode TEXT NOT NULL DEFAULT 'inherit'
+                    CHECK (schedule_mode IN ('inherit', 'fixed', 'adaptive')),
+                adaptive_min_interval_minutes INTEGER,
+                adaptive_max_interval_minutes INTEGER,
+                last_effective_interval_minutes INTEGER,
                 last_checked_at TEXT,
                 next_check_at TEXT,
                 last_success_at TEXT,
@@ -296,6 +302,11 @@ class ShortDramaRepository:
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 CHECK (check_interval_minutes > 0),
+                CHECK (adaptive_min_interval_minutes IS NULL OR adaptive_min_interval_minutes > 0),
+                CHECK (adaptive_max_interval_minutes IS NULL OR adaptive_max_interval_minutes > 0),
+                CHECK (adaptive_min_interval_minutes IS NULL OR adaptive_max_interval_minutes IS NULL
+                    OR adaptive_min_interval_minutes <= adaptive_max_interval_minutes),
+                CHECK (last_effective_interval_minutes IS NULL OR last_effective_interval_minutes > 0),
                 CHECK (consecutive_failures >= 0)
             );
 
@@ -574,6 +585,10 @@ class ShortDramaRepository:
                 connection.execute(f"ALTER TABLE videos ADD COLUMN {column} {definition}")
         for column, definition in {
             "avatar_url": "TEXT",
+            "schedule_mode": "TEXT NOT NULL DEFAULT 'inherit'",
+            "adaptive_min_interval_minutes": "INTEGER",
+            "adaptive_max_interval_minutes": "INTEGER",
+            "last_effective_interval_minutes": "INTEGER",
             "history_sync_status": "TEXT NOT NULL DEFAULT 'idle'",
             "history_next_cursor": "INTEGER NOT NULL DEFAULT 0",
             "history_has_more": "INTEGER NOT NULL DEFAULT 1",
@@ -843,7 +858,8 @@ class ShortDramaRepository:
     def update_account(self, account_id: str, **changes: Any) -> dict[str, Any]:
         allowed = {
             "nickname", "avatar_url", "homepage_url", "enabled",
-            "check_interval_minutes", "next_check_at",
+            "check_interval_minutes", "next_check_at", "schedule_mode",
+            "adaptive_min_interval_minutes", "adaptive_max_interval_minutes",
         }
         values = {key: value for key, value in changes.items() if key in allowed}
         if not values:
@@ -863,9 +879,31 @@ class ShortDramaRepository:
             values["enabled"] = int(bool(values["enabled"]))
         if "check_interval_minutes" in values:
             values["check_interval_minutes"] = _positive_int(values["check_interval_minutes"], 10)
-        values["updated_at"] = utc_now()
-        assignments = ", ".join(f"{key} = ?" for key in values)
+        if "schedule_mode" in values:
+            values["schedule_mode"] = str(values["schedule_mode"] or "").strip().lower()
+            if values["schedule_mode"] not in ACCOUNT_SCHEDULE_MODES:
+                raise ValueError("schedule_mode 必须是 inherit、fixed 或 adaptive")
+        for key in ("adaptive_min_interval_minutes", "adaptive_max_interval_minutes"):
+            if key in values:
+                values[key] = None if values[key] is None else _positive_int(values[key], 1)
         with self._transaction() as connection:
+            current = connection.execute(
+                "SELECT adaptive_min_interval_minutes, adaptive_max_interval_minutes "
+                "FROM accounts WHERE id = ?",
+                (account_id,),
+            ).fetchone()
+            if current is None:
+                raise KeyError("账号不存在")
+            effective_min = values.get(
+                "adaptive_min_interval_minutes", current["adaptive_min_interval_minutes"]
+            )
+            effective_max = values.get(
+                "adaptive_max_interval_minutes", current["adaptive_max_interval_minutes"]
+            )
+            if effective_min is not None and effective_max is not None and effective_min > effective_max:
+                raise ValueError("账号自适应最长间隔不能小于最短间隔")
+            values["updated_at"] = utc_now()
+            assignments = ", ".join(f"{key} = ?" for key in values)
             cursor = connection.execute(
                 f"UPDATE accounts SET {assignments} WHERE id = ?",
                 (*values.values(), account_id),
@@ -3498,17 +3536,31 @@ class ShortDramaRepository:
         with self._read_connection() as connection:
             return [_notification_delivery_row(row) for row in connection.execute(query, params).fetchall()]
 
-    def mark_account_sync_success(self, account_id: str, *, next_check_at: str) -> dict[str, Any]:
+    def mark_account_sync_success(
+        self,
+        account_id: str,
+        *,
+        next_check_at: str,
+        effective_interval_minutes: int | None = None,
+    ) -> dict[str, Any]:
         now = utc_now()
         with self._transaction() as connection:
             cursor = connection.execute(
                 """
                 UPDATE accounts SET
                     last_checked_at = ?, last_success_at = ?, next_check_at = ?, last_error = NULL,
-                    consecutive_failures = 0, initial_sync_completed = 1, updated_at = ?
+                    consecutive_failures = 0, initial_sync_completed = 1,
+                    last_effective_interval_minutes = ?, updated_at = ?
                 WHERE id = ?
                 """,
-                (now, now, next_check_at, now, account_id),
+                (
+                    now,
+                    now,
+                    next_check_at,
+                    None if effective_interval_minutes is None else _positive_int(effective_interval_minutes, 1),
+                    now,
+                    account_id,
+                ),
             )
             if cursor.rowcount == 0:
                 raise KeyError("账号不存在")
@@ -4035,6 +4087,14 @@ def _account_row(row: sqlite3.Row) -> dict[str, Any]:
     result = _row_to_dict(row)
     result["enabled"] = bool(result["enabled"])
     result["initial_sync_completed"] = bool(result["initial_sync_completed"])
+    result["schedule_mode"] = str(result.get("schedule_mode") or "inherit")
+    for key in (
+        "adaptive_min_interval_minutes",
+        "adaptive_max_interval_minutes",
+        "last_effective_interval_minutes",
+    ):
+        if result.get(key) is not None:
+            result[key] = int(result[key])
     result["history_has_more"] = bool(result.get("history_has_more", 1))
     result["history_next_cursor"] = _non_negative_int(result.get("history_next_cursor"))
     result["history_processed_pages"] = _non_negative_int(result.get("history_processed_pages"))

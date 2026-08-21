@@ -171,6 +171,75 @@ class AccountSchedulerTests(unittest.IsolatedAsyncioTestCase):
             self.repository.get_account(enabled["id"])["next_check_at"],
             "2026-08-15T12:20:00+00:00",
         )
+        self.assertEqual(
+            self.repository.get_account(enabled["id"])["last_effective_interval_minutes"],
+            20,
+        )
+
+    async def test_account_schedule_mode_overrides_global_adaptive_setting(self):
+        cases = (
+            ("inherit-off", "inherit", False, 10),
+            ("inherit-on", "inherit", True, 20),
+            ("fixed-on", "fixed", True, 10),
+            ("adaptive-off", "adaptive", False, 20),
+        )
+        old_success = (self.now - timedelta(hours=7)).isoformat(timespec="seconds")
+        for sec_uid, mode, global_adaptive, expected in cases:
+            with self.subTest(mode=mode, global_adaptive=global_adaptive):
+                account = self.add_account(sec_uid)
+                self.repository.update_account(account["id"], schedule_mode=mode)
+                self.repository.record_scan_run(
+                    account["id"], started_at=old_success, finished_at=old_success, success=1
+                )
+                scheduler = AccountScheduler(
+                    repository=self.repository,
+                    pipeline=StubPipeline(),
+                    config=SchedulerConfig(
+                        jitter_ratio=0,
+                        poll_seconds=1,
+                        adaptive_enabled=global_adaptive,
+                        adaptive_min_interval_minutes=5,
+                        adaptive_max_interval_minutes=240,
+                    ),
+                    now=lambda: self.now,
+                )
+                await scheduler.run_account_once(account["id"])
+                stored = self.repository.get_account(account["id"])
+                self.assertEqual(stored["last_effective_interval_minutes"], expected)
+                self.assertEqual(
+                    stored["next_check_at"],
+                    (self.now + timedelta(minutes=expected)).isoformat(timespec="seconds"),
+                )
+
+    async def test_account_adaptive_bounds_override_global_bounds(self):
+        account = self.add_account("adaptive-bounds")
+        self.repository.update_account(
+            account["id"],
+            schedule_mode="adaptive",
+            adaptive_min_interval_minutes=35,
+            adaptive_max_interval_minutes=40,
+        )
+        old_success = (self.now - timedelta(days=30)).isoformat(timespec="seconds")
+        self.repository.record_scan_run(
+            account["id"], started_at=old_success, finished_at=old_success, success=1
+        )
+        scheduler = AccountScheduler(
+            repository=self.repository,
+            pipeline=StubPipeline(),
+            config=SchedulerConfig(
+                jitter_ratio=0,
+                adaptive_enabled=False,
+                adaptive_min_interval_minutes=5,
+                adaptive_max_interval_minutes=240,
+            ),
+            now=lambda: self.now,
+        )
+
+        await scheduler.run_account_once(account["id"])
+
+        stored = self.repository.get_account(account["id"])
+        self.assertEqual(stored["last_effective_interval_minutes"], 40)
+        self.assertEqual(stored["next_check_at"], "2026-08-15T12:40:00+00:00")
 
     def test_adaptive_policy_uses_update_cadence_and_preserves_manual_baseline(self):
         interval = calculate_adaptive_interval_minutes(
@@ -277,9 +346,11 @@ class AccountSchedulerTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_manual_run_is_recorded_with_manual_trigger(self):
         account = self.add_account("manual")
+        self.repository.update_account(account["id"], schedule_mode="fixed")
         scheduler = AccountScheduler(repository=self.repository, pipeline=StubPipeline(), config=SchedulerConfig(), now=lambda: self.now)
         await scheduler.run_account_once(account["id"])
         self.assertEqual(self.repository.list_scan_runs(account["id"])[0]["trigger_type"], "manual")
+        self.assertEqual(self.repository.get_account(account["id"])["schedule_mode"], "fixed")
 
     async def test_scan_run_persists_real_parser_metrics(self):
         account = self.add_account("metrics")

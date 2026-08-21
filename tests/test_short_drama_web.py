@@ -302,6 +302,9 @@ class ShortDramaWebTests(unittest.IsolatedAsyncioTestCase):
                 "nickname": "更新后的 AI 剧场",
                 "homepage_url": "https://www.douyin.com/user/updated-sec-1",
                 "check_interval_minutes": 15,
+                "schedule_mode": "adaptive",
+                "adaptive_min_interval_minutes": 20,
+                "adaptive_max_interval_minutes": 180,
             },
         )
 
@@ -310,6 +313,24 @@ class ShortDramaWebTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(updated["nickname"], "更新后的 AI 剧场")
         self.assertEqual(updated["homepage_url"], "https://www.douyin.com/user/updated-sec-1")
         self.assertEqual(updated["check_interval_minutes"], 15)
+        self.assertEqual(updated["schedule_mode"], "adaptive")
+        self.assertEqual(updated["adaptive_min_interval_minutes"], 20)
+        self.assertEqual(updated["adaptive_max_interval_minutes"], 180)
+        cleared = self.client.patch(
+            f"/api/short-drama/accounts/{account['id']}",
+            json={
+                "adaptive_min_interval_minutes": None,
+                "adaptive_max_interval_minutes": None,
+            },
+        )
+        self.assertEqual(cleared.status_code, 200)
+        self.assertIsNone(cleared.json()["account"]["adaptive_min_interval_minutes"])
+
+    async def test_accounts_ui_exposes_per_account_scheduling_controls(self):
+        script = self.client.get("/static/library.js")
+        self.assertEqual(script.status_code, 200)
+        for text in ("调度方式", "跟随系统", "自适应最短间隔", "实际间隔"):
+            self.assertIn(text, script.text)
 
     async def test_optional_admin_token_protects_writes_but_not_reads_or_health(self):
         protected_app = FastAPI()
@@ -597,7 +618,7 @@ class ShortDramaWebTests(unittest.IsolatedAsyncioTestCase):
         with patch("douyin_user_monitor.web.short_drama.doctor_database") as doctor:
             data = self.client.get("/api/short-drama/diagnostics").json()
         doctor.assert_not_called()
-        self.assertEqual(data["database"]["schema_version"], 20)
+        self.assertEqual(data["database"]["schema_version"], 21)
         self.assertIsNone(data["database"]["last_doctor_at"])
         self.assertGreaterEqual(data["database"]["database_latency_ms"], 0)
         self.assertEqual(

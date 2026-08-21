@@ -6,7 +6,7 @@ Transactional reliability, lightweight operations, parser governance, bounded AI
 
 - [x] Phase 1: Transactional notification outbox
 - [x] Phase 2: Lightweight diagnostics and persistent service state
-- [ ] Phase 3: Per-account adaptive scheduling (in progress)
+- [x] Phase 3: Per-account adaptive scheduling
 - [ ] Phase 4: Verified database restore
 - [ ] Phase 5: Parser processing versioning
 - [ ] Phase 6: Parser golden regression suite
@@ -36,7 +36,13 @@ Transactional reliability, lightweight operations, parser governance, bounded AI
 
 ### Phase 3
 
-- Status: in progress
+- Status: complete
+- Main design: resolve adaptive scheduling per account through `inherit`, `fixed`, or `adaptive`, with optional account-level bounds and persisted effective intervals.
+- Schema changes: v21 adds account scheduling mode, adaptive min/max overrides, and last effective interval.
+- New settings: none; account overrides fall back to existing global adaptive scheduler settings.
+- Tests: global/account mode matrix, account bounds, persisted effective interval, manual-run configuration preservation, API null clearing, UI controls, focused suites, and full suite (260 tests passed).
+- Commit: `feat: add per-account adaptive scheduling`.
+- Production verification still needed: confirm migrated accounts remain `inherit` and compare effective intervals with expected author cadence after several successful scans.
 
 ### Phase 4
 

@@ -404,8 +404,46 @@ class ShortDramaRepositoryTests(unittest.TestCase):
 
         migrated = ShortDramaRepository(self.repository.database_path)
 
-        self.assertEqual(migrated.schema_version(), 20)
+        self.assertEqual(migrated.schema_version(), 21)
         self.assertIsNone(migrated.get_account(account["id"])["avatar_url"])
+
+    def test_v20_migration_preserves_account_schedule_behavior(self):
+        account = self.create_account("schedule-migration")
+        with self.repository._transaction() as connection:
+            connection.execute("UPDATE app_meta SET value='20' WHERE key='schema_version'")
+            connection.execute("UPDATE accounts SET schedule_mode='inherit' WHERE id=?", (account["id"],))
+
+        migrated = ShortDramaRepository(self.repository.database_path)
+        stored = migrated.get_account(account["id"])
+
+        self.assertEqual(migrated.schema_version(), 21)
+        self.assertEqual(stored["schedule_mode"], "inherit")
+        self.assertIsNone(stored["adaptive_min_interval_minutes"])
+        self.assertIsNone(stored["adaptive_max_interval_minutes"])
+        self.assertIsNone(stored["last_effective_interval_minutes"])
+
+    def test_account_adaptive_settings_validate_and_can_be_cleared(self):
+        account = self.create_account("schedule-settings")
+        updated = self.repository.update_account(
+            account["id"],
+            schedule_mode="adaptive",
+            adaptive_min_interval_minutes=15,
+            adaptive_max_interval_minutes=120,
+        )
+        self.assertEqual(updated["schedule_mode"], "adaptive")
+        self.assertEqual(updated["adaptive_min_interval_minutes"], 15)
+        self.assertEqual(updated["adaptive_max_interval_minutes"], 120)
+        with self.assertRaisesRegex(ValueError, "最长间隔"):
+            self.repository.update_account(
+                account["id"], adaptive_min_interval_minutes=200
+            )
+        cleared = self.repository.update_account(
+            account["id"],
+            adaptive_min_interval_minutes=None,
+            adaptive_max_interval_minutes=None,
+        )
+        self.assertIsNone(cleared["adaptive_min_interval_minutes"])
+        self.assertIsNone(cleared["adaptive_max_interval_minutes"])
 
     def test_v14_show_season_migration_only_copies_legacy_metadata_to_season_one(self):
         account = self.create_account("season-v14")
