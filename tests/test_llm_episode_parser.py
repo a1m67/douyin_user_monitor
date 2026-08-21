@@ -150,6 +150,19 @@ class LLMParserTests(unittest.TestCase):
         self.assertEqual(result.status, "ignored")
         self.assertEqual(len(client.calls), 0)
 
+    def test_parse_trace_records_context_and_llm_execution(self):
+        client = FakeLLMClient(decision(episode=9))
+        parser = EpisodeParser(llm_backend=LLMParser(client))
+        outcome = parser.parse_with_trace(
+            description="原创末日故事连载【归墟】九-食物链",
+            known_shows=self.known_shows,
+        )
+        self.assertEqual(outcome.result.method, "llm")
+        self.assertTrue(outcome.trace.regex_called)
+        self.assertTrue(outcome.trace.context_called)
+        self.assertTrue(outcome.trace.llm_called)
+        self.assertGreaterEqual(outcome.trace.llm_latency_ms, 0)
+
 
 class LLMPipelineTests(unittest.IsolatedAsyncioTestCase):
     async def test_known_show_high_confidence_auto_archives(self):

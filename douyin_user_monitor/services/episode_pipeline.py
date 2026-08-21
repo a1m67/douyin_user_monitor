@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import time
 from dataclasses import dataclass
 from typing import Any, Protocol, Sequence
 
@@ -11,7 +12,7 @@ from douyin_user_monitor.monitor.history_sync import (
     HISTORY_SYNC_STATUS_PENDING,
     HISTORY_SYNC_STATUS_RUNNING,
 )
-from douyin_user_monitor.parsers.base import IGNORED, MATCHED, REVIEW
+from douyin_user_monitor.parsers.base import IGNORED, MATCHED, REVIEW, ParseTrace
 from douyin_user_monitor.parsers.episode_parser import EpisodeParser
 from douyin_user_monitor.parsers.regex import normalize_title
 from douyin_user_monitor.providers.base import (
@@ -48,6 +49,13 @@ class SyncResult:
     review_videos: int
     ignored_videos: int
     new_episode_updates: tuple[EpisodeUpdate, ...]
+    regex_calls: int = 0
+    context_calls: int = 0
+    llm_calls_count: int = 0
+    ocr_calls: int = 0
+    ocr_successes: int = 0
+    llm_latency_ms_total: int = 0
+    ocr_latency_ms_total: int = 0
 
     @property
     def matched_videos(self) -> int:
@@ -55,7 +63,24 @@ class SyncResult:
 
     @property
     def llm_calls(self) -> int:
-        return 0
+        return self.llm_calls_count
+
+
+@dataclass
+class _ParseMetrics:
+    regex_calls: int = 0
+    context_calls: int = 0
+    llm_calls: int = 0
+    ocr_calls: int = 0
+    ocr_successes: int = 0
+    llm_latency_ms_total: int = 0
+    ocr_latency_ms_total: int = 0
+
+    def add_trace(self, trace: ParseTrace) -> None:
+        self.regex_calls += int(trace.regex_called)
+        self.context_calls += int(trace.context_called)
+        self.llm_calls += int(trace.llm_called)
+        self.llm_latency_ms_total += trace.llm_latency_ms
 
 
 @dataclass(frozen=True)
@@ -163,6 +188,7 @@ class _VideoBatchResult:
     review_videos: int
     ignored_videos: int
     updates: tuple[EpisodeUpdate, ...]
+    metrics: _ParseMetrics
 
 
 class EpisodeUpdateDispatcher(Protocol):
@@ -280,6 +306,13 @@ class ShortDramaPipeline:
             review_videos=batch.review_videos,
             ignored_videos=batch.ignored_videos,
             new_episode_updates=batch.updates,
+            regex_calls=batch.metrics.regex_calls,
+            context_calls=batch.metrics.context_calls,
+            llm_calls_count=batch.metrics.llm_calls,
+            ocr_calls=batch.metrics.ocr_calls,
+            ocr_successes=batch.metrics.ocr_successes,
+            llm_latency_ms_total=batch.metrics.llm_latency_ms_total,
+            ocr_latency_ms_total=batch.metrics.ocr_latency_ms_total,
         )
 
     def start_history_backfill(self, account_id: str) -> dict[str, Any]:
@@ -553,6 +586,7 @@ class ShortDramaPipeline:
         review_videos = 0
         ignored_videos = 0
         updates: list[EpisodeUpdate] = []
+        metrics = _ParseMetrics()
         context = self._build_parsing_context(str(account["id"]))
 
         # Oldest first keeps episode creation and optional notifications ordered.
@@ -600,6 +634,7 @@ class ShortDramaPipeline:
                     video=refreshed_video,
                     context=context,
                     create_update_event=False,
+                    metrics=metrics,
                 )
                 if outcome.status == REVIEW:
                     review_videos += 1
@@ -614,6 +649,7 @@ class ShortDramaPipeline:
                 video=video,
                 context=context,
                 create_update_event=create_update_events,
+                metrics=metrics,
             )
             if outcome.status == REVIEW:
                 review_videos += 1
@@ -628,6 +664,7 @@ class ShortDramaPipeline:
             review_videos=review_videos,
             ignored_videos=ignored_videos,
             updates=tuple(updates),
+            metrics=metrics,
         )
 
     def _build_parsing_context(self, account_id: str) -> ParsingContextSnapshot:
@@ -665,6 +702,7 @@ class ShortDramaPipeline:
         video: dict[str, Any],
         context: ParsingContextSnapshot | None = None,
         create_update_event: bool = False,
+        metrics: _ParseMetrics | None = None,
     ) -> _VideoProcessingOutcome:
         text_metadata = build_video_text_metadata(
             video.get("raw_json"),
@@ -681,7 +719,8 @@ class ShortDramaPipeline:
                 display_title=text_metadata.display_title,
                 text_sources=text_metadata.text_sources,
             )
-        parsed = self._parser.parse(
+        parsed, trace = _parse_with_trace(
+            self._parser,
             display_title=text_metadata.display_title or "",
             description=str(video.get("description") or ""),
             hashtags=video.get("hashtags") or (),
@@ -692,22 +731,33 @@ class ShortDramaPipeline:
             account_show_candidates=context.account_show_candidates if context else self._repository.list_account_show_candidates(str(account["id"]), limit=20),
             text_sources=text_metadata.text_sources,
         )
+        if metrics is not None:
+            metrics.add_trace(trace)
         if parsed.status == REVIEW and video.get("cover_url") and (
             self._ocr_backend is not None or video.get("ocr_processed_at")
         ):
             ocr_text = str(video.get("ocr_text") or "").strip()
             if not video.get("ocr_processed_at") and self._ocr_backend is not None:
+                ocr_started = time.perf_counter()
+                if metrics is not None:
+                    metrics.ocr_calls += 1
                 try:
                     ocr_result = run_ocr(self._ocr_backend, str(video["cover_url"]), self._ocr_timeout_seconds)
                     video = self._repository.save_video_ocr(int(video["id"]), text=ocr_result.text, confidence=ocr_result.confidence)
                     ocr_text = ocr_result.text if ocr_result.confidence >= 0.8 else ""
+                    if metrics is not None:
+                        metrics.ocr_successes += 1
                 except Exception:
                     video = self._repository.save_video_ocr(int(video["id"]), text=None, confidence=None)
                     ocr_text = ""
+                finally:
+                    if metrics is not None:
+                        metrics.ocr_latency_ms_total += max(0, int((time.perf_counter() - ocr_started) * 1000))
             elif float(video.get("ocr_confidence") or 0) < 0.8:
                 ocr_text = ""
             if ocr_text:
-                ocr_parsed = self._parser.parse(
+                ocr_parsed, ocr_trace = _parse_with_trace(
+                    self._parser,
                     display_title=ocr_text, description=ocr_text, hashtags=(),
                     account_nickname=str(account["nickname"]),
                     known_shows=context.known_shows if context else self._repository.list_show_candidates(),
@@ -715,6 +765,8 @@ class ShortDramaPipeline:
                     account_show_candidates=context.account_show_candidates if context else self._repository.list_account_show_candidates(str(account["id"]), limit=20),
                     text_sources={"ocr": ocr_text},
                 )
+                if metrics is not None:
+                    metrics.add_trace(ocr_trace)
                 if ocr_parsed.status == MATCHED and ocr_parsed.show_title and ocr_parsed.episode_number is not None:
                     parsed = ocr_parsed
         candidate_title = parsed.show_title_candidate or parsed.show_title
@@ -925,6 +977,28 @@ def _metadata_refresh_can_reparse(video: dict[str, Any]) -> bool:
     if status == MATCHED:
         return False
     return status in {IGNORED, REVIEW} or str(video.get("parser_reason") or "") == "legacy_ignored"
+
+
+def _parse_with_trace(parser: Any, **kwargs: Any) -> tuple[Any, ParseTrace]:
+    parse_with_trace = getattr(parser, "parse_with_trace", None)
+    if callable(parse_with_trace):
+        outcome = parse_with_trace(**kwargs)
+        return outcome.result, outcome.trace
+    result = parser.parse(**kwargs)
+    method = str(getattr(result, "method", "") or "")
+    return result, ParseTrace(
+        regex_called=True,
+        context_called=method.startswith("context:"),
+        llm_called=method == "llm",
+        regex_method=method if method.startswith("regex:") else None,
+        final_method=method,
+        final_confidence=float(getattr(result, "confidence", 0.0) or 0.0),
+        review_reason=(
+            str(getattr(result, "reason", "") or "") or None
+            if getattr(result, "status", None) == REVIEW
+            else None
+        ),
+    )
 
 
 def _metadata_refresh_changes_parser_inputs(

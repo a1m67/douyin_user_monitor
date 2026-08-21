@@ -13,6 +13,27 @@ CONTENT_TYPES = frozenset({"episode", "trailer", "show_content", "unknown", "non
 
 
 @dataclass(frozen=True)
+class ParseTrace:
+    regex_called: bool = False
+    context_called: bool = False
+    llm_called: bool = False
+    ocr_called: bool = False
+    ocr_succeeded: bool = False
+    regex_method: str | None = None
+    final_method: str | None = None
+    llm_latency_ms: int = 0
+    ocr_latency_ms: int = 0
+    final_confidence: float = 0.0
+    review_reason: str | None = None
+
+
+@dataclass(frozen=True)
+class ParsedEpisodeOutcome:
+    result: "EpisodeParseResult"
+    trace: ParseTrace
+
+
+@dataclass(frozen=True)
 class EpisodeParseInput:
     display_title: str
     description: str

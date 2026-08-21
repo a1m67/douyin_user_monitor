@@ -7,6 +7,8 @@ from douyin_user_monitor.parsers.base import (
     REVIEW,
     EpisodeParseResult,
     EpisodeParserBackend,
+    ParsedEpisodeOutcome,
+    ParseTrace,
 )
 from douyin_user_monitor.parsers.context import ContextParser
 from douyin_user_monitor.parsers.episode_parser import EpisodeParser
@@ -19,6 +21,8 @@ __all__ = [
     "EpisodeParseResult",
     "EpisodeParser",
     "EpisodeParserBackend",
+    "ParsedEpisodeOutcome",
+    "ParseTrace",
     "ContextParser",
     "CONTENT_TYPES",
     "RegexParser",

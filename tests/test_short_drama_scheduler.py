@@ -19,6 +19,13 @@ from douyin_user_monitor.services.scheduler import (
 @dataclass(frozen=True)
 class StubSyncResult:
     account: dict
+    regex_calls: int = 0
+    context_calls: int = 0
+    llm_calls: int = 0
+    ocr_calls: int = 0
+    ocr_successes: int = 0
+    llm_latency_ms_total: int = 0
+    ocr_latency_ms_total: int = 0
 
 
 class StubPipeline:
@@ -64,6 +71,20 @@ class ControlledPipeline(StubPipeline):
             return StubSyncResult(account={"id": account_id})
         finally:
             self.active_by_account[account_id] -= 1
+
+
+class MetricsPipeline(StubPipeline):
+    async def sync_account(self, account_id: str):
+        return StubSyncResult(
+            account={"id": account_id},
+            regex_calls=4,
+            context_calls=2,
+            llm_calls=1,
+            ocr_calls=1,
+            ocr_successes=1,
+            llm_latency_ms_total=17,
+            ocr_latency_ms_total=23,
+        )
 
 
 class AccountSchedulerTests(unittest.IsolatedAsyncioTestCase):
@@ -137,6 +158,17 @@ class AccountSchedulerTests(unittest.IsolatedAsyncioTestCase):
         scheduler = AccountScheduler(repository=self.repository, pipeline=StubPipeline(), config=SchedulerConfig(), now=lambda: self.now)
         await scheduler.run_account_once(account["id"])
         self.assertEqual(self.repository.list_scan_runs(account["id"])[0]["trigger_type"], "manual")
+
+    async def test_scan_run_persists_real_parser_metrics(self):
+        account = self.add_account("metrics")
+        scheduler = AccountScheduler(repository=self.repository, pipeline=MetricsPipeline(), config=SchedulerConfig(), now=lambda: self.now)
+        await scheduler.run_account_once(account["id"])
+        scan = self.repository.list_scan_runs(account["id"])[0]
+        self.assertEqual(
+            (scan["regex_calls"], scan["context_calls"], scan["llm_calls"], scan["ocr_calls"]),
+            (4, 2, 1, 1),
+        )
+        self.assertEqual((scan["llm_latency_ms_total"], scan["ocr_latency_ms_total"]), (17, 23))
 
     async def test_manual_account_a_does_not_block_account_b(self):
         first = self.add_account("manual-a")

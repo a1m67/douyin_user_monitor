@@ -559,7 +559,8 @@ class ShortDramaWebTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_diagnostics_are_redacted_and_doctor_is_read_only(self):
         data = self.client.get("/api/short-drama/diagnostics").json()
-        self.assertEqual(data["database"]["schema_version"], 16)
+        self.assertEqual(data["database"]["schema_version"], 17)
+        self.assertIn("llm_calls", data["parser_metrics_24h"])
         self.assertNotIn("token", str(data).lower())
         self.assertTrue(self.client.post("/api/short-drama/diagnostics/doctor").json()["ok"])
 

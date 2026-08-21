@@ -152,6 +152,24 @@ class ShortDramaPipelineTests(unittest.IsolatedAsyncioTestCase):
         pipeline._process_video(account=account, video=video)
         self.assertEqual(backend.calls, 1)
 
+    async def test_sync_result_reports_real_parser_metrics(self):
+        account, _ = await self.pipeline.add_account(self.account_one_provider.homepage_url)
+        result = await self.pipeline.sync_account(account["id"])
+        self.assertGreaterEqual(result.regex_calls, 3)
+        self.assertGreaterEqual(result.context_calls, 0)
+        self.assertEqual(result.llm_calls, 0)
+
+    async def test_ocr_metrics_count_attempt_and_success(self):
+        self.repository.create_show(title="归墟", normalized_title="归墟")
+        self.provider.videos_by_sec_uid["sec-one"] = [make_video("ocr-metric", "第32集", 1)]
+        backend = FakeOCRBackend(OCRResult("《归墟》第32集", 0.95))
+        pipeline = ShortDramaPipeline(repository=self.repository, provider=self.provider, ocr_backend=backend)
+        account, _ = await pipeline.add_account(self.account_one_provider.homepage_url)
+        result = await pipeline.sync_account(account["id"])
+        self.assertEqual(result.ocr_calls, 1)
+        self.assertEqual(result.ocr_successes, 1)
+        self.assertEqual(backend.calls, 1)
+
     async def test_plain_video_is_saved_once_and_ignored_on_initial_sync(self):
         account, _ = await self.pipeline.add_account(self.account_one_provider.homepage_url)
         self.provider.videos_by_sec_uid["sec-one"] = [

@@ -1,9 +1,16 @@
 """Service facade for the first-stage regex parser."""
 from __future__ import annotations
 
+import time
 from typing import Any, Iterable, Mapping, Protocol
 
-from douyin_user_monitor.parsers.base import EpisodeParseInput, EpisodeParseResult, EpisodeParserBackend
+from douyin_user_monitor.parsers.base import (
+    EpisodeParseInput,
+    EpisodeParseResult,
+    EpisodeParserBackend,
+    ParsedEpisodeOutcome,
+    ParseTrace,
+)
 from douyin_user_monitor.parsers.context import ContextParser
 from douyin_user_monitor.parsers.regex import RegexParser
 
@@ -51,6 +58,31 @@ class EpisodeParser:
         account_show_candidates: Iterable[dict[str, Any]] = (),
         text_sources: Mapping[str, Any] | None = None,
     ) -> EpisodeParseResult:
+        return self.parse_with_trace(
+            display_title=display_title,
+            description=description,
+            hashtags=hashtags,
+            account_nickname=account_nickname,
+            known_shows=known_shows,
+            recent_account_videos=recent_account_videos,
+            recent_account_matches=recent_account_matches,
+            account_show_candidates=account_show_candidates,
+            text_sources=text_sources,
+        ).result
+
+    def parse_with_trace(
+        self,
+        *,
+        display_title: str = "",
+        description: str,
+        hashtags: Iterable[str] = (),
+        account_nickname: str = "",
+        known_shows: Iterable[dict[str, Any]] = (),
+        recent_account_videos: Iterable[dict[str, Any]] = (),
+        recent_account_matches: Iterable[dict[str, Any]] = (),
+        account_show_candidates: Iterable[dict[str, Any]] = (),
+        text_sources: Mapping[str, Any] | None = None,
+    ) -> ParsedEpisodeOutcome:
         request = EpisodeParseInput(
             display_title=str(display_title or ""),
             description=str(description or ""),
@@ -71,17 +103,30 @@ class EpisodeParser:
             regex_result.status == "matched"
             and regex_result.confidence >= self._auto_accept_confidence
         ):
-            return regex_result
+            return _outcome(regex_result, regex_result=regex_result)
 
         result = regex_result
+        context_called = False
         if result.status != "matched":
+            context_called = True
             result = self._context_backend.parse(request, result)
         if result.status == "matched" and result.confidence >= self._auto_accept_confidence:
-            return result
+            return _outcome(result, regex_result=regex_result, context_called=context_called)
 
+        llm_called = False
+        llm_latency_ms = 0
         if self._llm_backend is not None and _should_call_llm(result):
-            return self._llm_backend.parse(request, regex_result)
-        return result
+            llm_called = True
+            started = time.perf_counter()
+            result = self._llm_backend.parse(request, regex_result)
+            llm_latency_ms = max(0, int((time.perf_counter() - started) * 1000))
+        return _outcome(
+            result,
+            regex_result=regex_result,
+            context_called=context_called,
+            llm_called=llm_called,
+            llm_latency_ms=llm_latency_ms,
+        )
 
 
 def _should_call_llm(result: EpisodeParseResult) -> bool:
@@ -91,3 +136,26 @@ def _should_call_llm(result: EpisodeParseResult) -> bool:
     if result.status == "review":
         return True
     return result.confidence < 1.0
+
+
+def _outcome(
+    result: EpisodeParseResult,
+    *,
+    regex_result: EpisodeParseResult,
+    context_called: bool = False,
+    llm_called: bool = False,
+    llm_latency_ms: int = 0,
+) -> ParsedEpisodeOutcome:
+    return ParsedEpisodeOutcome(
+        result=result,
+        trace=ParseTrace(
+            regex_called=True,
+            context_called=context_called,
+            llm_called=llm_called,
+            regex_method=regex_result.method,
+            final_method=result.method,
+            llm_latency_ms=llm_latency_ms,
+            final_confidence=result.confidence,
+            review_reason=result.reason if result.status == "review" else None,
+        ),
+    )

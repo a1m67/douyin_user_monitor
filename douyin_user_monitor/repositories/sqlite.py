@@ -16,7 +16,7 @@ from douyin_user_monitor.parsers.regex import normalize_title
 from douyin_user_monitor.maintenance import backup_database
 
 
-SCHEMA_VERSION = 16
+SCHEMA_VERSION = 17
 SQLITE_BUSY_TIMEOUT_MS = 30_000
 SHOW_STATUSES = frozenset({"updating", "completed", "paused"})
 VIDEO_CLASSIFICATIONS = frozenset({"matched", "ignored", "review"})
@@ -348,6 +348,9 @@ class ShortDramaRepository:
                 duplicate_videos INTEGER NOT NULL DEFAULT 0, matched_videos INTEGER NOT NULL DEFAULT 0,
                 review_videos INTEGER NOT NULL DEFAULT 0, ignored_videos INTEGER NOT NULL DEFAULT 0,
                 new_episodes INTEGER NOT NULL DEFAULT 0, llm_calls INTEGER NOT NULL DEFAULT 0,
+                regex_calls INTEGER NOT NULL DEFAULT 0, context_calls INTEGER NOT NULL DEFAULT 0,
+                ocr_calls INTEGER NOT NULL DEFAULT 0, ocr_successes INTEGER NOT NULL DEFAULT 0,
+                llm_latency_ms_total INTEGER NOT NULL DEFAULT 0, ocr_latency_ms_total INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL
             );
 
@@ -517,6 +520,17 @@ class ShortDramaRepository:
             )
         if previous_version < 16:
             self._migrate_show_aliases(connection)
+        if previous_version < 17:
+            for column, definition in {
+                "regex_calls": "INTEGER NOT NULL DEFAULT 0",
+                "context_calls": "INTEGER NOT NULL DEFAULT 0",
+                "ocr_calls": "INTEGER NOT NULL DEFAULT 0",
+                "ocr_successes": "INTEGER NOT NULL DEFAULT 0",
+                "llm_latency_ms_total": "INTEGER NOT NULL DEFAULT 0",
+                "ocr_latency_ms_total": "INTEGER NOT NULL DEFAULT 0",
+            }.items():
+                if not _table_has_column(connection, "scan_runs", column):
+                    connection.execute(f"ALTER TABLE scan_runs ADD COLUMN {column} {definition}")
         if previous_version >= SCHEMA_VERSION:
             return
         if previous_version < 3:
@@ -995,7 +1009,7 @@ class ShortDramaRepository:
 
     def record_scan_run(self, account_id: str, **values: Any) -> dict[str, Any]:
         now = utc_now()
-        fields = ("started_at", "finished_at", "duration_ms", "trigger_type", "success", "error_type", "error_message", "fetched_videos", "new_videos", "duplicate_videos", "matched_videos", "review_videos", "ignored_videos", "new_episodes", "llm_calls")
+        fields = ("started_at", "finished_at", "duration_ms", "trigger_type", "success", "error_type", "error_message", "fetched_videos", "new_videos", "duplicate_videos", "matched_videos", "review_videos", "ignored_videos", "new_episodes", "llm_calls", "regex_calls", "context_calls", "ocr_calls", "ocr_successes", "llm_latency_ms_total", "ocr_latency_ms_total")
         data: dict[str, Any] = {key: 0 for key in fields}
         data.update(started_at=now, finished_at=now, trigger_type="scheduler", success=0)
         data.update(values)
@@ -3046,7 +3060,15 @@ class ShortDramaRepository:
             scan = connection.execute("""SELECT COUNT(*) runs, COALESCE(SUM(success),0) successes,
                 COALESCE(SUM(CASE WHEN success=0 THEN 1 ELSE 0 END),0) failures,
                 COALESCE(SUM(new_videos),0) new_videos, COALESCE(SUM(new_episodes),0) new_episodes,
-                COALESCE(SUM(review_videos),0) review_videos FROM scan_runs WHERE started_at >= ?""", (since,)).fetchone()
+                COALESCE(SUM(review_videos),0) review_videos,
+                COALESCE(SUM(regex_calls),0) regex_calls,
+                COALESCE(SUM(context_calls),0) context_calls,
+                COALESCE(SUM(llm_calls),0) llm_calls,
+                COALESCE(SUM(ocr_calls),0) ocr_calls,
+                COALESCE(SUM(ocr_successes),0) ocr_successes,
+                COALESCE(SUM(llm_latency_ms_total),0) llm_latency_ms_total,
+                COALESCE(SUM(ocr_latency_ms_total),0) ocr_latency_ms_total
+                FROM scan_runs WHERE started_at >= ?""", (since,)).fetchone()
             return {
                 **counts,
                 "last_check_at": last_checked,

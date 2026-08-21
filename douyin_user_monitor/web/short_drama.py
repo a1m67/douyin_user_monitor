@@ -435,7 +435,8 @@ def create_short_drama_router(
                 "scheduler": scheduler.health_status() if scheduler else "not_started",
                 "crawler": scheduler.crawler_status() if scheduler and hasattr(scheduler,"crawler_status") else {},
                 "cookie": cookie_manager.status() if cookie_manager else {"status":"not_configured"},
-                "features": {"llm": "configured_or_disabled", "ocr": "configured_or_disabled"}}
+                "features": {"llm": "configured_or_disabled", "ocr": "configured_or_disabled"},
+                "parser_metrics_24h": repository.system_status()["scan_runs_24h"]}
 
     @api.get("/quality")
     async def data_quality(stale_days: int = Query(default=30, ge=1, le=3650)) -> dict[str, Any]:

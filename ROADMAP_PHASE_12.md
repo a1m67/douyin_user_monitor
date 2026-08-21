@@ -12,7 +12,7 @@ tested, and committed independently without pushing during the phase.
 - [x] Phase 4: Normalized Show aliases
 - [x] Phase 5: Batch parser context snapshots
 - [x] Phase 6: SQLite and scheduler concurrency
-- [ ] Phase 7: Parser execution metrics
+- [x] Phase 7: Parser execution metrics
 - [ ] Phase 8: Episode watch progress
 - [ ] Phase 9: Modular short-drama web application
 
@@ -69,17 +69,17 @@ tested, and committed independently without pushing during the phase.
 - Main design: lazy write-lock acquisition for Repository connections lets pure reads proceed without the process write lock while preserving short write transactions and SQLite WAL safeguards. Scheduler uses per-account asyncio locks with bounded cleanup; the due loop retains its global concurrency cap.
 - Schema changes: none.
 - Tests: read/write lock behavior, same-account manual serialization, cross-account manual/scheduler independence, scheduler backoff/circuit regression, SQLite performance regression, and full suite.
-- Commit: `refactor: improve sqlite and scheduler concurrency` (SHA recorded after commit)
+- Commit: `04162cb` (`refactor: improve sqlite and scheduler concurrency`)
 - Production verification still needed: observe WAL write contention and scheduler overlap on a copied VPS workload, especially while history and latest scans target the same account.
 
 ### Phase 7
 
-- Status: pending
-- Main design: pending
-- Schema changes: pending
-- Tests: pending
-- Commit: pending
-- Production verification still needed: pending
+- Status: complete
+- Main design: `parse_with_trace()` preserves the existing parser API while recording actual regex, context, and LLM execution. Pipeline OCR attempts/successes and both external-stage latencies are aggregated into `SyncResult`, persisted by scheduler scans, and exposed in 24-hour diagnostics.
+- Schema changes: v17 adds regex/context/OCR counts, OCR successes, and LLM/OCR latency totals to `scan_runs`; the existing `llm_calls` column now receives real execution counts.
+- Tests: direct regex/LLM trace behavior, LLM-called-then-review semantics, OCR attempt/success aggregation, scan-run persistence, diagnostics exposure, and full suite.
+- Commit: `feat: add parser execution metrics` (SHA recorded after commit)
+- Production verification still needed: confirm provider-specific LLM latency and OCR success rates on the VPS without exposing prompts, credentials, or model responses.
 
 ### Phase 8
 

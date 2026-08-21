@@ -250,6 +250,10 @@ class AccountScheduler:
                 duplicate_videos=getattr(result, "duplicate_videos", 0), matched_videos=getattr(result, "matched_videos", 0),
                 review_videos=getattr(result, "review_videos", 0), ignored_videos=getattr(result, "ignored_videos", 0),
                 new_episodes=len(getattr(result, "new_episode_updates", ())), llm_calls=getattr(result, "llm_calls", 0),
+                regex_calls=getattr(result, "regex_calls", 0), context_calls=getattr(result, "context_calls", 0),
+                ocr_calls=getattr(result, "ocr_calls", 0), ocr_successes=getattr(result, "ocr_successes", 0),
+                llm_latency_ms_total=getattr(result, "llm_latency_ms_total", 0),
+                ocr_latency_ms_total=getattr(result, "ocr_latency_ms_total", 0),
             )
         except Exception:
             logger.exception("scan run persistence failed account_id=%s", account_id)
