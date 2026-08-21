@@ -58,14 +58,15 @@ class BuiltinDouyinProviderTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_resolve_profile_and_latest_videos_without_exposing_crawler_shape(self):
         account = await self.provider.resolve_account("https://www.douyin.com/user/example")
-        self.assertEqual(account.sec_uid, "sec-1")
+        self.assertEqual(account.sec_uid, "example")
+        self.assertEqual(account.homepage_url, "https://www.douyin.com/user/example")
 
         profile = await self.provider.get_user_profile(account)
         self.assertEqual(profile.nickname, "AI 剧场")
         self.assertEqual(profile.avatar_url, "https://cover.example/avatar.jpg")
 
         videos = await self.provider.get_latest_videos(account, limit=10)
-        self.assertEqual(self.crawler.video_args, ("sec-1", 0, 10))
+        self.assertEqual(self.crawler.video_args, ("example", 0, 10))
         self.assertEqual([video.aweme_id for video in videos], ["1002", "1001"])
         self.assertEqual(videos[0].hashtags, ("末日重生",))
         self.assertEqual(videos[0].cover_url, "https://cover.example/12.jpg")

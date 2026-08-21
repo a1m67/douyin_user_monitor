@@ -10,6 +10,7 @@ from douyin_user_monitor.providers.base import (
     ProviderVideo,
     ProviderVideoPage,
 )
+from douyin_user_monitor.providers.account_input import AccountInputResolver
 from douyin_user_monitor.video_text import build_video_text_metadata
 
 
@@ -30,6 +31,9 @@ class BuiltinCrawlerProtocol(Protocol):
     ) -> dict[str, Any]:
         ...
 
+    async def fetch_one_video(self, aweme_id: str) -> dict[str, Any]:
+        ...
+
     async def aclose(self) -> None:
         ...
 
@@ -37,17 +41,22 @@ class BuiltinCrawlerProtocol(Protocol):
 class BuiltinDouyinProvider:
     """Expose the existing process-local crawler through the stable provider API."""
 
-    def __init__(self, crawler: BuiltinCrawlerProtocol):
+    def __init__(
+        self,
+        crawler: BuiltinCrawlerProtocol,
+        *,
+        account_input_resolver: AccountInputResolver | None = None,
+    ):
         self._crawler = crawler
+        self._account_input_resolver = account_input_resolver or AccountInputResolver(crawler)
 
     async def resolve_account(self, homepage_url: str) -> ProviderAccount:
-        raw_url = homepage_url.strip()
-        if not raw_url:
-            raise ValueError("抖音用户主页链接不能为空")
-        sec_uid = await self._crawler.get_sec_user_id(raw_url)
-        if not sec_uid.strip():
-            raise ValueError("无法从主页链接解析 sec_uid")
-        return ProviderAccount(id="", sec_uid=sec_uid.strip(), homepage_url=raw_url)
+        resolved = await self._account_input_resolver.resolve(homepage_url)
+        return ProviderAccount(
+            id="",
+            sec_uid=resolved.sec_uid,
+            homepage_url=resolved.canonical_homepage_url,
+        )
 
     async def get_user_profile(self, account: ProviderAccount) -> ProviderProfile:
         raw_profile = await self._crawler.handler_user_profile(account.sec_uid)
