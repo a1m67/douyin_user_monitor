@@ -198,6 +198,8 @@ Episode 1 --- * Notification
 
 ```bash
 python -m douyin_user_monitor backup
+python -m douyin_user_monitor backup-verify
+python -m douyin_user_monitor backup-verify --file data/backups/app-YYYYMMDD-HHMMSS.db
 python -m douyin_user_monitor doctor
 python -m douyin_user_monitor doctor --repair
 python -m douyin_user_monitor db-stats
@@ -205,6 +207,17 @@ python -m douyin_user_monitor db-stats --checkpoint
 ```
 
 `db-stats` 只输出数据库/WAL 大小、页统计、业务表行数和索引定义，不读取用户数据内容。`--checkpoint` 执行显式 TRUNCATE checkpoint；后台维护只使用低频 PASSIVE checkpoint。系统不会自动频繁 `VACUUM`，也不会自动删除更新动态。
+
+每份新备份旁边会生成同名 `.json` manifest，记录文件名、UTC 创建时间、大小、SHA256 和 schema 版本；旧备份即使没有 manifest，`backup-verify` 仍会检查 SQLite 完整性、外键和 schema。恢复只用于事故处理，正常升级不要执行 restore。恢复前必须停止应用，并先 dry-run：
+
+```bash
+docker compose stop
+python -m douyin_user_monitor restore --from data/backups/app-YYYYMMDD-HHMMSS.db --dry-run
+python -m douyin_user_monitor restore --from data/backups/app-YYYYMMDD-HHMMSS.db --yes
+docker compose up -d
+```
+
+真实恢复必须显式提供 `--yes`。命令会拒绝高于当前程序版本的 schema 和无法取得独占写锁的数据库，先备份当前库，再使用 fsync 临时文件原子替换；恢复后校验失败会自动回滚到恢复前备份。
 
 默认启用轻量维护 worker：每 24 小时按 SQLite online backup API 创建一次备份、保留最近 14 份，按既有保留期清理巡检运行记录，并以 PASSIVE 模式低频回收 WAL frame。它不会自动 `VACUUM`，也不会删除 Episode、UpdateEvent 或用户数据。
 

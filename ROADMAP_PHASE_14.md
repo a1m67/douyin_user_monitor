@@ -46,7 +46,13 @@ Transactional reliability, lightweight operations, parser governance, bounded AI
 
 ### Phase 4
 
-- Status: pending
+- Status: complete
+- Main design: pair new backups with SHA256 manifests, verify old or new backups offline, and require a validated source, stopped application, pre-restore backup, fsynced temporary copy, atomic replacement, and post-restore verification for disaster recovery.
+- Schema changes: none.
+- New settings: none; restore reuses the configured database path and backup retention count.
+- Tests: manifest/hash verification, legacy manifestless backups, corruption, older/future schema, dry-run, confirmation, active writer refusal, successful restore, rollback after validation failure, CLI coverage, and maintenance worker regression.
+- Commit: `feat: add verified database restore`.
+- Production verification still needed: perform a restore drill on a disposable VPS copy with Docker stopped and verify restart/migration behavior; do not use restore during a normal upgrade.
 
 ### Phase 5
 

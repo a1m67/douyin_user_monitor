@@ -1,6 +1,11 @@
 from __future__ import annotations
 
+import hashlib
+import json
+import os
+import shutil
 import sqlite3
+import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -9,6 +14,7 @@ from typing import Any
 
 BACKUP_PREFIX = "app-"
 MAINTENANCE_BUSY_TIMEOUT_MS = 30_000
+RESTORE_LOCK_TIMEOUT_SECONDS = 0.25
 
 
 def _quote_identifier(value: str) -> str:
@@ -28,10 +34,196 @@ def backup_database(database_path: Path, *, backup_dir: Path | None = None, rete
     finally:
         destination.close()
         source.close()
+    verification = verify_backup(target, verify_hash=False)
+    manifest = {
+        "filename": target.name,
+        "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "size_bytes": target.stat().st_size,
+        "sha256": _sha256_file(target),
+        "schema_version": verification["schema_version"],
+    }
+    _write_json_atomic(target.with_suffix(".json"), manifest)
     backups = sorted(target_dir.glob(f"{BACKUP_PREFIX}[0-9]*.db"), key=lambda item: item.stat().st_mtime, reverse=True)
     for expired in backups[max(1, retention_count):]:
         expired.unlink()
+        expired.with_suffix(".json").unlink(missing_ok=True)
     return target
+
+
+def latest_backup(database_path: Path) -> Path:
+    backup_dir = Path(database_path).resolve().parent / "backups"
+    backups = sorted(
+        backup_dir.glob(f"{BACKUP_PREFIX}[0-9]*.db"),
+        key=lambda item: item.stat().st_mtime,
+        reverse=True,
+    )
+    if not backups:
+        raise FileNotFoundError("没有可用备份")
+    return backups[0]
+
+
+def verify_backup(backup_path: Path, *, verify_hash: bool = True) -> dict[str, Any]:
+    path = Path(backup_path).expanduser().resolve()
+    manifest_path = path.with_suffix(".json")
+    checks: dict[str, Any] = {
+        "exists": path.is_file(),
+        "manifest": manifest_path.is_file(),
+        "hash": "not_available",
+        "integrity": None,
+        "foreign_key_errors": [],
+    }
+    schema_version = 0
+    error: str | None = None
+    if not path.is_file():
+        return {"ok": False, "file": path.name, "schema_version": 0, "checks": checks, "error": "备份文件不存在"}
+    try:
+        if verify_hash and manifest_path.is_file():
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            expected = str(manifest.get("sha256") or "").lower()
+            actual = _sha256_file(path)
+            checks["hash"] = "ok" if expected and expected == actual else "mismatch"
+        connection = sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True)
+        connection.row_factory = sqlite3.Row
+        try:
+            checks["integrity"] = str(connection.execute("PRAGMA integrity_check").fetchone()[0])
+            checks["foreign_key_errors"] = [dict(row) for row in connection.execute("PRAGMA foreign_key_check")]
+            row = connection.execute(
+                "SELECT value FROM app_meta WHERE key='schema_version'"
+            ).fetchone()
+            schema_version = int(row[0]) if row else 0
+        finally:
+            connection.close()
+    except (OSError, ValueError, json.JSONDecodeError, sqlite3.Error) as exc:
+        error = str(exc)
+    hash_ok = checks["hash"] in {"ok", "not_available"} or not verify_hash
+    ok = error is None and hash_ok and checks["integrity"] == "ok" and not checks["foreign_key_errors"]
+    return {
+        "ok": ok,
+        "file": path.name,
+        "size_bytes": path.stat().st_size,
+        "sha256": _sha256_file(path),
+        "schema_version": schema_version,
+        "checks": checks,
+        "error": error,
+    }
+
+
+def restore_database(
+    database_path: Path,
+    *,
+    source_path: Path,
+    dry_run: bool = False,
+    confirmed: bool = False,
+    retention_count: int = 14,
+) -> dict[str, Any]:
+    target = Path(database_path).expanduser().resolve()
+    source = Path(source_path).expanduser().resolve()
+    verification = verify_backup(source)
+    if not verification["ok"]:
+        raise ValueError(f"备份验证失败: {verification['error'] or verification['checks']}")
+    from douyin_user_monitor.repositories.sqlite import SCHEMA_VERSION
+
+    if int(verification["schema_version"]) > SCHEMA_VERSION:
+        raise ValueError(
+            f"备份 schema v{verification['schema_version']} 高于当前程序 v{SCHEMA_VERSION}"
+        )
+    result = {
+        "ok": True,
+        "dry_run": bool(dry_run),
+        "source": source.name,
+        "target": target.name,
+        "schema_version": int(verification["schema_version"]),
+        "current_schema_version": SCHEMA_VERSION,
+        "verification": verification,
+        "pre_restore_backup": None,
+        "rolled_back": False,
+    }
+    if dry_run:
+        return result
+    if not confirmed:
+        raise ValueError("真实恢复必须显式传入 --yes")
+    if not target.is_file():
+        raise FileNotFoundError("目标数据库不存在")
+
+    _assert_database_inactive(target)
+    pre_restore = backup_database(target, retention_count=retention_count)
+    result["pre_restore_backup"] = pre_restore.name
+    temp_path = _copy_to_fsynced_temp(source, target.parent)
+    try:
+        _assert_database_inactive(target)
+        os.replace(temp_path, target)
+        _fsync_directory(target.parent)
+        for suffix in ("-wal", "-shm"):
+            Path(f"{target}{suffix}").unlink(missing_ok=True)
+        restored = verify_backup(target, verify_hash=False)
+        if not restored["ok"]:
+            raise RuntimeError(f"恢复后数据库验证失败: {restored['error'] or restored['checks']}")
+        result["verification"] = restored
+        return result
+    except Exception:
+        rollback_temp = _copy_to_fsynced_temp(pre_restore, target.parent)
+        os.replace(rollback_temp, target)
+        _fsync_directory(target.parent)
+        for suffix in ("-wal", "-shm"):
+            Path(f"{target}{suffix}").unlink(missing_ok=True)
+        result["rolled_back"] = True
+        raise
+    finally:
+        temp_path.unlink(missing_ok=True)
+
+
+def _assert_database_inactive(database_path: Path) -> None:
+    connection = sqlite3.connect(database_path, timeout=RESTORE_LOCK_TIMEOUT_SECONDS)
+    try:
+        connection.execute(f"PRAGMA busy_timeout = {int(RESTORE_LOCK_TIMEOUT_SECONDS * 1000)}")
+        connection.execute("BEGIN EXCLUSIVE")
+        connection.rollback()
+    except sqlite3.OperationalError as exc:
+        raise RuntimeError("数据库正在使用中，请先停止 Docker/Application 后再恢复") from exc
+    finally:
+        connection.close()
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
+    temp = path.with_suffix(path.suffix + ".tmp")
+    with temp.open("w", encoding="utf-8", newline="\n") as handle:
+        json.dump(payload, handle, ensure_ascii=False, indent=2, sort_keys=True)
+        handle.write("\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(temp, path)
+
+
+def _copy_to_fsynced_temp(source: Path, target_dir: Path) -> Path:
+    descriptor, name = tempfile.mkstemp(prefix=".restore-", suffix=".db", dir=target_dir)
+    temp_path = Path(name)
+    try:
+        with os.fdopen(descriptor, "wb") as destination, source.open("rb") as source_file:
+            shutil.copyfileobj(source_file, destination, length=1024 * 1024)
+            destination.flush()
+            os.fsync(destination.fileno())
+        return temp_path
+    except Exception:
+        temp_path.unlink(missing_ok=True)
+        raise
+
+
+def _fsync_directory(path: Path) -> None:
+    if os.name == "nt":
+        return
+    descriptor = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
 
 
 def passive_wal_checkpoint(database_path: Path) -> dict[str, int]:
