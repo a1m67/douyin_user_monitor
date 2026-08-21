@@ -11,6 +11,7 @@ from douyin_user_monitor.maintenance import (
     restore_database,
     verify_backup,
 )
+from douyin_user_monitor.parser_eval import evaluate_parser_golden, format_parser_eval
 from douyin_user_monitor.short_drama_settings import load_short_drama_settings
 
 
@@ -32,7 +33,18 @@ def main() -> int:
         action="store_true",
         help="run an explicit WAL truncate checkpoint before collecting statistics",
     )
+    parser_eval = sub.add_parser("parser-eval")
+    parser_eval.add_argument("--json", action="store_true", dest="json_output")
+    parser_eval.add_argument("--file", type=str)
     args = parser.parse_args()
+    if args.command == "parser-eval":
+        report = evaluate_parser_golden(args.file) if args.file else evaluate_parser_golden()
+        print(
+            json.dumps(report, ensure_ascii=False, indent=2)
+            if args.json_output
+            else format_parser_eval(report)
+        )
+        return 0 if report["ok"] else 1
     settings = load_short_drama_settings()
     if args.command == "backup":
         path = backup_database(settings.database_path, retention_count=settings.backup_retention_count)

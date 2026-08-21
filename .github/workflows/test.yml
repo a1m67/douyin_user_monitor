@@ -10,6 +10,7 @@ jobs:
           python-version: "3.12"
       - run: pip install -r requirements.txt
       - run: python -m unittest discover -s tests -v
+      - run: python -m douyin_user_monitor parser-eval
       - run: python -c "from fastapi.testclient import TestClient; from douyin_user_monitor.main import app; assert TestClient(app).get('/health').status_code == 200"
   docker:
     runs-on: ubuntu-latest

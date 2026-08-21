@@ -35,3 +35,4 @@ Managed by Trellis. Edits outside this block are preserved; edits inside may be 
 - `Episode(show_id, season_number, episode_number)` is unique. A matching post from another account creates an `EpisodeSource`, not another Episode or update notification.
 - Parser has three outcomes: `matched`, `ignored`, and `review`. Only real short-drama or episode signals that cannot be resolved go to review; ordinary videos are ignored. Do not auto-create an Episode below `AUTO_ACCEPT_CONFIDENCE` or when title / episode number is incomplete.
 - Never commit or log cookies, access tokens, bot tokens, or webhook URLs. Runtime files belong under ignored `data/` or `.env`.
+- Any change to `RegexParser`, `EpisodeParser`, `ContextParser`, or title/number normalization must add or update an exact case in `tests/fixtures/parser_golden.json` and pass `python -m douyin_user_monitor parser-eval` offline.

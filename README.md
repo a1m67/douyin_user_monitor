@@ -194,6 +194,8 @@ Episode 1 --- * Notification
 
 每条已处理作品会记录人工维护的 `PARSER_VERSION`、稳定输入 SHA256 和处理时 build SHA。`/videos` 可使用 `parser_outdated=true` 筛选旧版本结果；账号页的“旧 Parser”批量重新解析仅处理 ignored/review，历史 matched 记录不会被自动改写。
 
+Parser 规则回归使用提交到仓库的离线 golden corpus。运行 `python -m douyin_user_monitor parser-eval` 查看精确匹配结果，或添加 `--json` 输出 CI 可读报告；该命令不构造 LLM/OCR backend，也不会访问网络。
+
 ## 测试
 
 生产维护命令使用 SQLite 在线备份 API，`doctor` 默认只读；schema 升级前也会自动在数据库同级 `backups/` 创建快照：

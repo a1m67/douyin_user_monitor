@@ -65,7 +65,12 @@ Transactional reliability, lightweight operations, parser governance, bounded AI
 
 ### Phase 6
 
-- Status: pending
+- Status: completed
+- Main design: committed exact-match parser corpus evaluated through a network-free `EpisodeParser` with human and JSON CLI reports.
+- Schema changes: none.
+- New settings: none.
+- Tests: 24 committed golden cases at 100% exact match, failure-report CLI coverage, focused parser suites, and the complete 270-test suite.
+- Production verification still needed: run `parser-eval` from the deployed image and require future parser changes to update the corpus intentionally.
 
 ### Phase 7
 
