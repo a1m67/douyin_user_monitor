@@ -110,6 +110,7 @@ class ShortDramaWebTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload["shows"][0]["title"], "末日重生")
         detail = self.client.get(f"/api/short-drama/shows/{payload['shows'][0]['id']}").json()
         self.assertEqual(detail["show"]["episodes"][0]["episode_number"], 12)
+        self.assertEqual(detail["show"]["seasons"][0]["season_number"], 1)
         self.assertIn(1, detail["show"]["missing_episode_numbers"])
         videos = self.client.get("/api/short-drama/videos").json()["videos"]
         self.assertIn("content_type", videos[0])
@@ -143,6 +144,13 @@ class ShortDramaWebTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(updated.status_code, 200)
         self.assertEqual(updated.json()["show"]["expected_episode_count"], 30)
+        season_updated = self.client.patch(
+            f"/api/short-drama/shows/{show_id}/seasons/1",
+            json={"expected_episode_count": 24, "status": "completed"},
+        )
+        self.assertEqual(season_updated.status_code, 200)
+        self.assertEqual(season_updated.json()["season"]["expected_episode_count"], 24)
+        self.assertEqual(season_updated.json()["show"]["seasons"][0]["status"], "completed")
         searched = self.client.get("/api/short-drama/shows", params={"q": "末日归来"})
         self.assertEqual([item["id"] for item in searched.json()["shows"]], [show_id])
 
@@ -551,7 +559,7 @@ class ShortDramaWebTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_diagnostics_are_redacted_and_doctor_is_read_only(self):
         data = self.client.get("/api/short-drama/diagnostics").json()
-        self.assertEqual(data["database"]["schema_version"], 14)
+        self.assertEqual(data["database"]["schema_version"], 15)
         self.assertNotIn("token", str(data).lower())
         self.assertTrue(self.client.post("/api/short-drama/diagnostics/doctor").json()["ok"])
 

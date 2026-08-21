@@ -127,7 +127,11 @@ def doctor_database(database_path: Path, *, repair: bool = False) -> DoctorRepor
         stale_shows = int(connection.execute("""SELECT COUNT(*) FROM shows s WHERE
             COALESCE(s.latest_season,-1) != COALESCE((SELECT season_number FROM episodes e WHERE e.show_id=s.id ORDER BY season_number DESC,episode_number DESC LIMIT 1),-1)
             OR COALESCE(s.latest_episode,-1) != COALESCE((SELECT episode_number FROM episodes e WHERE e.show_id=s.id ORDER BY season_number DESC,episode_number DESC LIMIT 1),-1)""").fetchone()[0])
+        missing_show_seasons = int(connection.execute("""SELECT COUNT(*) FROM (
+            SELECT DISTINCT e.show_id,e.season_number FROM episodes e
+            LEFT JOIN show_seasons ss ON ss.show_id=e.show_id AND ss.season_number=e.season_number
+            WHERE ss.id IS NULL)""").fetchone()[0])
     finally:
         connection.close()
-    checks = {"integrity": integrity, "foreign_key_errors": foreign_keys, "first_source_mismatch": first_source_mismatch, "duplicate_logical_episodes": duplicate_episodes, "stale_show_summary": stale_shows}
-    return DoctorReport(ok=integrity == "ok" and not foreign_keys and first_source_mismatch == 0 and duplicate_episodes == 0 and stale_shows == 0, checks=checks, repaired=repair)
+    checks = {"integrity": integrity, "foreign_key_errors": foreign_keys, "first_source_mismatch": first_source_mismatch, "duplicate_logical_episodes": duplicate_episodes, "stale_show_summary": stale_shows, "missing_show_seasons": missing_show_seasons}
+    return DoctorReport(ok=integrity == "ok" and not foreign_keys and first_source_mismatch == 0 and duplicate_episodes == 0 and stale_shows == 0 and missing_show_seasons == 0, checks=checks, repaired=repair)

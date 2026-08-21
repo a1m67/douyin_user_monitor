@@ -15,7 +15,7 @@ from douyin_user_monitor.parsers.regex import normalize_title
 from douyin_user_monitor.maintenance import backup_database
 
 
-SCHEMA_VERSION = 14
+SCHEMA_VERSION = 15
 SQLITE_BUSY_TIMEOUT_MS = 30_000
 SHOW_STATUSES = frozenset({"updating", "completed", "paused"})
 VIDEO_CLASSIFICATIONS = frozenset({"matched", "ignored", "review"})
@@ -238,6 +238,22 @@ class ShortDramaRepository:
                 sent_at TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS show_seasons (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                show_id INTEGER NOT NULL REFERENCES shows(id) ON DELETE CASCADE,
+                season_number INTEGER NOT NULL,
+                expected_episode_count INTEGER,
+                status TEXT NOT NULL DEFAULT 'updating',
+                started_at TEXT,
+                completed_at TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(show_id, season_number),
+                CHECK (season_number >= 1),
+                CHECK (expected_episode_count IS NULL OR expected_episode_count > 0),
+                CHECK (status IN ('updating', 'completed', 'paused'))
+            );
+
             CREATE TABLE IF NOT EXISTS scan_runs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
@@ -292,6 +308,8 @@ class ShortDramaRepository:
                 ON videos(classification_status, COALESCE(publish_time, created_at) DESC, id DESC);
             CREATE INDEX IF NOT EXISTS idx_episodes_show_number
                 ON episodes(show_id, episode_number DESC);
+            CREATE INDEX IF NOT EXISTS idx_show_seasons_show_number
+                ON show_seasons(show_id, season_number DESC);
             CREATE INDEX IF NOT EXISTS idx_episode_sources_episode_published
                 ON episode_sources(
                     episode_id,
@@ -391,6 +409,28 @@ class ShortDramaRepository:
             "CREATE INDEX IF NOT EXISTS idx_accounts_history_sync "
             "ON accounts(history_sync_status, history_updated_at)"
         )
+        if previous_version < 15:
+            now = utc_now()
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO show_seasons(
+                    show_id, season_number, expected_episode_count, status,
+                    started_at, completed_at, created_at, updated_at
+                )
+                SELECT DISTINCT episodes.show_id, episodes.season_number,
+                    CASE WHEN episodes.season_number = 1
+                         THEN shows.expected_episode_count ELSE NULL END,
+                    CASE WHEN episodes.season_number = 1
+                         THEN shows.status ELSE 'updating' END,
+                    NULL,
+                    CASE WHEN episodes.season_number = 1 AND shows.status = 'completed'
+                         THEN shows.latest_update_at ELSE NULL END,
+                    ?, ?
+                FROM episodes
+                JOIN shows ON shows.id = episodes.show_id
+                """,
+                (now, now),
+            )
         if previous_version >= SCHEMA_VERSION:
             return
         if previous_version < 3:
@@ -1473,6 +1513,99 @@ class ShortDramaRepository:
             ).fetchone()
             return _show_row(row) if row else None
 
+    def get_or_create_show_season(self, show_id: int, season_number: int) -> dict[str, Any]:
+        if int(season_number) < 1:
+            raise ValueError("季数不能小于 1")
+        now = utc_now()
+        with self._transaction() as connection:
+            return self._ensure_show_season(connection, int(show_id), int(season_number), now)
+
+    def get_show_season(self, show_id: int, season_number: int) -> dict[str, Any] | None:
+        with self._transaction() as connection:
+            row = connection.execute(
+                "SELECT * FROM show_seasons WHERE show_id=? AND season_number=?",
+                (int(show_id), int(season_number)),
+            ).fetchone()
+            return _show_season_row(row) if row else None
+
+    def list_show_seasons(self, show_id: int) -> list[dict[str, Any]]:
+        with self._transaction() as connection:
+            rows = connection.execute(
+                """
+                SELECT ss.*, COUNT(e.id) AS collected_episode_count,
+                       MAX(e.episode_number) AS latest_episode
+                FROM show_seasons ss
+                LEFT JOIN episodes e ON e.show_id=ss.show_id AND e.season_number=ss.season_number
+                WHERE ss.show_id=?
+                GROUP BY ss.id
+                ORDER BY ss.season_number DESC
+                """,
+                (int(show_id),),
+            ).fetchall()
+            return [_show_season_row(row) for row in rows]
+
+    def update_show_season(
+        self,
+        show_id: int,
+        season_number: int,
+        *,
+        expected_episode_count: int | None | object = _UNSET,
+        status: str | None = None,
+        started_at: str | None | object = _UNSET,
+        completed_at: str | None | object = _UNSET,
+    ) -> dict[str, Any]:
+        if int(season_number) < 1:
+            raise ValueError("季数不能小于 1")
+        if status is not None and status not in SHOW_STATUSES:
+            raise ValueError("短剧状态无效")
+        if expected_episode_count is not _UNSET and expected_episode_count is not None and int(expected_episode_count) <= 0:
+            raise ValueError("预计总集数必须是正整数")
+        with self._transaction() as connection:
+            self._ensure_show_season(connection, int(show_id), int(season_number), utc_now())
+            changes: dict[str, Any] = {"updated_at": utc_now()}
+            if expected_episode_count is not _UNSET:
+                changes["expected_episode_count"] = None if expected_episode_count is None else int(expected_episode_count)
+            if status is not None:
+                changes["status"] = status
+                if status == "completed":
+                    changes["completed_at"] = utc_now()
+                elif status != "completed":
+                    changes["completed_at"] = None
+            if started_at is not _UNSET:
+                changes["started_at"] = started_at
+            if completed_at is not _UNSET:
+                changes["completed_at"] = completed_at
+            assignments = ", ".join(f"{key}=?" for key in changes)
+            connection.execute(
+                f"UPDATE show_seasons SET {assignments} WHERE show_id=? AND season_number=?",
+                (*changes.values(), int(show_id), int(season_number)),
+            )
+            row = connection.execute(
+                "SELECT * FROM show_seasons WHERE show_id=? AND season_number=?",
+                (int(show_id), int(season_number)),
+            ).fetchone()
+            return _show_season_row(row)
+
+    def _ensure_show_season(
+        self, connection: sqlite3.Connection, show_id: int, season_number: int, now: str | None = None
+    ) -> dict[str, Any]:
+        timestamp = now or utc_now()
+        connection.execute(
+            """
+            INSERT OR IGNORE INTO show_seasons(
+                show_id, season_number, status, created_at, updated_at
+            ) VALUES (?, ?, 'updating', ?, ?)
+            """,
+            (show_id, season_number, timestamp, timestamp),
+        )
+        row = connection.execute(
+            "SELECT * FROM show_seasons WHERE show_id=? AND season_number=?",
+            (show_id, season_number),
+        ).fetchone()
+        if row is None:
+            raise RuntimeError("保存季度记录后无法读取")
+        return _show_season_row(row)
+
     def get_show_by_title_or_alias(self, title: str) -> dict[str, Any] | None:
         normalized = normalize_title(title)
         if not normalized:
@@ -1610,6 +1743,24 @@ class ShortDramaRepository:
             )
             for show in result:
                 show["source_accounts"] = source_accounts.get(int(show["id"]), [])
+                season_row = connection.execute(
+                    """
+                    SELECT ss.expected_episode_count AS season_expected_episode_count,
+                           ss.status AS season_status,
+                           COUNT(CASE WHEN e.episode_number > 0 THEN 1 END) AS season_collected_count,
+                           MAX(e.episode_number) AS season_latest_episode
+                    FROM show_seasons ss
+                    LEFT JOIN episodes e ON e.show_id=ss.show_id AND e.season_number=ss.season_number
+                    WHERE ss.show_id=? AND ss.season_number=?
+                    GROUP BY ss.id
+                    """,
+                    (int(show["id"]), int(show.get("latest_season") or 1)),
+                ).fetchone()
+                if season_row:
+                    show["latest_season_expected_episode_count"] = season_row["season_expected_episode_count"]
+                    show["latest_season_status"] = season_row["season_status"]
+                    show["latest_season_collected_count"] = int(season_row["season_collected_count"] or 0)
+                    show["latest_season_latest_episode"] = season_row["season_latest_episode"]
             return result
 
     def _source_accounts_for_shows(
@@ -1657,6 +1808,9 @@ class ShortDramaRepository:
             for episode in episodes:
                 episode["sources"] = sources.get(int(episode["id"]), [])
             source_accounts = self._source_accounts_for_shows(connection, [show_id])
+            season_rows = connection.execute(
+                "SELECT * FROM show_seasons WHERE show_id=? ORDER BY season_number DESC", (show_id,)
+            ).fetchall()
         show["episodes"] = episodes
         latest_season = int(show.get("latest_season") or 1)
         latest_episode = int(show["latest_episode"] or 0)
@@ -1682,10 +1836,13 @@ class ShortDramaRepository:
         seasons: dict[int, list[dict[str, Any]]] = {}
         for episode in episodes:
             seasons.setdefault(int(episode["season_number"]), []).append(episode)
+        season_map = {int(row["season_number"]): _show_season_row(row) for row in season_rows}
         show["seasons"] = [
             {
-                "season_number": season_number,
+                **season_map.get(season_number, {"season_number": season_number}),
                 "episodes": season_episodes,
+                "collected_episode_count": len([item for item in season_episodes if int(item["episode_number"]) > 0]),
+                "latest_episode": max((int(item["episode_number"]) for item in season_episodes), default=None),
                 "missing_episode_numbers": [
                     number
                     for number in range(
@@ -1702,6 +1859,10 @@ class ShortDramaRepository:
             }
             for season_number, season_episodes in sorted(seasons.items(), reverse=True)
         ]
+        for season_number, metadata in season_map.items():
+            if season_number not in seasons:
+                show["seasons"].append({**metadata, "episodes": [], "collected_episode_count": 0, "latest_episode": None, "missing_episode_numbers": []})
+        show["seasons"].sort(key=lambda item: int(item["season_number"]), reverse=True)
         show["source_accounts"] = source_accounts.get(show_id, [])
         show["source_account_count"] = len(show["source_accounts"])
         return show
@@ -1948,6 +2109,7 @@ class ShortDramaRepository:
                 source_episode_id = int(source_episode["id"])
                 season_number = int(source_episode["season_number"])
                 episode_number = int(source_episode["episode_number"])
+                self._ensure_show_season(connection, target_show_id, season_number, now)
                 episode_key = (season_number, episode_number)
                 target_episode_id = target_episodes.get(episode_key)
                 if target_episode_id is None:
@@ -2053,6 +2215,7 @@ class ShortDramaRepository:
                 raise KeyError("剧集不存在")
             if connection.execute("SELECT id FROM shows WHERE id=?", (target_show_id,)).fetchone() is None:
                 raise KeyError("目标短剧不存在")
+            self._ensure_show_season(connection, target_show_id, season_number)
             old_show_id = int(episode["show_id"])
             old = {"episode_id": episode_id, "show_id": old_show_id,
                    "season_number": int(episode["season_number"]),
@@ -2103,6 +2266,7 @@ class ShortDramaRepository:
                 raise KeyError("剧集来源不存在")
             if connection.execute("SELECT id FROM shows WHERE id=?", (target_show_id,)).fetchone() is None:
                 raise KeyError("目标短剧不存在")
+            self._ensure_show_season(connection, target_show_id, season_number)
             old_episode_id, old_show_id = int(source["episode_id"]), int(source["show_id"])
             target = connection.execute(
                 "SELECT id FROM episodes WHERE show_id=? AND season_number=? AND episode_number=?",
@@ -2249,6 +2413,7 @@ class ShortDramaRepository:
                 raise KeyError("短剧不存在")
             if bool(show["is_ignored"]):
                 raise ValueError("短剧已永久忽略")
+            self._ensure_show_season(connection, show_id, season_number, now)
             existing_episode = connection.execute(
                 "SELECT * FROM episodes WHERE show_id = ? AND season_number = ? AND episode_number = ?",
                 (show_id, season_number, episode_number),
@@ -3094,6 +3259,16 @@ def _show_row(row: sqlite3.Row) -> dict[str, Any]:
     result["aliases"] = _json_list(result.get("aliases"))
     result["is_ignored"] = bool(result.get("is_ignored", 0))
     result["is_following"] = bool(result.get("is_following", 0))
+    if result.get("expected_episode_count") is not None:
+        result["expected_episode_count"] = int(result["expected_episode_count"])
+    return result
+
+
+def _show_season_row(row: sqlite3.Row) -> dict[str, Any]:
+    result = _row_to_dict(row)
+    for key in ("season_number", "collected_episode_count", "latest_episode"):
+        if key in result and result[key] is not None:
+            result[key] = int(result[key])
     if result.get("expected_episode_count") is not None:
         result["expected_episode_count"] = int(result["expected_episode_count"])
     return result

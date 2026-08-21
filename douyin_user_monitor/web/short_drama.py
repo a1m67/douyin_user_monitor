@@ -64,6 +64,13 @@ class UpdateShowPayload(BaseModel):
     expected_episode_count: int | None = Field(default=None, ge=1, le=100000)
 
 
+class UpdateShowSeasonPayload(BaseModel):
+    expected_episode_count: int | None = Field(default=None, ge=1, le=100000)
+    status: str | None = None
+    started_at: str | None = None
+    completed_at: str | None = None
+
+
 class IgnoreShowPayload(BaseModel):
     reason: str | None = Field(default=None, max_length=500)
 
@@ -281,6 +288,24 @@ def create_short_drama_router(
         except (ValueError, KeyError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"show": show}
+
+    @api.get("/shows/{show_id}/seasons")
+    async def list_show_seasons(show_id: int) -> dict[str, Any]:
+        if repository.get_show(show_id) is None:
+            raise HTTPException(status_code=404, detail="短剧不存在")
+        return {"seasons": repository.list_show_seasons(show_id)}
+
+    @api.patch("/shows/{show_id}/seasons/{season_number}")
+    async def update_show_season(
+        show_id: int, season_number: int, payload: UpdateShowSeasonPayload
+    ) -> dict[str, Any]:
+        try:
+            season = repository.update_show_season(
+                show_id, season_number, **payload.model_dump(exclude_unset=True)
+            )
+        except (ValueError, KeyError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"season": season, "show": repository.get_show_detail(show_id)}
 
     @api.get("/updates")
     async def list_updates(

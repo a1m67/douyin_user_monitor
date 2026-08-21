@@ -238,6 +238,65 @@ class ShortDramaRepositoryTests(unittest.TestCase):
         detail = self.repository.get_show_detail(show["id"])
         self.assertEqual(detail["latest_season"], 2)
 
+    def test_show_season_metadata_is_independent_and_created_with_episode(self):
+        account = self.create_account("season-metadata")
+        show = self.repository.create_show(title="多季剧", normalized_title="多季剧")
+        for season in (1, 2, 3):
+            video = self.create_video(account["id"], f"season-metadata-{season}")
+            self.repository.record_episode_source(
+                show_id=show["id"], season_number=season, episode_number=1,
+                video_id=video["id"], account_id=account["id"],
+                published_at=video["publish_time"],
+            )
+        self.repository.update_show_season(
+            show["id"], 1, expected_episode_count=30, status="completed"
+        )
+        self.repository.update_show_season(
+            show["id"], 2, expected_episode_count=24, status="updating"
+        )
+
+        self.assertEqual(self.repository.get_show_season(show["id"], 1)["expected_episode_count"], 30)
+        self.assertEqual(self.repository.get_show_season(show["id"], 2)["expected_episode_count"], 24)
+        self.assertEqual(self.repository.get_show_season(show["id"], 3)["status"], "updating")
+
+    def test_show_season_survives_removing_last_episode(self):
+        account = self.create_account("season-retained")
+        show = self.repository.create_show(title="保留季度", normalized_title="保留季度")
+        video = self.create_video(account["id"], "season-retained-video")
+        write = self.repository.record_episode_source(
+            show_id=show["id"], season_number=3, episode_number=1,
+            video_id=video["id"], account_id=account["id"], published_at=video["publish_time"],
+        )
+        self.repository.update_show_season(show["id"], 3, expected_episode_count=12)
+        self.repository.remove_episode(show["id"], write.episode["id"])
+
+        season = self.repository.get_show_season(show["id"], 3)
+        self.assertEqual(season["expected_episode_count"], 12)
+
+    def test_v14_show_season_migration_only_copies_legacy_metadata_to_season_one(self):
+        account = self.create_account("season-v14")
+        show = self.repository.create_show(title="旧多季剧", normalized_title="旧多季剧")
+        self.repository.update_show(show["id"], expected_episode_count=30, status="completed")
+        for season in (1, 2):
+            video = self.create_video(account["id"], f"season-v14-{season}")
+            self.repository.record_episode_source(
+                show_id=show["id"], season_number=season, episode_number=1,
+                video_id=video["id"], account_id=account["id"], published_at=video["publish_time"],
+            )
+        database_path = self.root / "app.db"
+        connection = sqlite3.connect(database_path)
+        try:
+            connection.executescript("DROP TABLE show_seasons; UPDATE app_meta SET value='14' WHERE key='schema_version';")
+            connection.commit()
+        finally:
+            connection.close()
+
+        migrated = ShortDramaRepository(database_path)
+        self.assertEqual(migrated.get_show_season(show["id"], 1)["expected_episode_count"], 30)
+        self.assertEqual(migrated.get_show_season(show["id"], 1)["status"], "completed")
+        self.assertIsNone(migrated.get_show_season(show["id"], 2)["expected_episode_count"])
+        self.assertEqual(migrated.get_show_season(show["id"], 2)["status"], "updating")
+
     def test_v8_episode_migration_preserves_sources_and_defaults_season_one(self):
         account = self.create_account("migration-season")
         show = self.repository.create_show(title="旧剧", normalized_title="旧剧")
