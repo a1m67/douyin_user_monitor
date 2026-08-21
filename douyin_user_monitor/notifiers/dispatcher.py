@@ -33,6 +33,7 @@ class NotificationDispatcher:
         self._max_backoff_seconds = max(1, max_backoff_seconds)
         self._claim_timeout_seconds = max(1, claim_timeout_seconds)
         self._stop = asyncio.Event()
+        self._wake = asyncio.Event()
         self._worker: asyncio.Task[None] | None = None
 
     @property
@@ -50,14 +51,12 @@ class NotificationDispatcher:
         }
         queued_channels = []
         for channel in self.enabled_channels:
-            _, created = self._repository.enqueue_notification_delivery(
+            self._repository.enqueue_notification_delivery(
                 show_id=notification.show_id, episode_id=notification.episode_id,
                 channel=channel, payload=payload,
             )
             queued_channels.append(channel)
-        # Preserve the historical synchronous behavior for callers/tests while the
-        # durable job remains available for retry after transient failures.
-        await self.deliver_due()
+        self.wake()
         deliveries = {
             item["channel"]: item
             for item in self._repository.list_notification_deliveries(episode_id=notification.episode_id)
@@ -71,6 +70,9 @@ class NotificationDispatcher:
             for channel in queued_channels
         )
 
+    def wake(self) -> None:
+        self._wake.set()
+
     async def start(self) -> None:
         if self._worker is None or self._worker.done():
             self._stop.clear()
@@ -78,18 +80,20 @@ class NotificationDispatcher:
 
     async def stop(self) -> None:
         self._stop.set()
+        self._wake.set()
         if self._worker is not None:
             await self._worker
             self._worker = None
 
     async def _run(self) -> None:
         while not self._stop.is_set():
+            self._wake.clear()
             try:
                 await self.deliver_due()
             except Exception:  # noqa: BLE001
                 logger.exception("notification worker iteration failed")
             try:
-                await asyncio.wait_for(self._stop.wait(), timeout=self._poll_seconds)
+                await asyncio.wait_for(self._wake.wait(), timeout=self._poll_seconds)
             except asyncio.TimeoutError:
                 continue
 

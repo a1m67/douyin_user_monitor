@@ -6,7 +6,7 @@ import logging
 import re
 import time
 from dataclasses import dataclass
-from typing import Any, Protocol, Sequence
+from typing import Any, Mapping, Protocol, Sequence
 
 from douyin_user_monitor.monitor.history_sync import (
     HISTORY_SYNC_STATUS_PENDING,
@@ -192,6 +192,10 @@ class _VideoBatchResult:
 
 
 class EpisodeUpdateDispatcher(Protocol):
+    @property
+    def enabled_channels(self) -> tuple[str, ...]:
+        ...
+
     async def dispatch(self, update: EpisodeUpdate) -> Any:
         ...
 
@@ -283,7 +287,8 @@ class ShortDramaPipeline:
         batch = await self._ingest_videos(
             account=account,
             provider_videos=videos,
-            collect_updates=not initial_sync or self._notify_on_initial_sync,
+            # Phase 14 makes the initial snapshot a strict no-notification path.
+            collect_updates=not initial_sync,
             create_update_events=not initial_sync,
         )
         logger.info(
@@ -463,6 +468,14 @@ class ShortDramaPipeline:
             video_id=int(video["id"]),
             account_id=str(video["account_id"]),
             published_at=video.get("publish_time"),
+            notification_channels=self._notification_channels(),
+            notification_payload=_notification_payload(
+                show=show,
+                video=video,
+                account=account,
+                season_number=season_number,
+                episode_number=episode_number,
+            ),
         )
         processed_video = self._repository.update_video_processing(
             int(video["id"]),
@@ -878,6 +891,16 @@ class ShortDramaPipeline:
                 account_id=str(account["id"]),
                 published_at=video.get("publish_time"),
                 create_update_event=create_update_event,
+                notification_channels=(
+                    self._notification_channels() if create_update_event else ()
+                ),
+                notification_payload=_notification_payload(
+                    show=show,
+                    video=video,
+                    account=account,
+                    season_number=parsed.season_number,
+                    episode_number=parsed.episode_number,
+                ),
             )
         except ValueError as exc:
             # A user may ignore the Show between matching and the write
@@ -976,6 +999,11 @@ class ShortDramaPipeline:
             raise KeyError("账号不存在")
         return account
 
+    def _notification_channels(self) -> tuple[str, ...]:
+        if self._dispatcher is None:
+            return ()
+        return tuple(getattr(self._dispatcher, "enabled_channels", ()) or ())
+
 
 def _metadata_refresh_can_reparse(video: dict[str, Any]) -> bool:
     """Only rehydrate unresolved historical records during normal syncs."""
@@ -1053,3 +1081,22 @@ def _episode_update_if_new(
         return None
     logger.info("[episode] new episode=%s", write.episode["episode_number"])
     return EpisodeUpdate(show=show, episode=write.episode, video=video, account=account)
+
+
+def _notification_payload(
+    *,
+    show: Mapping[str, Any],
+    video: Mapping[str, Any],
+    account: Mapping[str, Any],
+    season_number: int,
+    episode_number: int,
+) -> dict[str, Any]:
+    return {
+        "show_title": str(show["title"]),
+        "season_number": int(season_number),
+        "episode_number": int(episode_number),
+        "account_nickname": str(account["nickname"]),
+        "published_at": video.get("publish_time"),
+        "video_url": str(video.get("video_url") or ""),
+        "cover_url": video.get("cover_url"),
+    }

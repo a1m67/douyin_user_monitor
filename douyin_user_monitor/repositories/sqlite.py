@@ -2977,6 +2977,9 @@ class ShortDramaRepository:
         published_at: str | None,
         season_number: int = 1,
         create_update_event: bool = False,
+        notification_channels: Sequence[str] = (),
+        notification_payload: Mapping[str, Any] | None = None,
+        notification_event_type: str = "new_episode",
     ) -> EpisodeWriteResult:
         if episode_number < 0:
             raise ValueError("集数不能小于 0")
@@ -3043,6 +3046,34 @@ class ShortDramaRepository:
                         now,
                     ),
                 )
+            if is_new_episode and notification_channels:
+                if notification_payload is None:
+                    raise ValueError("创建通知投递时必须提供 payload")
+                payload = dict(notification_payload)
+                payload.update({"show_id": show_id, "episode_id": episode_id})
+                payload_json = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+                event_type = _optional_text(notification_event_type) or "new_episode"
+                for channel in dict.fromkeys(
+                    value for value in (_optional_text(item) for item in notification_channels) if value
+                ):
+                    connection.execute(
+                        """
+                        INSERT OR IGNORE INTO notification_deliveries(
+                            show_id, episode_id, channel, event_type, payload_json,
+                            status, attempt_count, next_attempt_at, created_at, updated_at
+                        ) VALUES (?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?)
+                        """,
+                        (
+                            show_id,
+                            episode_id,
+                            channel,
+                            event_type,
+                            payload_json,
+                            now,
+                            now,
+                            now,
+                        ),
+                    )
             self._repair_episode_first_source(connection, episode_id)
             self._refresh_show_latest(connection, {show_id})
             episode_row = connection.execute("SELECT * FROM episodes WHERE id = ?", (episode_id,)).fetchone()

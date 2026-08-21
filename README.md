@@ -149,7 +149,7 @@ PowerShell 下可将 `.venv/Scripts/python` 替换为 `.venv\Scripts\python.exe`
 | `HISTORY_BACKFILL_DELAY_MIN_SECONDS` | `3` | 历史补全页间随机延迟下限（秒）。 |
 | `HISTORY_BACKFILL_DELAY_MAX_SECONDS` | `6` | 历史补全页间随机延迟上限（秒）。 |
 | `MAX_CONCURRENT_HISTORY_BACKFILLS` | `1` | 同时运行的历史补全账号上限，与日常巡检并发限制分开。 |
-| `NOTIFY_ON_INITIAL_SYNC` | `false` | 是否为历史基线发送通知。 |
+| `NOTIFY_ON_INITIAL_SYNC` | `false` | 兼容保留；初始历史基线始终不发送通知。 |
 | `AUTO_ACCEPT_CONFIDENCE` | `0.8` | 自动归档最低解析置信度。 |
 | `LLM_ENABLED` | `false` | 是否启用 OpenAI-compatible AI fallback。 |
 | `LLM_API_KEY` | 空 | LLM API key；不会写入数据库或日志。 |
