@@ -13,7 +13,7 @@ tested, and committed independently without pushing during the phase.
 - [x] Phase 5: Batch parser context snapshots
 - [x] Phase 6: SQLite and scheduler concurrency
 - [x] Phase 7: Parser execution metrics
-- [ ] Phase 8: Episode watch progress
+- [x] Phase 8: Episode watch progress
 - [ ] Phase 9: Modular short-drama web application
 
 ## Phase Records
@@ -78,17 +78,17 @@ tested, and committed independently without pushing during the phase.
 - Main design: `parse_with_trace()` preserves the existing parser API while recording actual regex, context, and LLM execution. Pipeline OCR attempts/successes and both external-stage latencies are aggregated into `SyncResult`, persisted by scheduler scans, and exposed in 24-hour diagnostics.
 - Schema changes: v17 adds regex/context/OCR counts, OCR successes, and LLM/OCR latency totals to `scan_runs`; the existing `llm_calls` column now receives real execution counts.
 - Tests: direct regex/LLM trace behavior, LLM-called-then-review semantics, OCR attempt/success aggregation, scan-run persistence, diagnostics exposure, and full suite.
-- Commit: `feat: add parser execution metrics` (SHA recorded after commit)
+- Commit: `56cfea7` (`feat: add parser execution metrics`)
 - Production verification still needed: confirm provider-specific LLM latency and OCR success rates on the VPS without exposing prompts, credentials, or model responses.
 
 ### Phase 8
 
-- Status: pending
-- Main design: pending
-- Schema changes: pending
-- Tests: pending
-- Commit: pending
-- Production verification still needed: pending
+- Status: complete
+- Main design: per-show/per-season watch progress with explicit rollback support; following and detail views show watched and recorded-unwatched counts. `read_at` remains independent. Update API adds presentation-only burst groups without changing stored events.
+- Schema changes: v18 adds `watch_progress` with unique `(show_id, season_number)`, non-negative progress, and cascading Show ownership.
+- Tests: progress counting with missing episodes and Episode 0 exclusion, rollback, API read/write independence from update reads, burst grouping, doctor orphan check, and full suite.
+- Commit: `feat: add episode watch progress` (SHA recorded after commit)
+- Production verification still needed: validate progress semantics with real user workflows and confirm grouped update rendering on mobile browsers.
 
 ### Phase 9
 

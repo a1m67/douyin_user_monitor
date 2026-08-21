@@ -210,6 +210,7 @@ class ShortDramaWebTests(unittest.IsolatedAsyncioTestCase):
             "/api/short-drama/updates", params={"following_only": False}
         ).json()
         self.assertEqual(feed["total"], 1)
+        self.assertEqual(feed["groups"][0]["count"], 1)
         event_id = feed["events"][0]["id"]
         self.assertIsNotNone(
             self.client.post(f"/api/short-drama/updates/{event_id}/read")
@@ -217,6 +218,22 @@ class ShortDramaWebTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(
             self.client.post("/api/short-drama/updates/read-all").json()["marked_read"], 0
+        )
+
+    async def test_watch_progress_endpoint_is_independent_from_update_read(self):
+        show = self.repository.list_show_summaries()[0]
+        response = self.client.put(
+            f"/api/short-drama/shows/{show['id']}/seasons/1/watch-progress",
+            json={"watched_episode_number": 10},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["progress"]["watched_episode_number"], 10)
+        self.assertEqual(response.json()["show"]["seasons"][0]["watched_episode_number"], 10)
+        self.assertEqual(
+            self.client.get(
+                f"/api/short-drama/shows/{show['id']}/seasons/1/watch-progress"
+            ).json()["progress"]["watched_episode_number"],
+            10,
         )
 
     async def test_show_merge_and_consistency_repair_endpoints(self):
@@ -559,7 +576,7 @@ class ShortDramaWebTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_diagnostics_are_redacted_and_doctor_is_read_only(self):
         data = self.client.get("/api/short-drama/diagnostics").json()
-        self.assertEqual(data["database"]["schema_version"], 17)
+        self.assertEqual(data["database"]["schema_version"], 18)
         self.assertIn("llm_calls", data["parser_metrics_24h"])
         self.assertNotIn("token", str(data).lower())
         self.assertTrue(self.client.post("/api/short-drama/diagnostics/doctor").json()["ok"])

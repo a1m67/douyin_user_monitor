@@ -273,6 +273,20 @@ class ShortDramaRepositoryTests(unittest.TestCase):
         season = self.repository.get_show_season(show["id"], 3)
         self.assertEqual(season["expected_episode_count"], 12)
 
+    def test_watch_progress_counts_recorded_regular_episodes_and_allows_rollback(self):
+        account = self.create_account("watch-progress")
+        show = self.repository.create_show(title="观看进度", normalized_title="观看进度")
+        for number in (11, 13, 14, 15, 0):
+            video = self.create_video(account["id"], f"watch-{number}")
+            self.repository.record_episode_source(
+                show_id=show["id"], season_number=2, episode_number=number,
+                video_id=video["id"], account_id=account["id"], published_at=video["publish_time"],
+            )
+        self.assertEqual(self.repository.set_watch_progress(show["id"], 2, 10)["unwatched_episode_count"], 4)
+        self.assertEqual(self.repository.set_watch_progress(show["id"], 2, 13)["unwatched_episode_count"], 2)
+        self.assertEqual(self.repository.set_watch_progress(show["id"], 2, 8)["watched_episode_number"], 8)
+        self.assertIsNone(self.repository.get_watch_progress(show["id"], 1))
+
     def test_v14_show_season_migration_only_copies_legacy_metadata_to_season_one(self):
         account = self.create_account("season-v14")
         show = self.repository.create_show(title="旧多季剧", normalized_title="旧多季剧")

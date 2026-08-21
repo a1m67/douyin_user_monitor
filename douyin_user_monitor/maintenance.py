@@ -131,7 +131,9 @@ def doctor_database(database_path: Path, *, repair: bool = False) -> DoctorRepor
             SELECT DISTINCT e.show_id,e.season_number FROM episodes e
             LEFT JOIN show_seasons ss ON ss.show_id=e.show_id AND ss.season_number=e.season_number
             WHERE ss.id IS NULL)""").fetchone()[0])
+        watch_progress_orphans = int(connection.execute("""SELECT COUNT(*) FROM watch_progress wp
+            LEFT JOIN shows s ON s.id=wp.show_id WHERE s.id IS NULL""").fetchone()[0])
     finally:
         connection.close()
-    checks = {"integrity": integrity, "foreign_key_errors": foreign_keys, "first_source_mismatch": first_source_mismatch, "duplicate_logical_episodes": duplicate_episodes, "stale_show_summary": stale_shows, "missing_show_seasons": missing_show_seasons}
-    return DoctorReport(ok=integrity == "ok" and not foreign_keys and first_source_mismatch == 0 and duplicate_episodes == 0 and stale_shows == 0 and missing_show_seasons == 0, checks=checks, repaired=repair)
+    checks = {"integrity": integrity, "foreign_key_errors": foreign_keys, "first_source_mismatch": first_source_mismatch, "duplicate_logical_episodes": duplicate_episodes, "stale_show_summary": stale_shows, "missing_show_seasons": missing_show_seasons, "watch_progress_orphans": watch_progress_orphans}
+    return DoctorReport(ok=integrity == "ok" and not foreign_keys and first_source_mismatch == 0 and duplicate_episodes == 0 and stale_shows == 0 and missing_show_seasons == 0 and watch_progress_orphans == 0, checks=checks, repaired=repair)

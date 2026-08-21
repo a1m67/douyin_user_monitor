@@ -16,7 +16,7 @@ from douyin_user_monitor.parsers.regex import normalize_title
 from douyin_user_monitor.maintenance import backup_database
 
 
-SCHEMA_VERSION = 17
+SCHEMA_VERSION = 18
 SQLITE_BUSY_TIMEOUT_MS = 30_000
 SHOW_STATUSES = frozenset({"updating", "completed", "paused"})
 VIDEO_CLASSIFICATIONS = frozenset({"matched", "ignored", "review"})
@@ -338,6 +338,19 @@ class ShortDramaRepository:
             );
             CREATE INDEX IF NOT EXISTS idx_show_aliases_show ON show_aliases(show_id, id);
 
+            CREATE TABLE IF NOT EXISTS watch_progress (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                show_id INTEGER NOT NULL REFERENCES shows(id) ON DELETE CASCADE,
+                season_number INTEGER NOT NULL,
+                watched_episode_number INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(show_id, season_number),
+                CHECK (season_number >= 1),
+                CHECK (watched_episode_number >= 0)
+            );
+            CREATE INDEX IF NOT EXISTS idx_watch_progress_show ON watch_progress(show_id, season_number DESC);
+
             CREATE TABLE IF NOT EXISTS scan_runs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
@@ -531,6 +544,11 @@ class ShortDramaRepository:
             }.items():
                 if not _table_has_column(connection, "scan_runs", column):
                     connection.execute(f"ALTER TABLE scan_runs ADD COLUMN {column} {definition}")
+        if previous_version < 18:
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_watch_progress_show "
+                "ON watch_progress(show_id, season_number DESC)"
+            )
         if previous_version >= SCHEMA_VERSION:
             return
         if previous_version < 3:
@@ -1932,6 +1950,17 @@ class ShortDramaRepository:
                     show["latest_season_status"] = season_row["season_status"]
                     show["latest_season_collected_count"] = int(season_row["season_collected_count"] or 0)
                     show["latest_season_latest_episode"] = season_row["season_latest_episode"]
+                progress = connection.execute(
+                    "SELECT watched_episode_number FROM watch_progress WHERE show_id=? AND season_number=?",
+                    (int(show["id"]), int(show.get("latest_season") or 1)),
+                ).fetchone()
+                watched = int(progress["watched_episode_number"] if progress else 0)
+                show["watched_episode_number"] = watched
+                show["unwatched_episode_count"] = int(connection.execute(
+                    "SELECT COUNT(*) FROM episodes WHERE show_id=? AND season_number=? "
+                    "AND episode_number > ? AND episode_number > 0",
+                    (int(show["id"]), int(show.get("latest_season") or 1), watched),
+                ).fetchone()[0])
             return result
 
     def _source_accounts_for_shows(
@@ -1981,6 +2010,9 @@ class ShortDramaRepository:
             source_accounts = self._source_accounts_for_shows(connection, [show_id])
             season_rows = connection.execute(
                 "SELECT * FROM show_seasons WHERE show_id=? ORDER BY season_number DESC", (show_id,)
+            ).fetchall()
+            progress_rows = connection.execute(
+                "SELECT * FROM watch_progress WHERE show_id=?", (show_id,)
             ).fetchall()
         show["episodes"] = episodes
         latest_season = int(show.get("latest_season") or 1)
@@ -2036,6 +2068,15 @@ class ShortDramaRepository:
         show["seasons"].sort(key=lambda item: int(item["season_number"]), reverse=True)
         show["source_accounts"] = source_accounts.get(show_id, [])
         show["source_account_count"] = len(show["source_accounts"])
+        progress_map = {int(row["season_number"]): dict(row) for row in progress_rows}
+        for season in show["seasons"]:
+            progress = progress_map.get(int(season["season_number"]))
+            watched = int(progress["watched_episode_number"] if progress else 0)
+            season["watched_episode_number"] = watched
+            season["unwatched_episode_count"] = sum(
+                1 for episode in season["episodes"]
+                if int(episode["episode_number"]) > watched and int(episode["episode_number"]) > 0
+            )
         return show
 
     def _sources_for_episodes(
@@ -2314,6 +2355,51 @@ class ShortDramaRepository:
                 raise KeyError("短剧不存在")
             row = connection.execute("SELECT * FROM shows WHERE id = ?", (show_id,)).fetchone()
             return _show_row(row)
+
+    def get_watch_progress(self, show_id: int, season_number: int) -> dict[str, Any] | None:
+        if int(season_number) < 1:
+            raise ValueError("季数不能小于 1")
+        with self._transaction() as connection:
+            row = connection.execute(
+                "SELECT * FROM watch_progress WHERE show_id=? AND season_number=?",
+                (int(show_id), int(season_number)),
+            ).fetchone()
+            return dict(row) if row else None
+
+    def set_watch_progress(
+        self, show_id: int, season_number: int, watched_episode_number: int
+    ) -> dict[str, Any]:
+        if int(season_number) < 1:
+            raise ValueError("季数不能小于 1")
+        if int(watched_episode_number) < 0:
+            raise ValueError("观看进度不能小于 0")
+        now = utc_now()
+        with self._transaction() as connection:
+            if connection.execute("SELECT 1 FROM shows WHERE id=?", (int(show_id),)).fetchone() is None:
+                raise KeyError("短剧不存在")
+            connection.execute(
+                """
+                INSERT INTO watch_progress(
+                    show_id, season_number, watched_episode_number, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(show_id, season_number) DO UPDATE SET
+                    watched_episode_number=excluded.watched_episode_number,
+                    updated_at=excluded.updated_at
+                """,
+                (int(show_id), int(season_number), int(watched_episode_number), now, now),
+            )
+            row = connection.execute(
+                """
+                SELECT wp.*,
+                       (SELECT COUNT(*) FROM episodes e
+                        WHERE e.show_id=wp.show_id AND e.season_number=wp.season_number
+                          AND e.episode_number>wp.watched_episode_number
+                          AND e.episode_number>0) AS unwatched_episode_count
+                FROM watch_progress wp WHERE wp.show_id=? AND wp.season_number=?
+                """,
+                (int(show_id), int(season_number)),
+            ).fetchone()
+            return dict(row)
 
     def merge_show(self, source_show_id: int, target_show_id: int) -> dict[str, Any]:
         """Merge a manually selected duplicate show into its canonical target.

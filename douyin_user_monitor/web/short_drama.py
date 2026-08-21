@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import secrets
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -69,6 +70,10 @@ class UpdateShowSeasonPayload(BaseModel):
     status: str | None = None
     started_at: str | None = None
     completed_at: str | None = None
+
+
+class WatchProgressPayload(BaseModel):
+    watched_episode_number: int = Field(ge=0, le=100000)
 
 
 class IgnoreShowPayload(BaseModel):
@@ -307,6 +312,27 @@ def create_short_drama_router(
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"season": season, "show": repository.get_show_detail(show_id)}
 
+    @api.get("/shows/{show_id}/seasons/{season_number}/watch-progress")
+    async def get_watch_progress(show_id: int, season_number: int) -> dict[str, Any]:
+        if repository.get_show(show_id) is None:
+            raise HTTPException(status_code=404, detail="短剧不存在")
+        try:
+            return {"progress": repository.get_watch_progress(show_id, season_number)}
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @api.put("/shows/{show_id}/seasons/{season_number}/watch-progress")
+    async def set_watch_progress(
+        show_id: int, season_number: int, payload: WatchProgressPayload
+    ) -> dict[str, Any]:
+        try:
+            progress = repository.set_watch_progress(
+                show_id, season_number, payload.watched_episode_number
+            )
+        except (ValueError, KeyError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"progress": progress, "show": repository.get_show_detail(show_id)}
+
     @api.get("/updates")
     async def list_updates(
         following_only: bool = True,
@@ -324,6 +350,7 @@ def create_short_drama_router(
         result["following_unread_count"] = repository.unread_update_count(
             following_only=True
         )
+        result["groups"] = _group_update_events(result["events"])
         return result
 
     @api.post("/updates/read-all")
@@ -661,6 +688,43 @@ def create_short_drama_router(
 
     router.include_router(api)
     return router
+
+
+def _group_update_events(events: list[dict[str, Any]], *, window_hours: int = 24) -> list[dict[str, Any]]:
+    """Group adjacent events for presentation only; database events stay intact."""
+    groups: list[dict[str, Any]] = []
+    for event in events:
+        occurred = str(event.get("occurred_at") or "")
+        try:
+            timestamp = datetime.fromisoformat(occurred.replace("Z", "+00:00"))
+        except ValueError:
+            timestamp = None
+        key = (int(event["show_id"]), int(event.get("season_number") or 1))
+        target = groups[-1] if groups and groups[-1]["key"] == key else None
+        if target is not None and timestamp is not None and target.get("_timestamp") is not None:
+            if abs((target["_timestamp"] - timestamp).total_seconds()) > window_hours * 3600:
+                target = None
+        if target is None:
+            target = {
+                "key": key,
+                "show_id": event["show_id"],
+                "show_title": event["show_title"],
+                "season_number": event.get("season_number", 1),
+                "episode_numbers": [],
+                "events": [],
+                "_timestamp": timestamp,
+            }
+            groups.append(target)
+        target["episode_numbers"].append(int(event["episode_number"]))
+        target["events"].append(event)
+    for group in groups:
+        group.pop("key", None)
+        group.pop("_timestamp", None)
+        numbers = group["episode_numbers"]
+        group["episode_start"] = min(numbers)
+        group["episode_end"] = max(numbers)
+        group["count"] = len(numbers)
+    return groups
 
 
 def _sync_result(result: SyncResult) -> dict[str, Any]:
