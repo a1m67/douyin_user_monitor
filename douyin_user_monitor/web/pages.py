@@ -85,6 +85,10 @@ def create_page_router(
         media_types = {
             "app.css": "text/css",
             "api.js": "application/javascript",
+            "core.js": "application/javascript",
+            "shows.js": "application/javascript",
+            "library.js": "application/javascript",
+            "system.js": "application/javascript",
             "app.js": "application/javascript",
         }
         if asset_name not in media_types:

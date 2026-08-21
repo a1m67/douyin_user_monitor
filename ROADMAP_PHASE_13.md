@@ -7,7 +7,7 @@ Security, delivery reliability, maintainability, long-running storage, and daily
 - [x] Phase 1: Single-user web authentication and CSRF
 - [x] Phase 2: Legacy monitor isolation
 - [x] Phase 3: Reliable notification outbox
-- [ ] Phase 4: Complete web module split
+- [x] Phase 4: Complete web module split
 - [ ] Phase 5: Build identity and cache-safe PWA delivery
 - [ ] Phase 6: Automatic backups and maintenance worker
 - [ ] Phase 7: Bounded Douyin raw payload storage
@@ -45,12 +45,12 @@ Security, delivery reliability, maintainability, long-running storage, and daily
 
 ### Phase 4
 
-- Status: pending
-- Main design: split backend APIs and frontend route modules without changing framework or URLs.
-- Schema changes: none expected.
-- Tests: pending.
-- Commit: pending.
-- Production verification still needed: pending.
+- Status: complete
+- Main design: extracted API contracts and result serialization from route assembly; split the browser application into shared core, Shows, library/review, system, and bootstrap modules without changing URLs or global event handlers.
+- Schema changes: none; schema remains v19.
+- Tests: static module routing, unchanged Dashboard/API behavior, authentication compatibility, compile checks, and full suite.
+- Commit: recorded after implementation commit.
+- Production verification still needed: browser interaction smoke test across every route after deployment.
 
 ### Phase 5
 

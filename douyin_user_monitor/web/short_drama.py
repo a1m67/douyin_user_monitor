@@ -4,129 +4,26 @@ from __future__ import annotations
 import asyncio
 import secrets
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import Response
-from pydantic import BaseModel, Field
 
 from douyin_user_monitor.notifiers.dispatcher import NotificationDispatcher
 from douyin_user_monitor.repositories.sqlite import ShortDramaRepository
 from douyin_user_monitor.maintenance import backup_database, doctor_database
-from douyin_user_monitor.services.episode_pipeline import (
-    HistoryBackfillResult,
-    ShortDramaPipeline,
-    SyncResult,
+from douyin_user_monitor.services.episode_pipeline import ShortDramaPipeline
+from douyin_user_monitor.web.api_serialization import history_backfill_result, reparse_result, sync_result
+from douyin_user_monitor.web.api_types import (
+    AddAccountPayload, BatchEpisodeSeasonPayload, BatchIgnoreReviewPayload,
+    BatchVideoPayload, CookieManagerControl, CookieUpdatePayload,
+    HistoryBackfillWorkerControl, IgnoreShowPayload, MergeShowPayload,
+    MoveEpisodePayload, MoveEpisodeSourcePayload, ReparseAccountPayload,
+    ReviewPayload, SchedulerStatus, UpdateAccountPayload, UpdateShowPayload,
+    UpdateShowSeasonPayload, WatchProgressPayload,
 )
 from douyin_user_monitor.web.pages import create_page_router
 from douyin_user_monitor.web.update_grouping import group_update_events
-
-
-class SchedulerStatus(Protocol):
-    def health_status(self) -> str:
-        ...
-
-    async def run_account_once(self, account_id: str, *, force: bool = False) -> Any:
-        ...
-
-    def crawler_status(self) -> dict[str, object]:
-        ...
-
-
-class HistoryBackfillWorkerControl(Protocol):
-    def wake(self) -> None:
-        ...
-
-    def health_status(self) -> str:
-        ...
-
-
-class CookieManagerControl(Protocol):
-    def status(self) -> dict[str, Any]: ...
-    def save(self, value: object) -> dict[str, Any]: ...
-    async def test(self) -> dict[str, Any]: ...
-
-
-class AddAccountPayload(BaseModel):
-    homepage_url: str = Field(min_length=1)
-    check_interval_minutes: int | None = Field(default=None, ge=1, le=1440)
-
-
-class UpdateAccountPayload(BaseModel):
-    nickname: str | None = Field(default=None, min_length=1)
-    homepage_url: str | None = None
-    enabled: bool | None = None
-    check_interval_minutes: int | None = Field(default=None, ge=1, le=1440)
-
-
-class UpdateShowPayload(BaseModel):
-    title: str | None = Field(default=None, min_length=1)
-    aliases: list[str] | None = None
-    status: str | None = None
-    expected_episode_count: int | None = Field(default=None, ge=1, le=100000)
-
-
-class UpdateShowSeasonPayload(BaseModel):
-    expected_episode_count: int | None = Field(default=None, ge=1, le=100000)
-    status: str | None = None
-    started_at: str | None = None
-    completed_at: str | None = None
-
-
-class WatchProgressPayload(BaseModel):
-    watched_episode_number: int = Field(ge=0, le=100000)
-
-
-class IgnoreShowPayload(BaseModel):
-    reason: str | None = Field(default=None, max_length=500)
-
-
-class MergeShowPayload(BaseModel):
-    source_show_id: int = Field(gt=0)
-
-
-class ReviewPayload(BaseModel):
-    show_id: int | None = None
-    new_show_title: str | None = Field(default=None, max_length=120)
-    episode_number: int = Field(ge=0, le=100000)
-    season_number: int = Field(default=1, ge=1, le=1000)
-    learn_alias: bool = False
-
-
-class BatchIgnoreReviewPayload(BaseModel):
-    video_ids: list[int] = Field(min_length=1, max_length=500)
-
-
-class MoveEpisodePayload(BaseModel):
-    target_show_id: int = Field(gt=0)
-    season_number: int = Field(ge=1, le=1000)
-    episode_number: int = Field(ge=0, le=100000)
-
-
-class MoveEpisodeSourcePayload(BaseModel):
-    target_show_id: int = Field(gt=0)
-    season_number: int = Field(ge=1, le=1000)
-    episode_number: int = Field(ge=0, le=100000)
-
-
-class BatchEpisodeSeasonPayload(BaseModel):
-    episode_ids: list[int] = Field(min_length=1, max_length=500)
-    season_number: int = Field(ge=1, le=1000)
-
-
-class BatchVideoPayload(BaseModel):
-    video_ids: list[int] = Field(min_length=1, max_length=500)
-
-
-class ReparseAccountPayload(BaseModel):
-    scope: str = Field(
-        default="legacy_ignored",
-        pattern="^(legacy_ignored|ignored|ignored_review)$",
-    )
-
-
-class CookieUpdatePayload(BaseModel):
-    cookie: Any
 
 
 def create_short_drama_router(
@@ -477,7 +374,7 @@ def create_short_drama_router(
                 result = await pipeline.sync_account(account_id)
         except (ValueError, KeyError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return {"result": _sync_result(result)}
+        return {"result": sync_result(result)}
 
     @api.post("/accounts/{account_id}/history/start")
     async def start_history_backfill(account_id: str) -> dict[str, Any]:
@@ -513,7 +410,7 @@ def create_short_drama_router(
             result = await pipeline.run_history_backfill_page(account_id)
         except (ValueError, KeyError, RuntimeError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return {"result": _history_backfill_result(result)}
+        return {"result": history_backfill_result(result)}
 
     @api.post("/accounts/{account_id}/reparse")
     async def reparse_account(
@@ -528,7 +425,7 @@ def create_short_drama_router(
             )
         except (ValueError, KeyError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return {"result": _reparse_result(result)}
+        return {"result": reparse_result(result)}
 
     @api.get("/videos")
     async def list_videos(
@@ -628,39 +525,3 @@ def create_short_drama_router(
 
     router.include_router(api)
     return router
-
-
-def _sync_result(result: SyncResult) -> dict[str, Any]:
-    return {
-        "account_id": result.account["id"],
-        "initial_sync": result.initial_sync,
-        "fetched_videos": result.fetched_videos,
-        "new_videos": result.new_videos,
-        "duplicate_videos": result.duplicate_videos,
-        "review_videos": result.review_videos,
-        "ignored_videos": result.ignored_videos,
-        "new_episode_count": len(result.new_episode_updates),
-    }
-
-
-def _history_backfill_result(result: HistoryBackfillResult) -> dict[str, Any]:
-    return {
-        "account_id": result.account["id"],
-        "history_sync": result.account["history_sync"],
-        "fetched_videos": result.fetched_videos,
-        "new_videos": result.new_videos,
-        "duplicate_videos": result.duplicate_videos,
-        "review_videos": result.review_videos,
-        "ignored_videos": result.ignored_videos,
-    }
-
-
-def _reparse_result(result: Any) -> dict[str, Any]:
-    return {
-        "account_id": result.account["id"],
-        "requested_videos": result.requested_videos,
-        "matched_videos": result.matched_videos,
-        "review_videos": result.review_videos,
-        "ignored_videos": result.ignored_videos,
-        "new_episode_count": result.new_episode_count,
-    }
