@@ -64,6 +64,12 @@ class ShortDramaSettings:
     maintenance_poll_seconds: float
     wal_checkpoint_interval_hours: int
     raw_json_prune_batch_size: int
+    media_cache_enabled: bool
+    media_cache_dir: Path
+    media_cache_max_mb: int
+    media_cache_ttl_hours: int
+    media_cache_timeout_seconds: float
+    media_cache_max_file_mb: int
     ocr_enabled: bool
     ocr_timeout_seconds: float
     ocr_api_url: str
@@ -171,6 +177,14 @@ def load_short_drama_settings(
         maintenance_poll_seconds=_positive_float(values, "MAINTENANCE_POLL_SECONDS", 300),
         wal_checkpoint_interval_hours=_positive_int(values, "WAL_CHECKPOINT_INTERVAL_HOURS", 6),
         raw_json_prune_batch_size=_positive_int(values, "RAW_JSON_PRUNE_BATCH_SIZE", 500),
+        media_cache_enabled=_boolean(values, "MEDIA_CACHE_ENABLED", True),
+        media_cache_dir=_path(root, _value(values, "MEDIA_CACHE_DIR", "data/media-cache")),
+        media_cache_max_mb=_positive_int(values, "MEDIA_CACHE_MAX_MB", 512),
+        media_cache_ttl_hours=_positive_int(values, "MEDIA_CACHE_TTL_HOURS", 168),
+        media_cache_timeout_seconds=_positive_float(
+            values, "MEDIA_CACHE_TIMEOUT_SECONDS", 10.0
+        ),
+        media_cache_max_file_mb=_positive_int(values, "MEDIA_CACHE_MAX_FILE_MB", 5),
         ocr_enabled=_boolean(values, "OCR_ENABLED", False),
         ocr_timeout_seconds=_positive_float(values, "OCR_TIMEOUT_SECONDS", 15),
         ocr_api_url=_value(values, "OCR_API_URL", ""),

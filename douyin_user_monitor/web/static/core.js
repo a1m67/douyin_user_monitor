@@ -13,7 +13,7 @@ const request = window.ShortDramaAPI.request;
     }
     function safeMediaUrl(value) {
       try {
-        const url = new URL(String(value || ""));
+        const url = new URL(String(value || ""), location.origin);
         return ["http:", "https:"].includes(url.protocol) ? url.href : "";
       } catch (_) {
         return "";
@@ -26,6 +26,9 @@ const request = window.ShortDramaAPI.request;
       if (!safeUrl) return `<span class="${classes} media-fallback" aria-hidden="true">${escapeHtml(fallback)}</span>`;
       return `<span class="${classes}"><img src="${escapeHtml(safeUrl)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.hidden=true;this.nextElementSibling.hidden=false" /><span class="media-fallback" hidden aria-hidden="true">${escapeHtml(fallback)}</span></span>`;
     }
+    function accountAvatarUrl(account) { return account && account.avatar_url ? `/media/accounts/${encodeURIComponent(account.id)}/avatar` : ""; }
+    function videoCoverUrl(video) { return video && video.cover_url ? `/media/videos/${encodeURIComponent(video.id)}/cover` : ""; }
+    function showCoverUrl(show) { return show && show.cover_url ? `/media/shows/${encodeURIComponent(show.id)}/cover` : ""; }
     function formatTime(value, fallback = "-") {
       if (!value) return fallback;
       const date = new Date(value);

@@ -11,7 +11,7 @@ Transactional reliability, lightweight operations, parser governance, bounded AI
 - [x] Phase 5: Parser processing versioning
 - [x] Phase 6: Parser golden regression suite
 - [x] Phase 7: AI request budgets and guards
-- [ ] Phase 8: Bounded avatar and cover media cache
+- [x] Phase 8: Bounded avatar and cover media cache
 - [ ] Phase 9: Global search and show pagination
 
 ## Phase Records
@@ -84,7 +84,13 @@ Transactional reliability, lightweight operations, parser governance, bounded AI
 
 ### Phase 8
 
-- Status: pending
+- Status: complete
+- Main design: browser image URLs point to authenticated entity-ID routes; the service resolves the stored database URL, validates every HTTP(S) redirect and all resolved addresses, enforces image-only bounded downloads, serves stale cache on refresh errors, and falls back to a local SVG.
+- Schema changes: v24 adds `media_cache_entries` with URL hash, relative file path, content type, fetch/access timestamps, and bounded size metadata.
+- New settings: `MEDIA_CACHE_ENABLED`, `MEDIA_CACHE_DIR`, `MEDIA_CACHE_MAX_MB`, `MEDIA_CACHE_TTL_HOURS`, `MEDIA_CACHE_TIMEOUT_SECONDS`, and `MEDIA_CACHE_MAX_FILE_MB`.
+- Tests: cache hit, TTL refresh, stale fallback, private/redirect SSRF rejection, type and size rejection, entity-only routes, auth protection, LRU eviction, migration, and proof that video bytes are never cached.
+- Commit: `feat: add bounded media cache`.
+- Production verification still needed: confirm Douyin CDN host resolution and response types, observe cache growth/eviction, and verify stale covers after a controlled upstream failure.
 
 ### Phase 9
 

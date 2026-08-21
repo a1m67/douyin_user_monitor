@@ -26,6 +26,7 @@ from douyin_user_monitor.services.history_backfill_worker import (
 )
 from douyin_user_monitor.services.scheduler import AccountScheduler, SchedulerConfig
 from douyin_user_monitor.services.maintenance_worker import MaintenanceWorker, MaintenanceWorkerConfig
+from douyin_user_monitor.services.media_cache import MediaCacheConfig, MediaCacheService
 from douyin_user_monitor.services.cookie_manager import CookieManager
 from douyin_user_monitor.short_drama_settings import (
     ShortDramaSettings,
@@ -46,6 +47,7 @@ class ShortDramaRuntime:
     history_backfill_worker: HistoryBackfillWorker
     cookie_manager: CookieManager
     maintenance_worker: MaintenanceWorker
+    media_cache: MediaCacheService
     ai_guards: dict[str, AIRequestGuard]
 
     async def start(self) -> None:
@@ -60,6 +62,7 @@ class ShortDramaRuntime:
         await self.history_backfill_worker.stop()
         await self.maintenance_worker.stop()
         await self.dispatcher.aclose()
+        await self.media_cache.aclose()
         await self.provider.aclose()
 
 
@@ -194,6 +197,17 @@ def build_short_drama_runtime(settings: ShortDramaSettings | None = None) -> Sho
         reload_cookie=crawler.set_cookie_override,
         test_cookie=test_cookie,
     )
+    media_cache = MediaCacheService(
+        repository,
+        resolved_settings.media_cache_dir,
+        MediaCacheConfig(
+            enabled=resolved_settings.media_cache_enabled,
+            max_bytes=resolved_settings.media_cache_max_mb * 1024 * 1024,
+            ttl_hours=resolved_settings.media_cache_ttl_hours,
+            timeout_seconds=resolved_settings.media_cache_timeout_seconds,
+            max_file_bytes=resolved_settings.media_cache_max_file_mb * 1024 * 1024,
+        ),
+    )
     maintenance_worker = MaintenanceWorker(
         repository,
         MaintenanceWorkerConfig(
@@ -205,6 +219,7 @@ def build_short_drama_runtime(settings: ShortDramaSettings | None = None) -> Sho
             scan_run_retention_days=resolved_settings.scan_run_retention_days,
             raw_json_prune_batch_size=resolved_settings.raw_json_prune_batch_size,
         ),
+        media_cache=media_cache,
     )
     return ShortDramaRuntime(
         settings=resolved_settings,
@@ -216,6 +231,7 @@ def build_short_drama_runtime(settings: ShortDramaSettings | None = None) -> Sho
         history_backfill_worker=history_backfill_worker,
         cookie_manager=cookie_manager,
         maintenance_worker=maintenance_worker,
+        media_cache=media_cache,
         ai_guards=ai_guards,
     )
 

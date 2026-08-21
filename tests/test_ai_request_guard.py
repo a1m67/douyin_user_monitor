@@ -145,7 +145,7 @@ class AIRequestGuardTests(unittest.TestCase):
             connection.execute("DROP TABLE ai_usage_daily")
             connection.execute("UPDATE app_meta SET value='22' WHERE key='schema_version'")
         migrated = ShortDramaRepository(self.repository.database_path)
-        self.assertEqual(migrated.schema_version(), 23)
+        self.assertEqual(migrated.schema_version(), 24)
         self.assertTrue(migrated.reserve_ai_request(
             provider="llm", usage_date="2026-08-22", daily_call_limit=1
         ))

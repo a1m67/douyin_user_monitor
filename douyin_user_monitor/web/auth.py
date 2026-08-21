@@ -88,7 +88,8 @@ class AppAuthMiddleware(BaseHTTPMiddleware):
 
         bearer_valid = self._valid_bearer(request)
         is_short_drama_api = path.startswith("/api/short-drama/")
-        if is_short_drama_api:
+        is_media = path.startswith("/media/")
+        if is_short_drama_api or is_media:
             if bearer_valid:
                 request.state.auth_mode = "bearer"
             elif session is not None:

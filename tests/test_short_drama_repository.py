@@ -405,7 +405,7 @@ class ShortDramaRepositoryTests(unittest.TestCase):
 
         migrated = ShortDramaRepository(self.repository.database_path)
 
-        self.assertEqual(migrated.schema_version(), 23)
+        self.assertEqual(migrated.schema_version(), 24)
         self.assertIsNone(migrated.get_account(account["id"])["avatar_url"])
 
     def test_v20_migration_preserves_account_schedule_behavior(self):
@@ -417,7 +417,7 @@ class ShortDramaRepositoryTests(unittest.TestCase):
         migrated = ShortDramaRepository(self.repository.database_path)
         stored = migrated.get_account(account["id"])
 
-        self.assertEqual(migrated.schema_version(), 23)
+        self.assertEqual(migrated.schema_version(), 24)
         self.assertEqual(stored["schedule_mode"], "inherit")
         self.assertIsNone(stored["adaptive_min_interval_minutes"])
         self.assertIsNone(stored["adaptive_max_interval_minutes"])
@@ -1367,7 +1367,7 @@ class ShortDramaRepositoryTests(unittest.TestCase):
         migrated = ShortDramaRepository(self.repository.database_path)
         stored = migrated.get_video(video["id"])
 
-        self.assertEqual(migrated.schema_version(), 23)
+        self.assertEqual(migrated.schema_version(), 24)
         self.assertIsNone(stored["parser_version"])
         self.assertIsNone(stored["parser_input_hash"])
         self.assertIsNone(stored["processed_build_sha"])

@@ -85,6 +85,12 @@ class ShortDramaSettingsTests(unittest.TestCase):
         self.assertFalse(settings.legacy_monitor_enabled)
         self.assertEqual(settings.scan_run_retention_days, 30)
         self.assertEqual(settings.backup_retention_count, 14)
+        self.assertTrue(settings.media_cache_enabled)
+        self.assertEqual(settings.media_cache_dir, (self.root / "data" / "media-cache").resolve())
+        self.assertEqual(settings.media_cache_max_mb, 512)
+        self.assertEqual(settings.media_cache_ttl_hours, 168)
+        self.assertEqual(settings.media_cache_timeout_seconds, 10.0)
+        self.assertEqual(settings.media_cache_max_file_mb, 5)
         self.assertFalse(settings.ocr_enabled)
         self.assertEqual(settings.ocr_timeout_seconds, 15)
 

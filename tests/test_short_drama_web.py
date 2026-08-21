@@ -123,9 +123,10 @@ class ShortDramaWebTests(unittest.IsolatedAsyncioTestCase):
         payload = self.client.get("/api/short-drama/shows").json()
         self.assertEqual(payload["shows"][0]["title"], "末日重生")
         self.assertEqual(payload["shows"][0]["continue_watching"]["episode_number"], 12)
+        account_payload = self.client.get("/api/short-drama/accounts").json()["accounts"][0]
         self.assertEqual(
-            self.client.get("/api/short-drama/accounts").json()["accounts"][0]["avatar_url"],
-            "https://img.example/ai-theater.jpg",
+            account_payload["avatar_url"],
+            f"/media/accounts/{account_payload['id']}/avatar",
         )
         detail = self.client.get(f"/api/short-drama/shows/{payload['shows'][0]['id']}").json()
         self.assertEqual(detail["show"]["episodes"][0]["episode_number"], 12)
@@ -618,7 +619,7 @@ class ShortDramaWebTests(unittest.IsolatedAsyncioTestCase):
         with patch("douyin_user_monitor.web.short_drama.doctor_database") as doctor:
             data = self.client.get("/api/short-drama/diagnostics").json()
         doctor.assert_not_called()
-        self.assertEqual(data["database"]["schema_version"], 23)
+        self.assertEqual(data["database"]["schema_version"], 24)
         self.assertIsNone(data["database"]["last_doctor_at"])
         self.assertGreaterEqual(data["database"]["database_latency_ms"], 0)
         self.assertEqual(

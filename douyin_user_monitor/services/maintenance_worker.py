@@ -10,6 +10,7 @@ from typing import Any
 
 from douyin_user_monitor.maintenance import backup_database, passive_wal_checkpoint
 from douyin_user_monitor.repositories.sqlite import ShortDramaRepository
+from douyin_user_monitor.services.media_cache import MediaCacheService
 
 logger = logging.getLogger(__name__)
 
@@ -26,9 +27,16 @@ class MaintenanceWorkerConfig:
 
 
 class MaintenanceWorker:
-    def __init__(self, repository: ShortDramaRepository, config: MaintenanceWorkerConfig) -> None:
+    def __init__(
+        self,
+        repository: ShortDramaRepository,
+        config: MaintenanceWorkerConfig,
+        *,
+        media_cache: MediaCacheService | None = None,
+    ) -> None:
         self._repository = repository
         self._config = config
+        self._media_cache = media_cache
         self._stop = asyncio.Event()
         self._task: asyncio.Task[None] | None = None
         self._last_backup_at: datetime | None = self._latest_backup_time()
@@ -83,6 +91,11 @@ class MaintenanceWorker:
             self._repository.compact_video_raw_payloads,
             limit=self._config.raw_json_prune_batch_size,
         )
+        media_cache = (
+            await asyncio.to_thread(self._media_cache.evict_lru)
+            if self._media_cache is not None
+            else {"removed": 0, "removed_bytes": 0, "size_bytes": 0}
+        )
         backup_path: Path | None = None
         if force_backup or self._due(self._last_backup_at, current, self._config.backup_interval_hours):
             backup_path = await asyncio.to_thread(
@@ -109,7 +122,8 @@ class MaintenanceWorker:
             last_maintenance_at=self._iso(current),
         )
         return {"backup": backup_path.name if backup_path else None, "scan_runs_pruned": removed,
-                "raw_payloads_compacted": compacted, "checkpoint": checkpoint}
+                "raw_payloads_compacted": compacted, "media_cache": media_cache,
+                "checkpoint": checkpoint}
 
     def health_status(self) -> dict[str, Any]:
         return {

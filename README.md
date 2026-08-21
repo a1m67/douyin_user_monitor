@@ -129,6 +129,12 @@ PowerShell 下可将 `.venv/Scripts/python` 替换为 `.venv\Scripts\python.exe`
 | `MAINTENANCE_POLL_SECONDS` | `300` | 维护任务到期检查间隔。 |
 | `WAL_CHECKPOINT_INTERVAL_HOURS` | `6` | PASSIVE WAL checkpoint 最小间隔。 |
 | `RAW_JSON_PRUNE_BATCH_SIZE` | `500` | 每轮维护最多压缩的历史 Douyin raw payload 数量。 |
+| `MEDIA_CACHE_ENABLED` | `true` | 通过受保护的实体 ID 路由缓存作者头像和作品/短剧封面；不缓存视频。 |
+| `MEDIA_CACHE_DIR` | `data/media-cache` | 图片缓存目录。 |
+| `MEDIA_CACHE_MAX_MB` | `512` | 维护 Worker 按最近访问时间淘汰后的缓存总量上限。 |
+| `MEDIA_CACHE_TTL_HOURS` | `168` | 图片刷新周期；刷新失败时继续提供已有旧缓存。 |
+| `MEDIA_CACHE_TIMEOUT_SECONDS` | `10` | 单次远程图片请求超时。 |
+| `MEDIA_CACHE_MAX_FILE_MB` | `5` | 单个头像或封面的最大下载大小。 |
 | `OCR_ENABLED` | `false` | 是否为仍需审核且有封面的作品启用 OCR fallback。 |
 | `OCR_TIMEOUT_SECONDS` | `15` | 单次封面 OCR 超时。 |
 | `OCR_API_URL` / `OCR_API_KEY` | 空 | HTTP-compatible OCR 服务地址及可选密钥；密钥不记录。 |

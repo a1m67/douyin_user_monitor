@@ -338,7 +338,10 @@ def doctor_database(database_path: Path, *, repair: bool = False) -> DoctorRepor
         ai_usage_duplicates = int(connection.execute("""SELECT COUNT(*) FROM (
             SELECT usage_date,provider,COUNT(*) n FROM ai_usage_daily
             GROUP BY usage_date,provider HAVING n>1)""").fetchone()[0])
+        media_cache_invalid = int(connection.execute("""SELECT COUNT(*) FROM media_cache_entries
+            WHERE size_bytes < 0 OR relative_path='' OR relative_path LIKE '%..%'
+               OR relative_path LIKE '%/%' OR relative_path LIKE '%\\%'""").fetchone()[0])
     finally:
         connection.close()
-    checks = {"integrity": integrity, "foreign_key_errors": foreign_keys, "first_source_mismatch": first_source_mismatch, "duplicate_logical_episodes": duplicate_episodes, "stale_show_summary": stale_shows, "missing_show_seasons": missing_show_seasons, "watch_progress_orphans": watch_progress_orphans, "ai_usage_duplicates": ai_usage_duplicates}
-    return DoctorReport(ok=integrity == "ok" and not foreign_keys and first_source_mismatch == 0 and duplicate_episodes == 0 and stale_shows == 0 and missing_show_seasons == 0 and watch_progress_orphans == 0 and ai_usage_duplicates == 0, checks=checks, repaired=repair)
+    checks = {"integrity": integrity, "foreign_key_errors": foreign_keys, "first_source_mismatch": first_source_mismatch, "duplicate_logical_episodes": duplicate_episodes, "stale_show_summary": stale_shows, "missing_show_seasons": missing_show_seasons, "watch_progress_orphans": watch_progress_orphans, "ai_usage_duplicates": ai_usage_duplicates, "media_cache_invalid_metadata": media_cache_invalid}
+    return DoctorReport(ok=integrity == "ok" and not foreign_keys and first_source_mismatch == 0 and duplicate_episodes == 0 and stale_shows == 0 and missing_show_seasons == 0 and watch_progress_orphans == 0 and ai_usage_duplicates == 0 and media_cache_invalid == 0, checks=checks, repaired=repair)

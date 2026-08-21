@@ -18,7 +18,7 @@ from douyin_user_monitor.maintenance import backup_database
 from douyin_user_monitor.raw_payload import compact_video_raw
 
 
-SCHEMA_VERSION = 23
+SCHEMA_VERSION = 24
 SQLITE_BUSY_TIMEOUT_MS = 30_000
 SHOW_STATUSES = frozenset({"updating", "completed", "paused"})
 VIDEO_CLASSIFICATIONS = frozenset({"matched", "ignored", "review"})
@@ -305,6 +305,91 @@ class ShortDramaRepository:
             for provider in providers
         }
 
+    def get_media_source_url(self, entity_type: str, entity_id: str | int) -> str | None:
+        with self._read_connection() as connection:
+            if entity_type == "account":
+                row = connection.execute(
+                    "SELECT avatar_url AS media_url FROM accounts WHERE id=?", (str(entity_id),)
+                ).fetchone()
+            elif entity_type == "video":
+                row = connection.execute(
+                    "SELECT cover_url AS media_url FROM videos WHERE id=?", (int(entity_id),)
+                ).fetchone()
+            elif entity_type == "show":
+                row = connection.execute(
+                    """SELECT videos.cover_url AS media_url
+                    FROM episodes
+                    JOIN episode_sources ON episode_sources.episode_id=episodes.id
+                    JOIN videos ON videos.id=episode_sources.video_id
+                    WHERE episodes.show_id=? AND videos.cover_url IS NOT NULL
+                      AND TRIM(videos.cover_url)<>''
+                    ORDER BY COALESCE(videos.publish_time,videos.created_at) DESC, videos.id DESC
+                    LIMIT 1""",
+                    (int(entity_id),),
+                ).fetchone()
+                if row is None:
+                    exists = connection.execute(
+                        "SELECT 1 FROM shows WHERE id=?", (int(entity_id),)
+                    ).fetchone()
+                    if exists is None:
+                        raise KeyError("短剧不存在")
+                    return None
+            else:
+                raise ValueError("unsupported media entity type")
+        if row is None:
+            raise KeyError("媒体实体不存在")
+        return _optional_text(row["media_url"])
+
+    def get_media_cache_entry(self, cache_key: str) -> dict[str, Any] | None:
+        with self._read_connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM media_cache_entries WHERE cache_key=?", (cache_key,)
+            ).fetchone()
+        return dict(row) if row else None
+
+    def upsert_media_cache_entry(
+        self,
+        *,
+        cache_key: str,
+        url: str,
+        relative_path: str,
+        content_type: str,
+        size_bytes: int,
+    ) -> None:
+        now = utc_now()
+        with self._transaction() as connection:
+            connection.execute(
+                """INSERT INTO media_cache_entries(
+                    cache_key,url,relative_path,content_type,fetched_at,last_access_at,size_bytes
+                ) VALUES (?,?,?,?,?,?,?)
+                ON CONFLICT(cache_key) DO UPDATE SET
+                    url=excluded.url,
+                    relative_path=excluded.relative_path,
+                    content_type=excluded.content_type,
+                    fetched_at=excluded.fetched_at,
+                    last_access_at=excluded.last_access_at,
+                    size_bytes=excluded.size_bytes""",
+                (cache_key, url, relative_path, content_type, now, now, max(0, int(size_bytes))),
+            )
+
+    def touch_media_cache_entry(self, cache_key: str) -> None:
+        with self._transaction() as connection:
+            connection.execute(
+                "UPDATE media_cache_entries SET last_access_at=? WHERE cache_key=?",
+                (utc_now(), cache_key),
+            )
+
+    def list_media_cache_entries_lru(self) -> list[dict[str, Any]]:
+        with self._read_connection() as connection:
+            rows = connection.execute(
+                "SELECT * FROM media_cache_entries ORDER BY last_access_at ASC, cache_key ASC"
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def delete_media_cache_entry(self, cache_key: str) -> None:
+        with self._transaction() as connection:
+            connection.execute("DELETE FROM media_cache_entries WHERE cache_key=?", (cache_key,))
+
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.database_path, timeout=SQLITE_BUSY_TIMEOUT_MS / 1000)
         connection.row_factory = sqlite3.Row
@@ -584,6 +669,16 @@ class ShortDramaRepository:
                 CHECK (latency_ms >= 0)
             );
 
+            CREATE TABLE IF NOT EXISTS media_cache_entries (
+                cache_key TEXT PRIMARY KEY,
+                url TEXT NOT NULL,
+                relative_path TEXT NOT NULL UNIQUE,
+                content_type TEXT NOT NULL,
+                fetched_at TEXT NOT NULL,
+                last_access_at TEXT NOT NULL,
+                size_bytes INTEGER NOT NULL CHECK (size_bytes >= 0)
+            );
+
             CREATE TABLE IF NOT EXISTS update_events (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 show_id INTEGER NOT NULL REFERENCES shows(id) ON DELETE CASCADE,
@@ -644,6 +739,8 @@ class ShortDramaRepository:
             CREATE INDEX IF NOT EXISTS idx_scan_runs_started ON scan_runs(started_at DESC);
             CREATE INDEX IF NOT EXISTS idx_ai_usage_daily_date
                 ON ai_usage_daily(usage_date DESC, provider);
+            CREATE INDEX IF NOT EXISTS idx_media_cache_lru
+                ON media_cache_entries(last_access_at ASC, cache_key ASC);
             CREATE INDEX IF NOT EXISTS idx_update_events_occurred
                 ON update_events(occurred_at DESC, id DESC);
             CREATE INDEX IF NOT EXISTS idx_update_events_unread

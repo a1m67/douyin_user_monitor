@@ -92,6 +92,7 @@ def create_app(runtime: ShortDramaRuntime | None = None, *, include_legacy_route
             history_backfill_worker=_RuntimeAttributeProxy(holder, "history_backfill_worker"),
             cookie_manager=_RuntimeAttributeProxy(holder, "cookie_manager"),
             maintenance_worker=_RuntimeAttributeProxy(holder, "maintenance_worker"),
+            media_cache=_RuntimeAttributeProxy(holder, "media_cache"),
             ai_guards=_RuntimeAttributeProxy(holder, "ai_guards"),
             ai_daily_limits={
                 "llm": getattr(settings, "llm_daily_call_limit", 0),

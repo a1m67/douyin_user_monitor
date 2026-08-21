@@ -14,6 +14,7 @@ from douyin_user_monitor.notifiers.dispatcher import NotificationDispatcher
 from douyin_user_monitor.repositories.sqlite import ShortDramaRepository
 from douyin_user_monitor.maintenance import backup_database, doctor_database
 from douyin_user_monitor.services.episode_pipeline import ShortDramaPipeline
+from douyin_user_monitor.services.media_cache import MediaCacheService
 from douyin_user_monitor.web.api_serialization import history_backfill_result, reparse_result, sync_result
 from douyin_user_monitor.web.api_types import (
     AddAccountPayload, BatchEpisodeSeasonPayload, BatchIgnoreReviewPayload,
@@ -37,6 +38,7 @@ def create_short_drama_router(
     history_backfill_worker: HistoryBackfillWorkerControl | None = None,
     cookie_manager: CookieManagerControl | None = None,
     maintenance_worker: MaintenanceWorkerStatus | None = None,
+    media_cache: MediaCacheService | None = None,
     ai_guards: Mapping[str, Any] | None = None,
     ai_daily_limits: Mapping[str, int] | None = None,
     page_path: Path | None = None,
@@ -65,6 +67,50 @@ def create_short_drama_router(
         return health_payload()
 
     configured_admin_token = admin_api_token.strip()
+
+    async def media_response(entity_type: str, entity_id: str | int) -> Response:
+        if media_cache is None:
+            result = MediaCacheService.placeholder()
+        else:
+            try:
+                source_url = await asyncio.to_thread(
+                    repository.get_media_source_url, entity_type, entity_id
+                )
+            except KeyError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+            result = await media_cache.get(source_url)
+        return Response(
+            result.content,
+            media_type=result.content_type,
+            headers={
+                "Cache-Control": "private, max-age=3600",
+                "X-Media-Cache": (
+                    "placeholder" if result.placeholder else "stale" if result.stale else "hit"
+                ),
+            },
+        )
+
+    @router.get("/media/accounts/{account_id}/avatar", include_in_schema=False)
+    async def account_avatar(account_id: str) -> Response:
+        return await media_response("account", account_id)
+
+    @router.get("/media/videos/{video_id}/cover", include_in_schema=False)
+    async def video_cover(video_id: int) -> Response:
+        return await media_response("video", video_id)
+
+    @router.get("/media/shows/{show_id}/cover", include_in_schema=False)
+    async def show_cover(show_id: int) -> Response:
+        return await media_response("show", show_id)
+
+    def localize_media(item: dict[str, Any], entity_type: str) -> dict[str, Any]:
+        result = dict(item)
+        if entity_type == "account" and result.get("avatar_url"):
+            result["avatar_url"] = f"/media/accounts/{result['id']}/avatar"
+        elif entity_type == "video" and result.get("cover_url"):
+            result["cover_url"] = f"/media/videos/{result['id']}/cover"
+        elif entity_type == "show" and result.get("cover_url"):
+            result["cover_url"] = f"/media/shows/{result['id']}/cover"
+        return result
 
     async def require_admin_token(request: Request) -> None:
         if getattr(request.state, "auth_mode", None) == "session":
@@ -97,24 +143,23 @@ def create_short_drama_router(
         limit: int = Query(default=100, ge=1, le=500),
     ) -> dict[str, Any]:
         ignored_filter = ignored or ("all" if include_ignored else "normal")
-        return {
-            "shows": repository.list_show_summaries(
-                account_id=account_id,
-                ignored=ignored_filter,
-                following=following,
-                include_empty=include_empty,
-                q=q,
-                sort=sort,
-                limit=limit,
-            )
-        }
+        shows = repository.list_show_summaries(
+            account_id=account_id,
+            ignored=ignored_filter,
+            following=following,
+            include_empty=include_empty,
+            q=q,
+            sort=sort,
+            limit=limit,
+        )
+        return {"shows": [localize_media(show, "show") for show in shows]}
 
     @api.get("/shows/{show_id}")
     async def get_show(show_id: int) -> dict[str, Any]:
         show = repository.get_show_detail(show_id)
         if show is None:
             raise HTTPException(status_code=404, detail="短剧不存在")
-        return {"show": show}
+        return {"show": localize_media(show, "show")}
 
     @api.patch("/shows/{show_id}")
     async def update_show(show_id: int, payload: UpdateShowPayload) -> dict[str, Any]:
@@ -130,7 +175,7 @@ def create_short_drama_router(
             show = repository.merge_show(payload.source_show_id, target_show_id)
         except (ValueError, KeyError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return {"show": show}
+        return {"show": localize_media(show, "show")}
 
     @api.get("/shows/{show_id}/seasons")
     async def list_show_seasons(show_id: int) -> dict[str, Any]:
@@ -210,7 +255,7 @@ def create_short_drama_router(
             show = pipeline.ignore_show(show_id, reason=payload.reason if payload else None)
         except (ValueError, KeyError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return {"show": show}
+        return {"show": localize_media(show, "show")}
 
     @api.post("/shows/{show_id}/restore")
     async def restore_show(show_id: int) -> dict[str, Any]:
@@ -283,7 +328,7 @@ def create_short_drama_router(
 
     @api.get("/accounts")
     async def list_accounts() -> dict[str, Any]:
-        return {"accounts": repository.list_accounts()}
+        return {"accounts": [localize_media(item, "account") for item in repository.list_accounts()]}
 
     @api.get("/settings/crawler")
     async def crawler_settings() -> dict[str, Any]:
@@ -483,7 +528,9 @@ def create_short_drama_router(
         page: int = Query(default=1, ge=1), page_size: int = Query(default=50, ge=1, le=200),
         limit: int | None = Query(default=None, ge=1, le=500),
     ) -> dict[str, Any]:
-        return repository.search_videos(needs_review=needs_review, classification_status=classification_status, account_id=account_id, show_id=show_id, parser_method=parser_method, parser_outdated=parser_outdated, content_type=content_type, q=q, date_from=date_from, date_to=date_to, page=page, page_size=min(limit or page_size, 200))
+        result = repository.search_videos(needs_review=needs_review, classification_status=classification_status, account_id=account_id, show_id=show_id, parser_method=parser_method, parser_outdated=parser_outdated, content_type=content_type, q=q, date_from=date_from, date_to=date_to, page=page, page_size=min(limit or page_size, 200))
+        result["videos"] = [localize_media(item, "video") for item in result["videos"]]
+        return result
 
     @api.post("/videos/{video_id}/reparse")
     async def reparse_video(video_id: int) -> dict[str, Any]:
