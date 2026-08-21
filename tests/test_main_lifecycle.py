@@ -31,22 +31,34 @@ class MainLifecycleTests(IsolatedAsyncioTestCase):
         runtime.start.assert_awaited_once()
         runtime.shutdown.assert_awaited_once()
 
+    async def test_app_exposes_legacy_mode_without_starting_it_by_default(self):
+        runtime = SimpleNamespace(
+            settings=SimpleNamespace(legacy_monitor_enabled=False, check_interval_minutes=10, admin_api_token=""),
+            repository=SimpleNamespace(), pipeline=SimpleNamespace(), dispatcher=SimpleNamespace(),
+            scheduler=SimpleNamespace(), history_backfill_worker=SimpleNamespace(), cookie_manager=SimpleNamespace(),
+            start=AsyncMock(), shutdown=AsyncMock(),
+        )
+        with patch.object(main.importlib, "import_module") as import_module:
+            application = main.create_app(runtime)
+        import_module.assert_not_called()
+        self.assertFalse(application.state.legacy_monitor_enabled)
+
     async def test_default_does_not_start_or_stop_legacy_monitor(self):
         runtime = SimpleNamespace(
             settings=SimpleNamespace(legacy_monitor_enabled=False),
             start=AsyncMock(),
             shutdown=AsyncMock(),
         )
-        legacy = SimpleNamespace(auto_resume=AsyncMock(), shutdown=AsyncMock())
+        legacy = SimpleNamespace(monitor_service=SimpleNamespace(auto_resume=AsyncMock(), shutdown=AsyncMock()))
         with patch.object(main, "SHORT_DRAMA_RUNTIME", runtime), patch.object(
-            main, "monitor_service", legacy
+            main, "_legacy_monitor_module", return_value=legacy
         ):
             await main.startup_monitor()
             await main.shutdown_monitor()
         runtime.start.assert_awaited_once()
         runtime.shutdown.assert_awaited_once()
-        legacy.auto_resume.assert_not_awaited()
-        legacy.shutdown.assert_not_awaited()
+        legacy.monitor_service.auto_resume.assert_not_awaited()
+        legacy.monitor_service.shutdown.assert_not_awaited()
 
     async def test_explicit_setting_keeps_legacy_lifecycle_available(self):
         runtime = SimpleNamespace(
@@ -54,11 +66,11 @@ class MainLifecycleTests(IsolatedAsyncioTestCase):
             start=AsyncMock(),
             shutdown=AsyncMock(),
         )
-        legacy = SimpleNamespace(auto_resume=AsyncMock(), shutdown=AsyncMock())
+        legacy = SimpleNamespace(monitor_service=SimpleNamespace(auto_resume=AsyncMock(), shutdown=AsyncMock()))
         with patch.object(main, "SHORT_DRAMA_RUNTIME", runtime), patch.object(
-            main, "monitor_service", legacy
+            main, "_legacy_monitor_module", return_value=legacy
         ):
             await main.startup_monitor()
             await main.shutdown_monitor()
-        legacy.auto_resume.assert_awaited_once()
-        legacy.shutdown.assert_awaited_once()
+        legacy.monitor_service.auto_resume.assert_awaited_once()
+        legacy.monitor_service.shutdown.assert_awaited_once()

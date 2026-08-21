@@ -167,7 +167,7 @@ Episode 1 --- * Notification
 
 已有 `data/monitor_users.json` 会在新 SQLite 数据库首次创建时自动迁移账号及已下载 aweme ID 基线，避免升级后重复解析和通知旧作品。SQLite 会原地增量迁移历史补全、Episode 0、多季、LLM 解析证据和短剧库管理字段，不需要删除数据库。
 
-旧 `/api/monitor` 路由暂时保留用于读取和迁移兼容，但旧 Monitor 的后台循环默认禁用。只有显式设置 `LEGACY_MONITOR_ENABLED=true` 时才会恢复旧调度；生产追更默认只由新 SQLite 短剧 scheduler 执行。
+旧 `/api/monitor` 路由通过独立的惰性兼容子应用保留：默认启动不会导入旧 crawler、JSON storage 或 notifier，只有实际访问兼容路由时才加载。旧 Monitor 的后台循环仍只有显式设置 `LEGACY_MONITOR_ENABLED=true` 才会启动；生产追更默认只运行新 SQLite 短剧 scheduler。
 
 ## Provider 和解析器
 

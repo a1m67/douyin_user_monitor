@@ -5,7 +5,7 @@ Security, delivery reliability, maintainability, long-running storage, and daily
 ## Progress
 
 - [x] Phase 1: Single-user web authentication and CSRF
-- [ ] Phase 2: Legacy monitor isolation
+- [x] Phase 2: Legacy monitor isolation
 - [ ] Phase 3: Reliable notification outbox
 - [ ] Phase 4: Complete web module split
 - [ ] Phase 5: Build identity and cache-safe PWA delivery
@@ -27,11 +27,11 @@ Security, delivery reliability, maintainability, long-running storage, and daily
 
 ### Phase 2
 
-- Status: pending
-- Main design: fully isolate legacy monitor routes/runtime while preserving explicit compatibility mode.
+- Status: complete
+- Main design: `/api/monitor` is mounted as an on-demand compatibility sub-application, so importing or starting the default app does not import/build the legacy crawler, JSON storage, notifier, or service. The legacy polling loop remains gated by `LEGACY_MONITOR_ENABLED`; compatibility routes load the old stack only when actually requested.
 - Schema changes: none expected.
-- Tests: pending.
-- Commit: pending.
+- Tests: default app construction proves no legacy import, lifecycle gating covers disabled/enabled modes, compatibility dashboard/avatar/statistics/history routes remain functional, and full suite.
+- Commit: recorded after implementation commit.
 - Production verification still needed: pending.
 
 ### Phase 3

@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+import importlib
 from typing import Any
 
 from fastapi import FastAPI
 from fastapi.responses import RedirectResponse
 
-from douyin_user_monitor.api.monitor import monitor_service, router as monitor_router
 from douyin_user_monitor.short_drama_runtime import (
     ShortDramaRuntime,
     build_short_drama_runtime,
@@ -36,11 +36,26 @@ class _RuntimeAttributeProxy:
         return getattr(target, name)
 
 
+class _LazyLegacyMonitorApp:
+    """Load the legacy stack only when a compatibility route is requested."""
+
+    def __init__(self) -> None:
+        self._app: FastAPI | None = None
+
+    async def __call__(self, scope, receive, send) -> None:
+        if self._app is None:
+            legacy = _legacy_monitor_module()
+            compatibility_app = FastAPI()
+            compatibility_app.include_router(legacy.router)
+            self._app = compatibility_app
+        await self._app(scope, receive, send)
+
+
 SHORT_DRAMA_RUNTIME: ShortDramaRuntime | None = None
 _DEFAULT_RUNTIME_HOLDER = _RuntimeHolder()
 
 
-def create_app(runtime: ShortDramaRuntime | None = None) -> FastAPI:
+def create_app(runtime: ShortDramaRuntime | None = None, *, include_legacy_routes: bool | None = None) -> FastAPI:
     holder = _RuntimeHolder(runtime)
     settings = runtime.settings if runtime is not None else load_short_drama_settings()
 
@@ -55,6 +70,7 @@ def create_app(runtime: ShortDramaRuntime | None = None) -> FastAPI:
             await shutdown_monitor(active_runtime)
 
     application = FastAPI(title="AI 短剧追更系统", version="1.0.0", lifespan=lifespan)
+    application.state.legacy_monitor_enabled = bool(getattr(settings, "legacy_monitor_enabled", False))
     auth_config = AppAuthConfig(
         enabled=getattr(settings, "app_auth_enabled", False),
         password=getattr(settings, "app_auth_password", ""),
@@ -65,7 +81,8 @@ def create_app(runtime: ShortDramaRuntime | None = None) -> FastAPI:
     )
     application.add_middleware(AppAuthMiddleware, config=auth_config)
     application.include_router(create_auth_router(auth_config))
-    application.include_router(monitor_router, prefix="/api/monitor", tags=["Monitor"])
+    if include_legacy_routes is not False:
+        application.mount("/api/monitor", _LazyLegacyMonitorApp(), name="legacy-monitor")
     application.include_router(
         create_short_drama_router(
             repository=_RuntimeAttributeProxy(holder, "repository"),
@@ -98,7 +115,7 @@ def _default_runtime() -> ShortDramaRuntime:
 async def startup_monitor(runtime: ShortDramaRuntime | None = None) -> None:
     active_runtime = runtime or _default_runtime()
     if active_runtime.settings.legacy_monitor_enabled:
-        await monitor_service.auto_resume()
+        await _legacy_monitor_module().monitor_service.auto_resume()
     await active_runtime.start()
 
 
@@ -106,4 +123,8 @@ async def shutdown_monitor(runtime: ShortDramaRuntime | None = None) -> None:
     active_runtime = runtime or _default_runtime()
     await active_runtime.shutdown()
     if active_runtime.settings.legacy_monitor_enabled:
-        await monitor_service.shutdown()
+        await _legacy_monitor_module().monitor_service.shutdown()
+
+
+def _legacy_monitor_module():
+    return importlib.import_module("douyin_user_monitor.api.monitor")
