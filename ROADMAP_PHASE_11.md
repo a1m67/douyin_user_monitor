@@ -12,8 +12,8 @@ short-drama tracker. Phases are implemented, tested, and committed in order.
 - [x] Phase 5: Web cookie management
 - [x] Phase 6: System diagnostics dashboard
 - [x] Phase 7: Data quality center
-- [ ] Phase 8: Mobile and PWA experience
-- [ ] Phase 9: Long-running SQLite performance
+- [x] Phase 8: Mobile and PWA experience
+- [x] Phase 9: Long-running SQLite performance
 
 ## Phase Records
 
@@ -98,5 +98,5 @@ and production behavior that has not yet been verified.
 - Main design: SQLite connections now consistently enable WAL, a 30-second busy timeout, and foreign keys. Query-plan-driven composite/expression indexes cover video pagination, update ordering, scan-run ordering, source ordering, and stale-Show quality checks. Show detail batches all EpisodeSource rows in one connection, quality reports count all issues while bounding materialized detail rows, and video pagination avoids an unnecessary GROUP BY sort. `python -m douyin_user_monitor db-stats [--checkpoint]` reports size, WAL, pages, row counts, and indexes without exposing row content; checkpoint remains explicitly operator-triggered and UpdateEvent retention is unchanged.
 - Schema changes: no version bump; schema remains v14. Existing databases receive additive `CREATE INDEX IF NOT EXISTS` changes during normal initialization after required column migrations.
 - Tests: focused maintenance/performance suite - 9 passed; repository/web/maintenance/performance regression - 59 passed; full suite - 202 passed. The synthetic database contains 100 accounts, 20,000 videos, 1,000 Shows, 10,000 Episodes, and 10,000 UpdateEvents and asserts plans/pagination rather than brittle wall-clock timing.
-- Commit: this phase commit (SHA recorded during final roadmap pass)
+- Commit: `8879bbf`
 - Not yet verified: WAL growth/checkpoint cadence and write contention under the production VPS filesystem and real scheduler concurrency.
