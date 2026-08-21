@@ -93,10 +93,67 @@ class ReparseResult:
     new_episode_count: int
 
 
+@dataclass
+class ParsingContextSnapshot:
+    known_shows: list[dict[str, Any]]
+    recent_account_videos: list[dict[str, Any]]
+    recent_account_matches: list[dict[str, Any]]
+    account_show_candidates: list[dict[str, Any]]
+
+    def without_video(self, video_id: int) -> tuple[Sequence[dict[str, Any]], Sequence[dict[str, Any]]]:
+        return (
+            tuple(item for item in self.recent_account_videos if int(item["id"]) != video_id),
+            tuple(item for item in self.recent_account_matches if int(item["id"]) != video_id),
+        )
+
+    def add_video(self, video: dict[str, Any], *, limit: int = 20) -> None:
+        existing = [
+            item
+            for item in self.recent_account_videos
+            if int(item["id"]) != int(video["id"])
+        ]
+        self.recent_account_videos = [video, *existing][:limit]
+
+    def add_match(
+        self,
+        *,
+        video: dict[str, Any],
+        show: dict[str, Any],
+        episode: dict[str, Any],
+        limit: int = 20,
+    ) -> None:
+        match = {
+            **video,
+            "show_id": int(show["id"]),
+            "show_title": str(show["title"]),
+            "aliases": list(show.get("aliases") or []),
+            "episode_number": int(episode["episode_number"]),
+        }
+        existing_matches = [
+            item
+            for item in self.recent_account_matches
+            if int(item["id"]) != int(video["id"])
+        ]
+        self.recent_account_matches = [match, *existing_matches][:limit]
+        self.known_shows = [
+            show,
+            *[item for item in self.known_shows if int(item["id"]) != int(show["id"])],
+        ]
+        existing_candidates = [
+            item
+            for item in self.account_show_candidates
+            if int(item["id"]) != int(show["id"])
+        ]
+        self.account_show_candidates = [show, *existing_candidates][:limit]
+
+
 @dataclass(frozen=True)
 class _VideoProcessingOutcome:
     status: str
     update: EpisodeUpdate | None
+    show: dict[str, Any] | None = None
+    episode: dict[str, Any] | None = None
+    video: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -438,7 +495,8 @@ class ShortDramaPipeline:
         if video["classification_status"] == MATCHED:
             raise ValueError("已匹配视频无需重新解析")
         account = self._require_account(str(video["account_id"]))
-        outcome = self._process_video(account=account, video=video)
+        context = self._build_parsing_context(str(account["id"]))
+        outcome = self._process_video(account=account, video=video, context=context)
         stored = self._repository.get_video(video_id)
         if stored is None:
             raise RuntimeError("重新解析后无法读取视频记录")
@@ -461,8 +519,10 @@ class ShortDramaPipeline:
         review_videos = 0
         ignored_videos = 0
         new_episode_count = 0
+        context = self._build_parsing_context(account_id)
         for video in videos:
-            outcome = self._process_video(account=account, video=video)
+            outcome = self._process_video(account=account, video=video, context=context)
+            self._update_parsing_context(context, outcome)
             if outcome.status == MATCHED:
                 matched_videos += 1
             elif outcome.status == REVIEW:
@@ -493,6 +553,7 @@ class ShortDramaPipeline:
         review_videos = 0
         ignored_videos = 0
         updates: list[EpisodeUpdate] = []
+        context = self._build_parsing_context(str(account["id"]))
 
         # Oldest first keeps episode creation and optional notifications ordered.
         for provider_video in sorted(provider_videos, key=lambda item: item.publish_time or ""):
@@ -537,18 +598,21 @@ class ShortDramaPipeline:
                     self._process_video,
                     account=account,
                     video=refreshed_video,
+                    context=context,
                     create_update_event=False,
                 )
                 if outcome.status == REVIEW:
                     review_videos += 1
                 elif outcome.status == IGNORED:
                     ignored_videos += 1
+                self._update_parsing_context(context, outcome)
                 continue
             new_videos += 1
             outcome = await asyncio.to_thread(
                 self._process_video,
                 account=account,
                 video=video,
+                context=context,
                 create_update_event=create_update_events,
             )
             if outcome.status == REVIEW:
@@ -557,6 +621,7 @@ class ShortDramaPipeline:
                 ignored_videos += 1
             if collect_updates and outcome.update is not None:
                 updates.append(outcome.update)
+            self._update_parsing_context(context, outcome)
         return _VideoBatchResult(
             new_videos=new_videos,
             duplicate_videos=duplicate_videos,
@@ -565,11 +630,40 @@ class ShortDramaPipeline:
             updates=tuple(updates),
         )
 
+    def _build_parsing_context(self, account_id: str) -> ParsingContextSnapshot:
+        return ParsingContextSnapshot(
+            known_shows=self._repository.list_show_candidates(),
+            recent_account_videos=self._repository.list_recent_account_videos(
+                account_id, limit=20
+            ),
+            recent_account_matches=self._repository.list_recent_account_matches(
+                account_id, limit=20
+            ),
+            account_show_candidates=self._repository.list_account_show_candidates(
+                account_id, limit=20
+            ),
+        )
+
+    @staticmethod
+    def _update_parsing_context(
+        context: ParsingContextSnapshot, outcome: _VideoProcessingOutcome
+    ) -> None:
+        if outcome.video is None:
+            return
+        context.add_video(outcome.video)
+        if outcome.show is not None and outcome.episode is not None:
+            context.add_match(
+                video=outcome.video,
+                show=outcome.show,
+                episode=outcome.episode,
+            )
+
     def _process_video(
         self,
         *,
         account: dict[str, Any],
         video: dict[str, Any],
+        context: ParsingContextSnapshot | None = None,
         create_update_event: bool = False,
     ) -> _VideoProcessingOutcome:
         text_metadata = build_video_text_metadata(
@@ -592,16 +686,10 @@ class ShortDramaPipeline:
             description=str(video.get("description") or ""),
             hashtags=video.get("hashtags") or (),
             account_nickname=str(account["nickname"]),
-            known_shows=self._repository.list_show_candidates(),
-            recent_account_videos=self._repository.list_recent_account_videos(
-                str(account["id"]), limit=20, exclude_video_id=int(video["id"])
-            ),
-            recent_account_matches=self._repository.list_recent_account_matches(
-                str(account["id"]), limit=20, exclude_video_id=int(video["id"])
-            ),
-            account_show_candidates=self._repository.list_account_show_candidates(
-                str(account["id"]), limit=20
-            ),
+            known_shows=context.known_shows if context else self._repository.list_show_candidates(),
+            recent_account_videos=(context.without_video(int(video["id"]))[0] if context else self._repository.list_recent_account_videos(str(account["id"]), limit=20, exclude_video_id=int(video["id"]))),
+            recent_account_matches=(context.without_video(int(video["id"]))[1] if context else self._repository.list_recent_account_matches(str(account["id"]), limit=20, exclude_video_id=int(video["id"]))),
+            account_show_candidates=context.account_show_candidates if context else self._repository.list_account_show_candidates(str(account["id"]), limit=20),
             text_sources=text_metadata.text_sources,
         )
         if parsed.status == REVIEW and video.get("cover_url") and (
@@ -622,9 +710,9 @@ class ShortDramaPipeline:
                 ocr_parsed = self._parser.parse(
                     display_title=ocr_text, description=ocr_text, hashtags=(),
                     account_nickname=str(account["nickname"]),
-                    known_shows=self._repository.list_show_candidates(),
+                    known_shows=context.known_shows if context else self._repository.list_show_candidates(),
                     recent_account_videos=(), recent_account_matches=(),
-                    account_show_candidates=self._repository.list_account_show_candidates(str(account["id"]), limit=20),
+                    account_show_candidates=context.account_show_candidates if context else self._repository.list_account_show_candidates(str(account["id"]), limit=20),
                     text_sources={"ocr": ocr_text},
                 )
                 if ocr_parsed.status == MATCHED and ocr_parsed.show_title and ocr_parsed.episode_number is not None:
@@ -642,7 +730,7 @@ class ShortDramaPipeline:
                 ignored_show=ignored_show,
                 candidate_title=candidate_title,
             )
-            return _VideoProcessingOutcome(status=IGNORED, update=None)
+            return _VideoProcessingOutcome(status=IGNORED, update=None, video=video)
         if parsed.status == IGNORED:
             logger.info(
                 "[parse] ignored aweme_id=%s reason=%s method=%s",
@@ -668,7 +756,7 @@ class ShortDramaPipeline:
                 parser_evidence=parsed.evidence,
                 llm_raw_result=parsed.llm_raw_result,
             )
-            return _VideoProcessingOutcome(status=IGNORED, update=None)
+            return _VideoProcessingOutcome(status=IGNORED, update=None, video=video)
 
         if (
             parsed.status == REVIEW
@@ -704,7 +792,7 @@ class ShortDramaPipeline:
                 parser_evidence=parsed.evidence,
                 llm_raw_result=parsed.llm_raw_result,
             )
-            return _VideoProcessingOutcome(status=REVIEW, update=None)
+            return _VideoProcessingOutcome(status=REVIEW, update=None, video=video)
 
         logger.info(
             "[parse] accepted aweme_id=%s title=%s episode=%s method=%s confidence=%.2f",
@@ -722,7 +810,7 @@ class ShortDramaPipeline:
                 ignored_show=show,
                 candidate_title=candidate_title,
             )
-            return _VideoProcessingOutcome(status=IGNORED, update=None)
+            return _VideoProcessingOutcome(status=IGNORED, update=None, video=video)
         try:
             write = self._repository.record_episode_source(
                 show_id=int(show["id"]),
@@ -751,7 +839,7 @@ class ShortDramaPipeline:
                 ignored_show=refreshed_show,
                 candidate_title=candidate_title,
             )
-            return _VideoProcessingOutcome(status=IGNORED, update=None)
+            return _VideoProcessingOutcome(status=IGNORED, update=None, video=video)
         processed_video = self._repository.update_video_processing(
             int(video["id"]),
             is_processed=True,
@@ -773,6 +861,9 @@ class ShortDramaPipeline:
         return _VideoProcessingOutcome(
             status=MATCHED,
             update=_episode_update_if_new(show, write, processed_video, account),
+            show=show,
+            episode=write.episode,
+            video=processed_video,
         )
 
     def _find_or_create_show(self, title: str, matched_show_id: int | None) -> dict[str, Any]:

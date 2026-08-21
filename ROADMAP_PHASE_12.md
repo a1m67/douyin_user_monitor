@@ -10,7 +10,7 @@ tested, and committed independently without pushing during the phase.
 - [x] Phase 2: Reliable Douyin empty-page handling
 - [x] Phase 3: Central Douyin request protection
 - [x] Phase 4: Normalized Show aliases
-- [ ] Phase 5: Batch parser context snapshots
+- [x] Phase 5: Batch parser context snapshots
 - [ ] Phase 6: SQLite and scheduler concurrency
 - [ ] Phase 7: Parser execution metrics
 - [ ] Phase 8: Episode watch progress
@@ -56,12 +56,12 @@ tested, and committed independently without pushing during the phase.
 
 ### Phase 5
 
-- Status: pending
-- Main design: pending
-- Schema changes: pending
-- Tests: pending
-- Commit: pending
-- Production verification still needed: pending
+- Status: complete
+- Main design: `ParsingContextSnapshot` is built once per incremental sync, once per history page, and once per reparse batch. It carries known Shows, recent account videos/matches, and account candidates; successful matches update the in-memory windows so later videos in the same batch can use newly created context.
+- Schema changes: none.
+- Tests: repository context query-count assertions, same-batch bare-episode context resolution, history/pipeline regression, reparse snapshot reuse, and full suite.
+- Commit: `perf: reuse parser context per video batch` (SHA recorded after commit)
+- Production verification still needed: compare SQL statement counts and parser latency on a copied production-sized database before/after deployment.
 
 ### Phase 6
 

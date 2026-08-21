@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 from douyin_user_monitor.providers.base import (
@@ -484,7 +485,8 @@ class ShortDramaPipelineTests(unittest.IsolatedAsyncioTestCase):
             parser_reason="legacy_ignored",
         )
 
-        result = self.pipeline.reparse_account(account["id"], scope="legacy_ignored")
+        with patch.object(self.repository, "list_show_candidates", wraps=self.repository.list_show_candidates) as shows, patch.object(self.repository, "list_recent_account_videos", wraps=self.repository.list_recent_account_videos) as videos, patch.object(self.repository, "list_recent_account_matches", wraps=self.repository.list_recent_account_matches) as matches, patch.object(self.repository, "list_account_show_candidates", wraps=self.repository.list_account_show_candidates) as candidates:
+            result = self.pipeline.reparse_account(account["id"], scope="legacy_ignored")
         reparsed = self.repository.get_video(legacy["id"])
         show = self.repository.get_show_by_normalized_title("国王战")
 
@@ -495,9 +497,37 @@ class ShortDramaPipelineTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(reparsed["classification_status"], "matched")
         self.assertEqual(reparsed["parser_method"], "context:account_sequence")
         self.assertEqual(show["latest_episode"], 39)
+        self.assertEqual((shows.call_count, videos.call_count, matches.call_count, candidates.call_count), (1, 1, 1, 1))
         repeated = self.pipeline.reparse_account(account["id"], scope="legacy_ignored")
         self.assertEqual(repeated.requested_videos, 0)
         self.assertEqual(len(self.repository.get_show_episodes(show["id"])), 3)
+
+    async def test_sync_builds_parser_context_once_per_batch(self):
+        self.provider.videos_by_sec_uid["sec-one"] = [
+            make_video("snapshot-1", "《归墟》第1集", 1),
+            make_video("snapshot-2", "《归墟》第2集", 2),
+            make_video("snapshot-3", "《归墟》第3集", 3),
+        ]
+        account, _ = await self.pipeline.add_account(self.account_one_provider.homepage_url)
+        with patch.object(self.repository, "list_show_candidates", wraps=self.repository.list_show_candidates) as shows, patch.object(self.repository, "list_recent_account_videos", wraps=self.repository.list_recent_account_videos) as videos, patch.object(self.repository, "list_recent_account_matches", wraps=self.repository.list_recent_account_matches) as matches, patch.object(self.repository, "list_account_show_candidates", wraps=self.repository.list_account_show_candidates) as candidates:
+            result = await self.pipeline.sync_account(account["id"])
+        self.assertEqual(result.new_videos, 3)
+        self.assertEqual((shows.call_count, videos.call_count, matches.call_count, candidates.call_count), (1, 1, 1, 1))
+
+    async def test_later_bare_episode_uses_matches_created_in_same_batch(self):
+        self.provider.videos_by_sec_uid["sec-one"] = [
+            make_video("snapshot-context-3", "3 本视频由小云雀Seedance2.0创作生成", 3),
+            make_video("snapshot-context-2", "《归墟》第2集", 2),
+            make_video("snapshot-context-1", "《归墟》第1集", 1),
+        ]
+        account, _ = await self.pipeline.add_account(self.account_one_provider.homepage_url)
+        result = await self.pipeline.sync_account(account["id"])
+        third = self.repository.get_video_by_aweme_id("snapshot-context-3")
+        show = self.repository.get_show_by_normalized_title("归墟")
+        self.assertEqual(result.new_videos, 3)
+        self.assertEqual(third["classification_status"], "matched")
+        self.assertEqual(third["parser_method"], "context:account_sequence")
+        self.assertEqual(show["latest_episode"], 3)
 
     async def test_reparse_rebuilds_confirmed_title_sources_from_stored_raw_json(self):
         account, _ = await self.pipeline.add_account(self.account_one_provider.homepage_url)
