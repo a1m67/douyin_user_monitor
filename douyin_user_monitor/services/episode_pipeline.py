@@ -397,6 +397,15 @@ class ShortDramaPipeline:
     def ignore_reviews(self, video_ids: list[int]) -> int:
         return self._repository.ignore_review_videos(video_ids)
 
+    def ignore_videos(self, video_ids: list[int]) -> int:
+        return self._repository.ignore_videos(video_ids)
+
+    def reparse_videos(self, video_ids: list[int]) -> list[ReparseVideoResult]:
+        results: list[ReparseVideoResult] = []
+        for video_id in dict.fromkeys(video_ids):
+            results.append(self.reparse_video(video_id))
+        return results
+
     def ignore_show(self, show_id: int, *, reason: str | None = None) -> dict[str, Any]:
         return self._repository.ignore_show(show_id, reason=reason)
 

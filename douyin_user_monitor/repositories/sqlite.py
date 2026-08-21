@@ -15,7 +15,7 @@ from douyin_user_monitor.parsers.regex import normalize_title
 from douyin_user_monitor.maintenance import backup_database
 
 
-SCHEMA_VERSION = 13
+SCHEMA_VERSION = 14
 SHOW_STATUSES = frozenset({"updating", "completed", "paused"})
 VIDEO_CLASSIFICATIONS = frozenset({"matched", "ignored", "review"})
 VIDEO_CONTENT_TYPES = frozenset({"episode", "trailer", "show_content", "unknown", "non_drama"})
@@ -252,6 +252,14 @@ class ShortDramaRepository:
                 UNIQUE(episode_id, event_type)
             );
 
+            CREATE TABLE IF NOT EXISTS manual_corrections (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                operation_type TEXT NOT NULL,
+                old_value TEXT NOT NULL DEFAULT '{}',
+                new_value TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL
+            );
+
             CREATE INDEX IF NOT EXISTS idx_accounts_due
                 ON accounts(enabled, next_check_at);
             CREATE INDEX IF NOT EXISTS idx_videos_account_created
@@ -275,6 +283,8 @@ class ShortDramaRepository:
                 ON update_events(read_at, occurred_at DESC);
             CREATE INDEX IF NOT EXISTS idx_update_events_show
                 ON update_events(show_id, occurred_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_manual_corrections_created
+                ON manual_corrections(created_at DESC, id DESC);
             """
         )
 
@@ -1860,6 +1870,10 @@ class ShortDramaRepository:
             source_episodes = connection.execute(
                 "SELECT id, season_number, episode_number FROM episodes WHERE show_id = ?", (source_show_id,)
             ).fetchall()
+            connection.execute(
+                "UPDATE update_events SET show_id = ? WHERE show_id = ?",
+                (target_show_id, source_show_id),
+            )
             for source_episode in source_episodes:
                 source_episode_id = int(source_episode["id"])
                 season_number = int(source_episode["season_number"])
@@ -1878,6 +1892,8 @@ class ShortDramaRepository:
                     "UPDATE episode_sources SET episode_id = ? WHERE episode_id = ?",
                     (target_episode_id, source_episode_id),
                 )
+                self._merge_update_event(connection, source_episode_id, target_episode_id,
+                                         target_show_id, season_number, episode_number)
                 connection.execute(
                     """
                     UPDATE notifications
@@ -1915,10 +1931,180 @@ class ShortDramaRepository:
             for episode_row in target_episode_rows:
                 self._repair_episode_first_source(connection, int(episode_row["id"]))
             self._refresh_show_latest(connection, {target_show_id})
+            self._record_correction(connection, "merge_show",
+                                    {"show_id": source_show_id}, {"show_id": target_show_id})
             row = connection.execute("SELECT * FROM shows WHERE id = ?", (target_show_id,)).fetchone()
             if row is None:
                 raise RuntimeError("合并短剧后无法读取保留短剧")
             return _show_row(row)
+
+    def _record_correction(self, connection: sqlite3.Connection, operation_type: str,
+                           old_value: Mapping[str, Any], new_value: Mapping[str, Any]) -> None:
+        connection.execute(
+            "INSERT INTO manual_corrections(operation_type,old_value,new_value,created_at) VALUES (?,?,?,?)",
+            (operation_type, json.dumps(dict(old_value), ensure_ascii=False),
+             json.dumps(dict(new_value), ensure_ascii=False), utc_now()),
+        )
+
+    def _merge_update_event(self, connection: sqlite3.Connection, source_episode_id: int,
+                            target_episode_id: int, show_id: int, season_number: int,
+                            episode_number: int) -> None:
+        source = connection.execute(
+            "SELECT * FROM update_events WHERE episode_id=? AND event_type='new_episode'",
+            (source_episode_id,),
+        ).fetchone()
+        if source is None:
+            return
+        target = connection.execute(
+            "SELECT * FROM update_events WHERE episode_id=? AND event_type='new_episode'",
+            (target_episode_id,),
+        ).fetchone()
+        if target is None:
+            connection.execute(
+                "UPDATE update_events SET episode_id=?,show_id=?,season_number=?,episode_number=? WHERE id=?",
+                (target_episode_id, show_id, season_number, episode_number, source["id"]),
+            )
+            return
+        occurred_at = min(str(source["occurred_at"]), str(target["occurred_at"]))
+        read_at = None if source["read_at"] is None or target["read_at"] is None else max(str(source["read_at"]), str(target["read_at"]))
+        connection.execute(
+            "UPDATE update_events SET occurred_at=?,read_at=? WHERE id=?",
+            (occurred_at, read_at, target["id"]),
+        )
+        connection.execute("DELETE FROM update_events WHERE id=?", (source["id"],))
+
+    def move_episode(self, episode_id: int, *, target_show_id: int,
+                     season_number: int, episode_number: int) -> dict[str, Any]:
+        if season_number < 1 or episode_number < 0:
+            raise ValueError("季数必须大于零，集数不能小于零")
+        with self._transaction() as connection:
+            episode = connection.execute("SELECT * FROM episodes WHERE id=?", (episode_id,)).fetchone()
+            if episode is None:
+                raise KeyError("剧集不存在")
+            if connection.execute("SELECT id FROM shows WHERE id=?", (target_show_id,)).fetchone() is None:
+                raise KeyError("目标短剧不存在")
+            old_show_id = int(episode["show_id"])
+            old = {"episode_id": episode_id, "show_id": old_show_id,
+                   "season_number": int(episode["season_number"]),
+                   "episode_number": int(episode["episode_number"])}
+            target = connection.execute(
+                "SELECT * FROM episodes WHERE show_id=? AND season_number=? AND episode_number=? AND id!=?",
+                (target_show_id, season_number, episode_number, episode_id),
+            ).fetchone()
+            final_id = episode_id
+            if target is None:
+                connection.execute(
+                    "UPDATE episodes SET show_id=?,season_number=?,episode_number=? WHERE id=?",
+                    (target_show_id, season_number, episode_number, episode_id),
+                )
+                connection.execute("UPDATE notifications SET show_id=? WHERE episode_id=?",
+                                   (target_show_id, episode_id))
+                connection.execute(
+                    "UPDATE update_events SET show_id=?,season_number=?,episode_number=? WHERE episode_id=?",
+                    (target_show_id, season_number, episode_number, episode_id),
+                )
+            else:
+                final_id = int(target["id"])
+                connection.execute("UPDATE episode_sources SET episode_id=? WHERE episode_id=?",
+                                   (final_id, episode_id))
+                connection.execute("UPDATE notifications SET episode_id=?,show_id=? WHERE episode_id=?",
+                                   (final_id, target_show_id, episode_id))
+                self._merge_update_event(connection, episode_id, final_id, target_show_id,
+                                         season_number, episode_number)
+                connection.execute("DELETE FROM episodes WHERE id=?", (episode_id,))
+            self._repair_episode_first_source(connection, final_id)
+            self._refresh_show_latest(connection, {old_show_id, target_show_id})
+            new = {"episode_id": final_id, "show_id": target_show_id,
+                   "season_number": season_number, "episode_number": episode_number}
+            self._record_correction(connection, "move_episode", old, new)
+        return {"episode_id": final_id, "merged": final_id != episode_id,
+                "show": self.get_show_detail(target_show_id)}
+
+    def move_episode_source(self, source_id: int, *, target_show_id: int,
+                            season_number: int, episode_number: int) -> dict[str, Any]:
+        if season_number < 1 or episode_number < 0:
+            raise ValueError("季数必须大于零，集数不能小于零")
+        with self._transaction() as connection:
+            source = connection.execute(
+                "SELECT episode_sources.*,episodes.show_id,episodes.season_number AS old_season,episodes.episode_number AS old_episode FROM episode_sources JOIN episodes ON episodes.id=episode_sources.episode_id WHERE episode_sources.id=?",
+                (source_id,),
+            ).fetchone()
+            if source is None:
+                raise KeyError("剧集来源不存在")
+            if connection.execute("SELECT id FROM shows WHERE id=?", (target_show_id,)).fetchone() is None:
+                raise KeyError("目标短剧不存在")
+            old_episode_id, old_show_id = int(source["episode_id"]), int(source["show_id"])
+            target = connection.execute(
+                "SELECT id FROM episodes WHERE show_id=? AND season_number=? AND episode_number=?",
+                (target_show_id, season_number, episode_number),
+            ).fetchone()
+            if target is None:
+                cursor = connection.execute(
+                    "INSERT INTO episodes(show_id,season_number,episode_number,first_video_id,first_account_id,published_at,created_at) VALUES (?,?,?,?,?,?,?)",
+                    (target_show_id, season_number, episode_number, source["video_id"],
+                     source["account_id"], source["published_at"], utc_now()),
+                )
+                target_episode_id = int(cursor.lastrowid)
+            else:
+                target_episode_id = int(target["id"])
+            connection.execute("UPDATE episode_sources SET episode_id=? WHERE id=?",
+                               (target_episode_id, source_id))
+            remaining = int(connection.execute(
+                "SELECT COUNT(*) FROM episode_sources WHERE episode_id=?", (old_episode_id,)
+            ).fetchone()[0])
+            if remaining:
+                self._repair_episode_first_source(connection, old_episode_id)
+            else:
+                connection.execute("DELETE FROM episodes WHERE id=?", (old_episode_id,))
+            self._repair_episode_first_source(connection, target_episode_id)
+            self._refresh_show_latest(connection, {old_show_id, target_show_id})
+            self._record_correction(connection, "move_episode_source",
+                {"source_id": source_id, "show_id": old_show_id, "season_number": source["old_season"], "episode_number": source["old_episode"]},
+                {"source_id": source_id, "show_id": target_show_id, "season_number": season_number, "episode_number": episode_number})
+        return {"source_id": source_id, "episode_id": target_episode_id,
+                "old_episode_removed": not bool(remaining),
+                "show": self.get_show_detail(target_show_id)}
+
+    def batch_update_episode_season(self, episode_ids: Sequence[int], season_number: int) -> int:
+        if not episode_ids or season_number < 1:
+            raise ValueError("请选择剧集并提供有效季数")
+        moved = 0
+        for episode_id in dict.fromkeys(int(value) for value in episode_ids):
+            with self._transaction() as connection:
+                row = connection.execute("SELECT show_id,episode_number FROM episodes WHERE id=?", (episode_id,)).fetchone()
+            if row is None:
+                raise KeyError("剧集不存在")
+            self.move_episode(episode_id, target_show_id=int(row["show_id"]),
+                              season_number=season_number, episode_number=int(row["episode_number"]))
+            moved += 1
+        return moved
+
+    def ignore_videos(self, video_ids: Sequence[int]) -> int:
+        ids = list(dict.fromkeys(int(value) for value in video_ids))
+        if not ids:
+            return 0
+        with self._transaction() as connection:
+            placeholders = ",".join("?" for _ in ids)
+            rows = connection.execute(
+                f"SELECT es.id,es.episode_id,e.show_id FROM episode_sources es JOIN episodes e ON e.id=es.episode_id WHERE es.video_id IN ({placeholders})", ids
+            ).fetchall()
+            affected_episodes = {int(row["episode_id"]) for row in rows}
+            affected_shows = {int(row["show_id"]) for row in rows}
+            connection.execute(f"DELETE FROM episode_sources WHERE video_id IN ({placeholders})", ids)
+            for episode_id in affected_episodes:
+                if int(connection.execute("SELECT COUNT(*) FROM episode_sources WHERE episode_id=?", (episode_id,)).fetchone()[0]):
+                    self._repair_episode_first_source(connection, episode_id)
+                else:
+                    connection.execute("DELETE FROM episodes WHERE id=?", (episode_id,))
+            self._mark_removed_videos(connection, ids, parser_reason="manual_batch_ignore")
+            self._refresh_show_latest(connection, affected_shows)
+            self._record_correction(connection, "batch_ignore_videos", {"video_ids": ids}, {"classification_status": "ignored"})
+            return int(connection.execute(f"SELECT COUNT(*) FROM videos WHERE id IN ({placeholders})", ids).fetchone()[0])
+
+    def list_manual_corrections(self, limit: int = 100) -> list[dict[str, Any]]:
+        with self._transaction() as connection:
+            rows = connection.execute("SELECT * FROM manual_corrections ORDER BY id DESC LIMIT ?", (max(1, min(limit, 500)),)).fetchall()
+        return [{**dict(row), "old_value": json.loads(row["old_value"]), "new_value": json.loads(row["new_value"])} for row in rows]
 
     def repair_episode_and_show_consistency(self) -> dict[str, int]:
         """Rebuild canonical episode sources and cached show metadata safely."""

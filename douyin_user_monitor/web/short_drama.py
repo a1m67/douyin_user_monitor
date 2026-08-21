@@ -77,6 +77,27 @@ class BatchIgnoreReviewPayload(BaseModel):
     video_ids: list[int] = Field(min_length=1, max_length=500)
 
 
+class MoveEpisodePayload(BaseModel):
+    target_show_id: int = Field(gt=0)
+    season_number: int = Field(ge=1, le=1000)
+    episode_number: int = Field(ge=0, le=100000)
+
+
+class MoveEpisodeSourcePayload(BaseModel):
+    target_show_id: int = Field(gt=0)
+    season_number: int = Field(ge=1, le=1000)
+    episode_number: int = Field(ge=0, le=100000)
+
+
+class BatchEpisodeSeasonPayload(BaseModel):
+    episode_ids: list[int] = Field(min_length=1, max_length=500)
+    season_number: int = Field(ge=1, le=1000)
+
+
+class BatchVideoPayload(BaseModel):
+    video_ids: list[int] = Field(min_length=1, max_length=500)
+
+
 class ReparseAccountPayload(BaseModel):
     scope: str = Field(
         default="legacy_ignored",
@@ -294,6 +315,31 @@ def create_short_drama_router(
         except (ValueError, KeyError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    @api.post("/episodes/{episode_id}/move")
+    async def move_episode(episode_id: int, payload: MoveEpisodePayload) -> dict[str, Any]:
+        try:
+            return {"result": repository.move_episode(episode_id, **payload.model_dump())}
+        except (ValueError, KeyError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @api.post("/episode-sources/{source_id}/move")
+    async def move_episode_source(source_id: int, payload: MoveEpisodeSourcePayload) -> dict[str, Any]:
+        try:
+            return {"result": repository.move_episode_source(source_id, **payload.model_dump())}
+        except (ValueError, KeyError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @api.post("/episodes/batch-season")
+    async def batch_episode_season(payload: BatchEpisodeSeasonPayload) -> dict[str, int]:
+        try:
+            return {"updated_count": repository.batch_update_episode_season(payload.episode_ids, payload.season_number)}
+        except (ValueError, KeyError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @api.get("/corrections")
+    async def list_corrections(limit: int = Query(default=100, ge=1, le=500)) -> dict[str, Any]:
+        return {"corrections": repository.list_manual_corrections(limit)}
+
     @api.delete("/shows/{show_id}/episodes/{episode_id}/sources/{source_id}")
     async def remove_episode_source(
         show_id: int, episode_id: int, source_id: int
@@ -433,6 +479,21 @@ def create_short_drama_router(
             "status": result.status,
             "new_episode": result.new_episode,
         }
+
+    @api.post("/videos/batch-ignore")
+    async def batch_ignore_videos(payload: BatchVideoPayload) -> dict[str, int]:
+        return {"ignored_count": pipeline.ignore_videos(payload.video_ids)}
+
+    @api.post("/videos/batch-reparse")
+    async def batch_reparse_videos(payload: BatchVideoPayload) -> dict[str, Any]:
+        try:
+            results = await asyncio.to_thread(pipeline.reparse_videos, payload.video_ids)
+        except (ValueError, KeyError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"reparsed_count": len(results), "results": [
+            {"video": item.video, "status": item.status, "new_episode": item.new_episode}
+            for item in results
+        ]}
 
     @api.post("/reviews/batch-ignore")
     async def batch_ignore_reviews(payload: BatchIgnoreReviewPayload) -> dict[str, Any]:

@@ -1034,5 +1034,61 @@ class ShortDramaRepositoryTests(unittest.TestCase):
         self.assertEqual(refreshed["show_title_candidate"], "候选剧")
 
 
+    def test_move_episode_merges_conflict_and_keeps_sources_events_and_latest(self):
+        account = self.create_account()
+        source_show = self.repository.create_show(title="源剧", normalized_title="源剧")
+        target_show = self.repository.create_show(title="目标剧", normalized_title="目标剧")
+        first = self.create_video_at(account["id"], "move-first", "2026-08-01T00:00:00+00:00")
+        second = self.create_video_at(account["id"], "move-second", "2026-08-02T00:00:00+00:00")
+        source_write = self.repository.record_episode_source(
+            show_id=source_show["id"], season_number=1, episode_number=9,
+            video_id=first["id"], account_id=account["id"], published_at=first["publish_time"],
+            create_update_event=True,
+        )
+        target_write = self.repository.record_episode_source(
+            show_id=target_show["id"], season_number=2, episode_number=1,
+            video_id=second["id"], account_id=account["id"], published_at=second["publish_time"],
+            create_update_event=True,
+        )
+
+        result = self.repository.move_episode(
+            source_write.episode["id"], target_show_id=target_show["id"],
+            season_number=2, episode_number=1,
+        )
+
+        self.assertTrue(result["merged"])
+        self.assertEqual(len(self.repository.get_episode_sources(target_write.episode["id"])), 2)
+        self.assertEqual(self.repository.get_show(source_show["id"])["latest_episode"], None)
+        self.assertEqual(self.repository.get_show(target_show["id"])["latest_season"], 2)
+        self.assertEqual(self.repository.list_update_events(following_only=False)["total"], 1)
+        self.assertEqual(self.repository.list_manual_corrections()[0]["operation_type"], "move_episode")
+
+    def test_move_single_source_and_batch_ignore_recalculate_episodes(self):
+        account = self.create_account()
+        source_show = self.repository.create_show(title="甲剧", normalized_title="甲剧")
+        target_show = self.repository.create_show(title="乙剧", normalized_title="乙剧")
+        first = self.create_video(account["id"], "source-first")
+        second = self.create_video(account["id"], "source-second")
+        write = self.repository.record_episode_source(
+            show_id=source_show["id"], episode_number=3, video_id=first["id"],
+            account_id=account["id"], published_at=first["publish_time"],
+        )
+        second_write = self.repository.record_episode_source(
+            show_id=source_show["id"], episode_number=3, video_id=second["id"],
+            account_id=account["id"], published_at=second["publish_time"],
+        )
+        moved = self.repository.move_episode_source(
+            second_write.source["id"], target_show_id=target_show["id"],
+            season_number=2, episode_number=4,
+        )
+        self.assertFalse(moved["old_episode_removed"])
+        self.assertEqual(len(self.repository.get_episode_sources(write.episode["id"])), 1)
+        self.assertEqual(self.repository.get_show(target_show["id"])["latest_episode"], 4)
+
+        self.assertEqual(self.repository.ignore_videos([second["id"]]), 1)
+        self.assertEqual(self.repository.get_show(target_show["id"])["latest_episode"], None)
+        self.assertEqual(self.repository.get_video(second["id"])["classification_status"], "ignored")
+
+
 if __name__ == "__main__":
     unittest.main()

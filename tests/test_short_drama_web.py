@@ -530,5 +530,25 @@ class ShortDramaWebTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.json()["result"]["matched_videos"], 1)
 
 
+    async def test_advanced_correction_and_batch_video_endpoints(self):
+        show = self.repository.list_shows()[0]
+        episode = self.repository.get_show_episodes(show["id"])[0]
+        moved = self.client.post(
+            f"/api/short-drama/episodes/{episode['id']}/move",
+            json={"target_show_id": show["id"], "season_number": 2, "episode_number": 1},
+        )
+        self.assertEqual(moved.status_code, 200)
+        self.assertEqual(moved.json()["result"]["show"]["latest_season"], 2)
+        corrections = self.client.get("/api/short-drama/corrections").json()["corrections"]
+        self.assertEqual(corrections[0]["operation_type"], "move_episode")
+        video_id = self.repository.list_videos()[0]["id"]
+        ignored = self.client.post("/api/short-drama/videos/batch-ignore", json={"video_ids": [video_id]})
+        self.assertEqual(ignored.status_code, 200)
+        self.assertEqual(ignored.json()["ignored_count"], 1)
+        reparsed = self.client.post("/api/short-drama/videos/batch-reparse", json={"video_ids": [video_id]})
+        self.assertEqual(reparsed.status_code, 200)
+        self.assertEqual(reparsed.json()["reparsed_count"], 1)
+
+
 if __name__ == "__main__":
     unittest.main()

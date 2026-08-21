@@ -8,7 +8,7 @@ short-drama tracker. Phases are implemented, tested, and committed in order.
 - [x] Phase 1: Smart Douyin account and share-link input
 - [x] Phase 2: Personal show following
 - [x] Phase 3: Episode update feed and unread state
-- [ ] Phase 4: Advanced episode corrections
+- [x] Phase 4: Advanced episode corrections
 - [ ] Phase 5: Web cookie management
 - [ ] Phase 6: System diagnostics dashboard
 - [ ] Phase 7: Data quality center
@@ -44,17 +44,17 @@ and production behavior that has not yet been verified.
 - Main design: New Episodes discovered by normal incremental scans create one transactional `new_episode` event. Initial sync, history backfill, manual corrections, and additional sources do not create events. The `/updates` feed supports following and unread filters, per-event/read-all actions, an unread navigation count, and marks a Show's events read when its detail page is opened.
 - Schema changes: schema v13 adds `update_events` with a unique `(episode_id, event_type)` key and indexes for time, unread, and Show lookups. Existing Episodes are not backfilled, so migration creates no false unread state.
 - Tests: focused pipeline/repository/web suite - 62 passed; full suite - 186 passed.
-- Commit: this phase commit (SHA recorded during final roadmap pass)
+- Commit: `913c5b2`
 - Not yet verified: production incremental scan event creation and the update-feed layout with real long-running data.
 
 ### Phase 4
 
-- Status: pending
-- Main design: pending
-- Schema changes: pending
-- Tests: pending
-- Commit: pending
-- Not yet verified: pending
+- Status: complete
+- Main design: Transactional Episode and EpisodeSource moves support cross-Show/season/number corrections and deterministic conflict merging. Notifications are only relinked, update events are reconciled without duplication, Show latest/missing state is recalculated, Videos and Episodes have batch actions, and every operation remains notification-free.
+- Schema changes: schema v14 adds the append-only `manual_corrections` JSON audit table and a newest-first index.
+- Tests: focused repository/web/pipeline suite - 65 passed; full suite - 189 passed.
+- Commit: this phase commit (SHA recorded during final roadmap pass)
+- Not yet verified: high-volume correction UX and audit review against production data.
 
 ### Phase 5
 
