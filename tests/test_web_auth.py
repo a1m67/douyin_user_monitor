@@ -43,17 +43,23 @@ class WebAuthTests(TestCase):
         async def write():
             return {"ok": True}
 
+        @app.get("/api/short-drama/search")
+        async def search():
+            return {"results": {}}
+
         return app
 
     def test_login_protects_page_and_csrf_protects_session_writes(self):
         client = TestClient(self._app())
         self.assertEqual(client.get("/following", follow_redirects=False).status_code, 303)
         self.assertEqual(client.get("/media/accounts/example/avatar").status_code, 401)
+        self.assertEqual(client.get("/api/short-drama/search?q=test").status_code, 401)
         self.assertEqual(client.get("/login").status_code, 200)
         response = client.post("/login", data={"password": "pw"}, follow_redirects=False)
         self.assertEqual(response.status_code, 303)
         self.assertEqual(client.get("/following").status_code, 200)
         self.assertEqual(client.get("/media/accounts/example/avatar").status_code, 200)
+        self.assertEqual(client.get("/api/short-drama/search?q=test").status_code, 200)
         self.assertEqual(client.post("/api/short-drama/write").status_code, 403)
         csrf = client.cookies.get("short_drama_csrf")
         allowed = client.post("/api/short-drama/write", headers={"X-CSRF-Token": csrf, "Origin": "http://testserver"})

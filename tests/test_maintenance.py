@@ -195,6 +195,24 @@ class MaintenanceTests(unittest.TestCase):
         self.assertIn('"journal_mode": "wal"', output.getvalue())
         self.assertIn('"table_rows"', output.getvalue())
 
+    def test_search_rebuild_cli_reports_index_or_like_fallback(self):
+        output = StringIO()
+        settings = SimpleNamespace(database_path=self.database, backup_retention_count=14)
+        with (
+            patch("sys.argv", ["douyin_user_monitor", "search-rebuild"]),
+            patch(
+                "douyin_user_monitor.__main__.load_short_drama_settings",
+                return_value=settings,
+            ),
+            redirect_stdout(output),
+        ):
+            self.assertEqual(main(), 0)
+        report = json.loads(output.getvalue())
+        self.assertIn(report["mode"], {"fts5", "like"})
+        if report["mode"] == "fts5":
+            self.assertTrue(report["rebuilt"])
+            self.assertTrue(report["consistent"])
+
     def test_backup_verify_and_restore_dry_run_cli(self):
         backup = backup_database(self.database)
         settings = SimpleNamespace(database_path=self.database, backup_retention_count=14)

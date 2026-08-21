@@ -12,7 +12,7 @@ Transactional reliability, lightweight operations, parser governance, bounded AI
 - [x] Phase 6: Parser golden regression suite
 - [x] Phase 7: AI request budgets and guards
 - [x] Phase 8: Bounded avatar and cover media cache
-- [ ] Phase 9: Global search and show pagination
+- [x] Phase 9: Global search and show pagination
 
 ## Phase Records
 
@@ -94,4 +94,10 @@ Transactional reliability, lightweight operations, parser governance, bounded AI
 
 ### Phase 9
 
-- Status: pending
+- Status: complete
+- Main design: Shows expose bounded `page/page_size` metadata while retaining the legacy `limit`; a single authenticated search endpoint groups explicit safe projections for shows, accounts, and videos. SQLite FTS5 virtual tables are maintained by triggers, with runtime capability detection and automatic LIKE fallback.
+- Schema changes: v25 adds optional `search_shows`, `search_accounts`, and `search_videos` FTS5 indexes plus synchronization triggers when the SQLite runtime supports FTS5. Core relational data is unchanged when it does not.
+- New settings: none. `python -m douyin_user_monitor search-rebuild` rebuilds available FTS indexes and reports fallback mode otherwise.
+- Tests: show/following pagination, title/alias/nickname/video/aweme search, FTS and forced LIKE paths, auth protection, safe response projection, rebuild/doctor checks, and a synthetic 100-account/1,000-show/50,000-video database without timing thresholds.
+- Commit: `feat: add global search and show pagination`.
+- Production verification still needed: confirm the deployed SQLite reports FTS5 or LIKE mode, run `search-rebuild`, exercise Ctrl/Cmd+K and mobile search, and inspect page navigation with the production row count.

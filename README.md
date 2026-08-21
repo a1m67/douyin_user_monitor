@@ -208,6 +208,16 @@ Episode 1 --- * Notification
 
 Parser 规则回归使用提交到仓库的离线 golden corpus。运行 `python -m douyin_user_monitor parser-eval` 查看精确匹配结果，或添加 `--json` 输出 CI 可读报告；该命令不构造 LLM/OCR backend，也不会访问网络。
 
+## 全局搜索与短剧分页
+
+顶部搜索入口或 `Ctrl+K` / `Cmd+K` 可统一搜索短剧标题与别名、作者昵称、作品标题/描述、解析剧名和 `aweme_id`；移动端底部导航也提供搜索按钮。搜索结果只返回展示所需字段，不返回 `raw_json`、LLM 原始响应或运行配置。短剧列表和“我的追更”使用 `page/page_size` 分页，旧调用仍可暂时使用 `limit`。
+
+SQLite 支持 FTS5 时，schema v25 会建立由触发器同步的三个轻量搜索索引；不支持 FTS5 时应用继续启动并自动使用 LIKE fallback。需要人工重建或核对索引时运行：
+
+```bash
+python -m douyin_user_monitor search-rebuild
+```
+
 ## 测试
 
 生产维护命令使用 SQLite 在线备份 API，`doctor` 默认只读；schema 升级前也会自动在数据库同级 `backups/` 创建快照：
@@ -220,6 +230,7 @@ python -m douyin_user_monitor doctor
 python -m douyin_user_monitor doctor --repair
 python -m douyin_user_monitor db-stats
 python -m douyin_user_monitor db-stats --checkpoint
+python -m douyin_user_monitor search-rebuild
 ```
 
 `db-stats` 只输出数据库/WAL 大小、页统计、业务表行数和索引定义，不读取用户数据内容。`--checkpoint` 执行显式 TRUNCATE checkpoint；后台维护只使用低频 PASSIVE checkpoint。系统不会自动频繁 `VACUUM`，也不会自动删除更新动态。

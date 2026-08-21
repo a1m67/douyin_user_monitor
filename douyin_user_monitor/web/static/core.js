@@ -6,6 +6,8 @@ const request = window.ShortDramaAPI.request;
     let editingAccountId = null;
     let selectedReviewIds = new Set();
     let accountRefreshTimer = null;
+    let showLibraryPage = 1;
+    let globalSearchTimer = null;
     const showLibraryFilters = {accountId:"", ignored:"normal", q:"", sort:"recent"};
 
     function escapeHtml(value) {
@@ -45,6 +47,40 @@ const request = window.ShortDramaAPI.request;
       document.querySelectorAll("[data-nav]").forEach(item => item.classList.toggle("active", item.dataset.nav === name));
       document.querySelectorAll("[data-bottom-nav]").forEach(item => item.classList.toggle("active", item.dataset.bottomNav === name));
       document.getElementById("topTitle").textContent = title;
+    }
+    function openGlobalSearch() {
+      const dialog = document.getElementById("globalSearchDialog");
+      const input = document.getElementById("globalSearchInput");
+      if (!dialog.open) dialog.showModal();
+      requestAnimationFrame(() => { input.focus(); input.select(); });
+    }
+    function globalSearchGroup(title, items, renderItem) {
+      if (!items.length) return "";
+      return `<section class="global-search-group"><h2>${escapeHtml(title)}</h2>${items.map(renderItem).join("")}</section>`;
+    }
+    async function runGlobalSearch() {
+      const input = document.getElementById("globalSearchInput");
+      const results = document.getElementById("globalSearchResults");
+      const query = input.value.trim();
+      if (!query) { results.innerHTML = '<p class="muted">输入关键词开始搜索。</p>'; return; }
+      results.innerHTML = '<p class="muted">搜索中...</p>';
+      try {
+        const data = await request(`/search?q=${encodeURIComponent(query)}&limit=8`);
+        if (input.value.trim() !== query) return;
+        const groups = data.results || {};
+        const html = [
+          globalSearchGroup("短剧", groups.shows || [], show => `<a class="global-search-item" href="/shows/${show.id}"><strong>${escapeHtml(show.title)}</strong><small>${escapeHtml((show.aliases || []).join(" · ") || (show.latest_episode == null ? "尚无剧集" : `第${show.latest_season || 1}季第${show.latest_episode}集`))}</small></a>`),
+          globalSearchGroup("作者", groups.accounts || [], account => `<a class="global-search-item" href="/accounts?account_id=${encodeURIComponent(account.id)}"><strong>${escapeHtml(account.nickname)}</strong><small>查看作者账号</small></a>`),
+          globalSearchGroup("作品", groups.videos || [], video => `<a class="global-search-item" href="/videos?q=${encodeURIComponent(video.aweme_id)}"><strong>${escapeHtml(video.display_title || video.description || video.aweme_id)}</strong><small>${escapeHtml(video.account_nickname)} · ${escapeHtml(video.aweme_id)}</small></a>`),
+        ].join("");
+        results.innerHTML = html || '<p class="muted">没有找到匹配结果。</p>';
+      } catch (error) {
+        results.innerHTML = `<p class="muted">${escapeHtml(error.message)}</p>`;
+      }
+    }
+    function scheduleGlobalSearch() {
+      if (globalSearchTimer !== null) clearTimeout(globalSearchTimer);
+      globalSearchTimer = setTimeout(() => { runGlobalSearch(); }, 180);
     }
     async function refreshStatus() {
       try {
@@ -102,4 +138,14 @@ const request = window.ShortDramaAPI.request;
       const confidence = typeof ai.confidence === "number" ? `${Math.round(ai.confidence * 100)}%` : "-";
       return `<div class="parser-evidence"><span><strong>规则：</strong>${escapeHtml(regexText)}</span><span><strong>AI：</strong>${escapeHtml(aiText || "-")}<br /><strong>置信度：</strong>${escapeHtml(confidence)}<br /><strong>原因：</strong>${escapeHtml(ai.reason || ai.error || "-")}</span></div>`;
     }
+
+    document.getElementById("globalSearchButton").addEventListener("click", openGlobalSearch);
+    document.getElementById("mobileSearchButton").addEventListener("click", openGlobalSearch);
+    document.getElementById("globalSearchInput").addEventListener("input", scheduleGlobalSearch);
+    document.addEventListener("keydown", event => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        openGlobalSearch();
+      }
+    });
 

@@ -38,7 +38,7 @@ class SQLitePerformanceTests(unittest.TestCase):
                 f"2026-08-{number % 28 + 1:02d}T00:00:00+00:00",
                 timestamp,
             )
-            for number in range(20_000)
+            for number in range(50_000)
         ]
         shows = [
             (
@@ -157,12 +157,30 @@ class SQLitePerformanceTests(unittest.TestCase):
         updates = self.repository.list_update_events(
             following_only=False, unread_only=True, page=2, page_size=40
         )
-        self.assertEqual(videos["total"], 20_000)
+        self.assertEqual(videos["total"], 50_000)
         self.assertEqual(len(videos["videos"]), 25)
         self.assertEqual(videos["page"], 2)
         self.assertEqual(updates["total"], 5_000)
         self.assertEqual(len(updates["events"]), 40)
         self.assertTrue(updates["has_more"])
+
+    def test_show_and_global_search_results_remain_bounded(self):
+        shows = self.repository.paginate_show_summaries(
+            include_empty=True,
+            page=2,
+            page_size=25,
+        )
+        show_search = self.repository.search_global("Show 999", limit=5)
+        account_search = self.repository.search_global("Account 99", limit=5)
+        video_search = self.repository.search_global("aweme-49999", limit=5)
+
+        self.assertEqual(shows["total"], 1_000)
+        self.assertEqual(len(shows["shows"]), 25)
+        self.assertEqual(shows["page"], 2)
+        self.assertEqual(show_search["results"]["shows"][0]["title"], "Show 999")
+        self.assertEqual(account_search["results"]["accounts"][0]["nickname"], "Account 99")
+        self.assertEqual(video_search["results"]["videos"][0]["aweme_id"], "aweme-49999")
+        self.assertLessEqual(len(video_search["results"]["videos"]), 5)
 
     def test_key_query_plans_use_ordered_indexes(self):
         queries = {

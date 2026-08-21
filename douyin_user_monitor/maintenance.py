@@ -341,7 +341,37 @@ def doctor_database(database_path: Path, *, repair: bool = False) -> DoctorRepor
         media_cache_invalid = int(connection.execute("""SELECT COUNT(*) FROM media_cache_entries
             WHERE size_bytes < 0 OR relative_path='' OR relative_path LIKE '%..%'
                OR relative_path LIKE '%/%' OR relative_path LIKE '%\\%'""").fetchone()[0])
+        try:
+            fts5_available = connection.execute(
+                "SELECT 1 FROM pragma_module_list WHERE name='fts5' LIMIT 1"
+            ).fetchone() is not None
+        except sqlite3.Error:
+            fts5_available = bool(
+                connection.execute("SELECT sqlite_compileoption_used('ENABLE_FTS5')").fetchone()[0]
+            )
+        search_tables = {
+            str(row[0])
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' "
+                "AND name IN ('search_shows','search_accounts','search_videos')"
+            )
+        }
+        search_counts: dict[str, dict[str, int]] = {}
+        if search_tables == {"search_shows", "search_accounts", "search_videos"}:
+            for name, source in (
+                ("shows", "shows"),
+                ("accounts", "accounts"),
+                ("videos", "videos"),
+            ):
+                search_counts[name] = {
+                    "source": int(connection.execute(f"SELECT COUNT(*) FROM {source}").fetchone()[0]),
+                    "index": int(connection.execute(f"SELECT COUNT(*) FROM search_{name}").fetchone()[0]),
+                }
+        search_consistent = not fts5_available or (
+            len(search_counts) == 3
+            and all(value["source"] == value["index"] for value in search_counts.values())
+        )
     finally:
         connection.close()
-    checks = {"integrity": integrity, "foreign_key_errors": foreign_keys, "first_source_mismatch": first_source_mismatch, "duplicate_logical_episodes": duplicate_episodes, "stale_show_summary": stale_shows, "missing_show_seasons": missing_show_seasons, "watch_progress_orphans": watch_progress_orphans, "ai_usage_duplicates": ai_usage_duplicates, "media_cache_invalid_metadata": media_cache_invalid}
-    return DoctorReport(ok=integrity == "ok" and not foreign_keys and first_source_mismatch == 0 and duplicate_episodes == 0 and stale_shows == 0 and missing_show_seasons == 0 and watch_progress_orphans == 0 and ai_usage_duplicates == 0 and media_cache_invalid == 0, checks=checks, repaired=repair)
+    checks = {"integrity": integrity, "foreign_key_errors": foreign_keys, "first_source_mismatch": first_source_mismatch, "duplicate_logical_episodes": duplicate_episodes, "stale_show_summary": stale_shows, "missing_show_seasons": missing_show_seasons, "watch_progress_orphans": watch_progress_orphans, "ai_usage_duplicates": ai_usage_duplicates, "media_cache_invalid_metadata": media_cache_invalid, "fts5_available": fts5_available, "search_index_counts": search_counts, "search_index_consistent": search_consistent}
+    return DoctorReport(ok=integrity == "ok" and not foreign_keys and first_source_mismatch == 0 and duplicate_episodes == 0 and stale_shows == 0 and missing_show_seasons == 0 and watch_progress_orphans == 0 and ai_usage_duplicates == 0 and media_cache_invalid == 0 and search_consistent, checks=checks, repaired=repair)

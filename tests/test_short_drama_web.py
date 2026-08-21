@@ -119,10 +119,20 @@ class ShortDramaWebTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("mediaThumb", static_source)
         self.assertIn("account-avatar", page_source)
         self.assertIn("continue_watching", static_source)
+        self.assertIn("globalSearchDialog", page_source)
+        self.assertIn("openGlobalSearch", static_source)
+        self.assertIn("changeShowPage", static_source)
+        self.assertIn("page_size", static_source)
 
-        payload = self.client.get("/api/short-drama/shows").json()
+        payload = self.client.get(
+            "/api/short-drama/shows", params={"page": 1, "page_size": 1}
+        ).json()
         self.assertEqual(payload["shows"][0]["title"], "末日重生")
         self.assertEqual(payload["shows"][0]["continue_watching"]["episode_number"], 12)
+        self.assertEqual(payload["total"], 1)
+        self.assertEqual(payload["page"], 1)
+        self.assertEqual(payload["page_size"], 1)
+        self.assertEqual(payload["total_pages"], 1)
         account_payload = self.client.get("/api/short-drama/accounts").json()["accounts"][0]
         self.assertEqual(
             account_payload["avatar_url"],
@@ -139,6 +149,27 @@ class ShortDramaWebTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("display_title", videos[0])
         self.assertIn("text_sources", videos[0])
         self.assertIn("parser_evidence", videos[0])
+
+        show_search = self.client.get(
+            "/api/short-drama/search", params={"q": "末日重生"}
+        ).json()
+        account_search = self.client.get(
+            "/api/short-drama/search", params={"q": "AI剧场"}
+        ).json()
+        video_search = self.client.get(
+            "/api/short-drama/search", params={"q": "1001"}
+        ).json()
+        self.assertEqual(show_search["results"]["shows"][0]["title"], "末日重生")
+        self.assertEqual(account_search["results"]["accounts"][0]["nickname"], "AI剧场")
+        self.assertEqual(video_search["results"]["videos"][0]["aweme_id"], "1001")
+        self.assertNotIn("raw_json", video_search["results"]["videos"][0])
+        self.assertNotIn("llm_raw_result", video_search["results"]["videos"][0])
+        self.assertEqual(
+            self.client.get(
+                "/api/short-drama/search", params={"q": "末日", "types": "secrets"}
+            ).status_code,
+            400,
+        )
 
     async def test_show_library_management_endpoints(self):
         show = self.repository.list_show_summaries()[0]
@@ -619,7 +650,7 @@ class ShortDramaWebTests(unittest.IsolatedAsyncioTestCase):
         with patch("douyin_user_monitor.web.short_drama.doctor_database") as doctor:
             data = self.client.get("/api/short-drama/diagnostics").json()
         doctor.assert_not_called()
-        self.assertEqual(data["database"]["schema_version"], 24)
+        self.assertEqual(data["database"]["schema_version"], 25)
         self.assertIsNone(data["database"]["last_doctor_at"])
         self.assertGreaterEqual(data["database"]["database_latency_ms"], 0)
         self.assertEqual(

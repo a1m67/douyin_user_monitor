@@ -28,12 +28,13 @@
       <div class="sidebar-footer" id="sidebarStatus">加载系统状态</div>
     </aside>
     <main class="main">
-      <header class="topbar"><div class="topbar-title" id="topTitle">AI 短剧追更</div><div class="system-state" id="systemState"></div></header>
+      <header class="topbar"><div class="topbar-title" id="topTitle">AI 短剧追更</div><div class="topbar-actions"><button class="secondary global-search-trigger" id="globalSearchButton" type="button">搜索 <kbd>Ctrl K</kbd></button><div class="system-state" id="systemState"></div></div></header>
       <section class="page" id="app"></section>
     </main>
   </div>
   <div class="notice" id="notice" role="status"></div>
-  <nav class="bottom-nav" aria-label="主导航"><a href="/following" data-bottom-nav="following">追更</a><a href="/updates" data-bottom-nav="updates">动态</a><a href="/shows" data-bottom-nav="shows">全部</a><a href="/review" data-bottom-nav="review">审核</a></nav>
+  <dialog class="global-search-dialog" id="globalSearchDialog"><form method="dialog" class="global-search-head"><label for="globalSearchInput">搜索短剧、作者、作品</label><button class="secondary small" value="cancel" aria-label="关闭搜索">关闭</button></form><input id="globalSearchInput" class="global-search-input" type="search" autocomplete="off" placeholder="输入剧名、别名、作者、作品标题或 aweme_id" /><div class="global-search-results" id="globalSearchResults"><p class="muted">输入关键词开始搜索。</p></div></dialog>
+  <nav class="bottom-nav" aria-label="主导航"><a href="/following" data-bottom-nav="following">追更</a><a href="/updates" data-bottom-nav="updates">动态</a><button type="button" id="mobileSearchButton">搜索</button><a href="/shows" data-bottom-nav="shows">全部</a><a href="/review" data-bottom-nav="review">审核</a></nav>
   <script>window.SHORT_DRAMA_CONFIG={defaultCheckIntervalMinutes:Number("{{DEFAULT_CHECK_INTERVAL_MINUTES}}"),buildId:"{{BUILD_ID}}"};</script>
   <script src="/static/api.js?v={{BUILD_ID}}"></script>
   <script src="/static/core.js?v={{BUILD_ID}}"></script>

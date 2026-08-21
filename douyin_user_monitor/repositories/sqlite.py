@@ -18,13 +18,14 @@ from douyin_user_monitor.maintenance import backup_database
 from douyin_user_monitor.raw_payload import compact_video_raw
 
 
-SCHEMA_VERSION = 24
+SCHEMA_VERSION = 25
 SQLITE_BUSY_TIMEOUT_MS = 30_000
 SHOW_STATUSES = frozenset({"updating", "completed", "paused"})
 VIDEO_CLASSIFICATIONS = frozenset({"matched", "ignored", "review"})
 VIDEO_CONTENT_TYPES = frozenset({"episode", "trailer", "show_content", "unknown", "non_drama"})
 HISTORY_SYNC_STATUSES = frozenset({"idle", "pending", "running", "paused", "completed", "failed"})
 ACCOUNT_SCHEDULE_MODES = frozenset({"inherit", "fixed", "adaptive"})
+GLOBAL_SEARCH_TYPES = frozenset({"shows", "accounts", "videos"})
 _PLACEHOLDER_NICKNAMES = frozenset({"", "nan", "none", "null", "undefined", "n/a"})
 _UNSET = object()
 logger = logging.getLogger(__name__)
@@ -131,14 +132,98 @@ class ShortDramaRepository:
             previous_schema_version = _schema_version(self._get_meta(connection, "schema_version"))
             self._migrate_schema(connection, previous_schema_version)
             self._repair_placeholder_account_nicknames(connection)
-            self._set_meta(connection, "schema_version", str(SCHEMA_VERSION))
             if self._get_meta(connection, "legacy_state_imported") is None:
                 self._import_legacy_state(connection)
                 self._repair_placeholder_account_nicknames(connection)
                 self._set_meta(connection, "legacy_state_imported", utc_now())
+            self._initialize_search_index(
+                connection,
+                rebuild=previous_schema_version < SCHEMA_VERSION,
+            )
+            self._set_meta(connection, "schema_version", str(SCHEMA_VERSION))
 
     def schema_version(self) -> int:
         return SCHEMA_VERSION
+
+    def search_index_status(self) -> dict[str, Any]:
+        with self._read_connection() as connection:
+            available = self._fts5_module_available(connection) and self._search_tables_exist(
+                connection
+            )
+            if not available:
+                return {
+                    "fts5_available": False,
+                    "mode": "like",
+                    "counts": {},
+                    "consistent": True,
+                }
+            try:
+                counts = {
+                    "shows": {
+                        "source": int(connection.execute("SELECT COUNT(*) FROM shows").fetchone()[0]),
+                        "index": int(connection.execute("SELECT COUNT(*) FROM search_shows").fetchone()[0]),
+                    },
+                    "accounts": {
+                        "source": int(connection.execute("SELECT COUNT(*) FROM accounts").fetchone()[0]),
+                        "index": int(connection.execute("SELECT COUNT(*) FROM search_accounts").fetchone()[0]),
+                    },
+                    "videos": {
+                        "source": int(connection.execute("SELECT COUNT(*) FROM videos").fetchone()[0]),
+                        "index": int(connection.execute("SELECT COUNT(*) FROM search_videos").fetchone()[0]),
+                    },
+                }
+            except sqlite3.Error:
+                return {
+                    "fts5_available": False,
+                    "mode": "like",
+                    "counts": {},
+                    "consistent": True,
+                }
+        return {
+            "fts5_available": True,
+            "mode": "fts5",
+            "counts": counts,
+            "consistent": all(value["source"] == value["index"] for value in counts.values()),
+        }
+
+    def rebuild_search_index(self) -> dict[str, Any]:
+        with self._transaction() as connection:
+            if not self._initialize_search_index(connection, rebuild=False):
+                return {
+                    "fts5_available": False,
+                    "mode": "like",
+                    "rebuilt": False,
+                    "counts": {},
+                }
+            self._rebuild_search_index(connection)
+        return self.search_index_status() | {"rebuilt": True}
+
+    def search_global(
+        self,
+        query: str,
+        *,
+        types: Sequence[str] | None = None,
+        limit: int = 8,
+    ) -> dict[str, Any]:
+        term = str(query or "").strip()
+        selected = tuple(dict.fromkeys(types or ("shows", "accounts", "videos")))
+        invalid = [item for item in selected if item not in GLOBAL_SEARCH_TYPES]
+        if invalid:
+            raise ValueError("全局搜索类型无效")
+        safe_limit = max(1, min(int(limit), 25))
+        empty_results = {item: [] for item in selected}
+        if not term:
+            return {"query": term, "mode": "fts5" if self.search_index_status()["fts5_available"] else "like", "results": empty_results}
+        with self._read_connection() as connection:
+            use_fts = self._fts5_module_available(connection) and self._search_tables_exist(connection)
+            if use_fts:
+                try:
+                    results = self._search_global_fts(connection, term, selected, safe_limit)
+                    return {"query": term, "mode": "fts5", "results": results}
+                except sqlite3.Error:
+                    logger.warning("FTS5 search failed; falling back to LIKE", exc_info=True)
+            results = self._search_global_like(connection, term, selected, safe_limit)
+        return {"query": term, "mode": "like", "results": results}
 
     def get_service_state(self, *keys: str) -> dict[str, Any]:
         requested = tuple(dict.fromkeys(str(key).strip() for key in keys if str(key).strip()))
@@ -389,6 +474,314 @@ class ShortDramaRepository:
     def delete_media_cache_entry(self, cache_key: str) -> None:
         with self._transaction() as connection:
             connection.execute("DELETE FROM media_cache_entries WHERE cache_key=?", (cache_key,))
+
+    def _initialize_search_index(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        rebuild: bool,
+    ) -> bool:
+        if not self._supports_fts5(connection):
+            self._drop_search_triggers(connection)
+            self._set_meta(connection, "search_fts5_available", "false")
+            return False
+        created = not self._search_tables_exist(connection)
+        connection.executescript(
+            """
+            CREATE VIRTUAL TABLE IF NOT EXISTS search_shows USING fts5(
+                entity_id UNINDEXED,
+                title,
+                aliases,
+                tokenize='unicode61'
+            );
+            CREATE VIRTUAL TABLE IF NOT EXISTS search_accounts USING fts5(
+                entity_id UNINDEXED,
+                nickname,
+                tokenize='unicode61'
+            );
+            CREATE VIRTUAL TABLE IF NOT EXISTS search_videos USING fts5(
+                entity_id UNINDEXED,
+                aweme_id,
+                display_title,
+                description,
+                parsed_show_title,
+                tokenize='unicode61'
+            );
+
+            CREATE TRIGGER IF NOT EXISTS search_shows_ai AFTER INSERT ON shows BEGIN
+                INSERT INTO search_shows(rowid,entity_id,title,aliases)
+                VALUES (NEW.id,CAST(NEW.id AS TEXT),NEW.title,'');
+            END;
+            CREATE TRIGGER IF NOT EXISTS search_shows_au AFTER UPDATE OF title ON shows BEGIN
+                DELETE FROM search_shows WHERE rowid=OLD.id;
+                INSERT INTO search_shows(rowid,entity_id,title,aliases)
+                SELECT NEW.id,CAST(NEW.id AS TEXT),NEW.title,
+                    COALESCE((SELECT group_concat(alias,' ') FROM show_aliases WHERE show_id=NEW.id),'');
+            END;
+            CREATE TRIGGER IF NOT EXISTS search_shows_ad AFTER DELETE ON shows BEGIN
+                DELETE FROM search_shows WHERE rowid=OLD.id;
+            END;
+            CREATE TRIGGER IF NOT EXISTS search_show_aliases_ai AFTER INSERT ON show_aliases BEGIN
+                DELETE FROM search_shows WHERE rowid=NEW.show_id;
+                INSERT INTO search_shows(rowid,entity_id,title,aliases)
+                SELECT shows.id,CAST(shows.id AS TEXT),shows.title,
+                    COALESCE((SELECT group_concat(alias,' ') FROM show_aliases WHERE show_id=shows.id),'')
+                FROM shows WHERE shows.id=NEW.show_id;
+            END;
+            CREATE TRIGGER IF NOT EXISTS search_show_aliases_au AFTER UPDATE ON show_aliases BEGIN
+                DELETE FROM search_shows WHERE rowid IN (OLD.show_id,NEW.show_id);
+                INSERT INTO search_shows(rowid,entity_id,title,aliases)
+                SELECT shows.id,CAST(shows.id AS TEXT),shows.title,
+                    COALESCE((SELECT group_concat(alias,' ') FROM show_aliases WHERE show_id=shows.id),'')
+                FROM shows WHERE shows.id IN (OLD.show_id,NEW.show_id);
+            END;
+            CREATE TRIGGER IF NOT EXISTS search_show_aliases_ad AFTER DELETE ON show_aliases BEGIN
+                DELETE FROM search_shows WHERE rowid=OLD.show_id;
+                INSERT INTO search_shows(rowid,entity_id,title,aliases)
+                SELECT shows.id,CAST(shows.id AS TEXT),shows.title,
+                    COALESCE((SELECT group_concat(alias,' ') FROM show_aliases WHERE show_id=shows.id),'')
+                FROM shows WHERE shows.id=OLD.show_id;
+            END;
+
+            CREATE TRIGGER IF NOT EXISTS search_accounts_ai AFTER INSERT ON accounts BEGIN
+                INSERT INTO search_accounts(entity_id,nickname) VALUES (NEW.id,NEW.nickname);
+            END;
+            CREATE TRIGGER IF NOT EXISTS search_accounts_au AFTER UPDATE OF nickname ON accounts BEGIN
+                DELETE FROM search_accounts WHERE entity_id=OLD.id;
+                INSERT INTO search_accounts(entity_id,nickname) VALUES (NEW.id,NEW.nickname);
+            END;
+            CREATE TRIGGER IF NOT EXISTS search_accounts_ad AFTER DELETE ON accounts BEGIN
+                DELETE FROM search_accounts WHERE entity_id=OLD.id;
+            END;
+
+            CREATE TRIGGER IF NOT EXISTS search_videos_ai AFTER INSERT ON videos BEGIN
+                INSERT INTO search_videos(
+                    rowid,entity_id,aweme_id,display_title,description,parsed_show_title
+                ) VALUES (
+                    NEW.id,CAST(NEW.id AS TEXT),NEW.aweme_id,COALESCE(NEW.display_title,''),
+                    COALESCE(NEW.description,''),COALESCE(NEW.parsed_show_title,'')
+                );
+            END;
+            CREATE TRIGGER IF NOT EXISTS search_videos_au
+            AFTER UPDATE OF aweme_id,display_title,description,parsed_show_title ON videos BEGIN
+                DELETE FROM search_videos WHERE rowid=OLD.id;
+                INSERT INTO search_videos(
+                    rowid,entity_id,aweme_id,display_title,description,parsed_show_title
+                ) VALUES (
+                    NEW.id,CAST(NEW.id AS TEXT),NEW.aweme_id,COALESCE(NEW.display_title,''),
+                    COALESCE(NEW.description,''),COALESCE(NEW.parsed_show_title,'')
+                );
+            END;
+            CREATE TRIGGER IF NOT EXISTS search_videos_ad AFTER DELETE ON videos BEGIN
+                DELETE FROM search_videos WHERE rowid=OLD.id;
+            END;
+            """
+        )
+        if created or rebuild:
+            self._rebuild_search_index(connection)
+        self._set_meta(connection, "search_fts5_available", "true")
+        return True
+
+    @staticmethod
+    def _supports_fts5(connection: sqlite3.Connection) -> bool:
+        try:
+            connection.execute("CREATE VIRTUAL TABLE temp.search_fts5_probe USING fts5(value)")
+            connection.execute("DROP TABLE temp.search_fts5_probe")
+            return True
+        except sqlite3.OperationalError:
+            try:
+                connection.execute("DROP TABLE IF EXISTS temp.search_fts5_probe")
+            except sqlite3.Error:
+                pass
+            return False
+
+    @staticmethod
+    def _fts5_module_available(connection: sqlite3.Connection) -> bool:
+        try:
+            return connection.execute(
+                "SELECT 1 FROM pragma_module_list WHERE name='fts5' LIMIT 1"
+            ).fetchone() is not None
+        except sqlite3.Error:
+            return bool(
+                connection.execute("SELECT sqlite_compileoption_used('ENABLE_FTS5')").fetchone()[0]
+            )
+
+    @staticmethod
+    def _drop_search_triggers(connection: sqlite3.Connection) -> None:
+        for name in (
+            "search_shows_ai",
+            "search_shows_au",
+            "search_shows_ad",
+            "search_show_aliases_ai",
+            "search_show_aliases_au",
+            "search_show_aliases_ad",
+            "search_accounts_ai",
+            "search_accounts_au",
+            "search_accounts_ad",
+            "search_videos_ai",
+            "search_videos_au",
+            "search_videos_ad",
+        ):
+            connection.execute(f"DROP TRIGGER IF EXISTS {name}")
+
+    @staticmethod
+    def _search_tables_exist(connection: sqlite3.Connection) -> bool:
+        names = {
+            str(row[0])
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' "
+                "AND name IN ('search_shows','search_accounts','search_videos')"
+            )
+        }
+        return names == {"search_shows", "search_accounts", "search_videos"}
+
+    @staticmethod
+    def _rebuild_search_index(connection: sqlite3.Connection) -> None:
+        connection.executescript(
+            """
+            DELETE FROM search_shows;
+            INSERT INTO search_shows(rowid,entity_id,title,aliases)
+            SELECT shows.id,CAST(shows.id AS TEXT),shows.title,
+                COALESCE((SELECT group_concat(alias,' ') FROM show_aliases WHERE show_id=shows.id),'')
+            FROM shows;
+
+            DELETE FROM search_accounts;
+            INSERT INTO search_accounts(entity_id,nickname)
+            SELECT id,nickname FROM accounts;
+
+            DELETE FROM search_videos;
+            INSERT INTO search_videos(
+                rowid,entity_id,aweme_id,display_title,description,parsed_show_title
+            )
+            SELECT id,CAST(id AS TEXT),aweme_id,COALESCE(display_title,''),
+                COALESCE(description,''),COALESCE(parsed_show_title,'')
+            FROM videos;
+            """
+        )
+
+    def _search_global_fts(
+        self,
+        connection: sqlite3.Connection,
+        term: str,
+        selected: Sequence[str],
+        limit: int,
+    ) -> dict[str, list[dict[str, Any]]]:
+        match_query = _fts_match_query(term)
+        results: dict[str, list[dict[str, Any]]] = {item: [] for item in selected}
+        if "shows" in results:
+            rows = connection.execute(
+                """SELECT shows.id,shows.title,shows.status,shows.latest_season,
+                    shows.latest_episode,shows.is_following,shows.is_ignored
+                FROM search_shows JOIN shows
+                  ON shows.id=search_shows.rowid
+                WHERE search_shows MATCH ?
+                ORDER BY bm25(search_shows),shows.id LIMIT ?""",
+                (match_query, limit),
+            ).fetchall()
+            show_ids = [int(row["id"]) for row in rows]
+            aliases = self._aliases_for_shows(connection, show_ids)
+            results["shows"] = [
+                {
+                    "id": int(row["id"]),
+                    "title": str(row["title"]),
+                    "aliases": aliases.get(int(row["id"]), []),
+                    "status": str(row["status"]),
+                    "latest_season": row["latest_season"],
+                    "latest_episode": row["latest_episode"],
+                    "is_following": bool(row["is_following"]),
+                    "is_ignored": bool(row["is_ignored"]),
+                }
+                for row in rows
+            ]
+        if "accounts" in results:
+            rows = connection.execute(
+                """SELECT accounts.id,accounts.nickname,accounts.avatar_url
+                FROM search_accounts JOIN accounts ON accounts.id=search_accounts.entity_id
+                WHERE search_accounts MATCH ?
+                ORDER BY bm25(search_accounts),accounts.nickname COLLATE NOCASE LIMIT ?""",
+                (match_query, limit),
+            ).fetchall()
+            results["accounts"] = [
+                {"id": str(row["id"]), "nickname": str(row["nickname"]), "avatar_url": row["avatar_url"]}
+                for row in rows
+            ]
+        if "videos" in results:
+            rows = connection.execute(
+                """SELECT videos.id,videos.aweme_id,videos.display_title,videos.description,
+                    videos.parsed_show_title,videos.account_id,accounts.nickname AS account_nickname,
+                    videos.cover_url,videos.publish_time,videos.classification_status
+                FROM search_videos JOIN videos
+                  ON videos.id=search_videos.rowid
+                JOIN accounts ON accounts.id=videos.account_id
+                WHERE search_videos MATCH ?
+                ORDER BY bm25(search_videos),videos.id DESC LIMIT ?""",
+                (match_query, limit),
+            ).fetchall()
+            results["videos"] = [_global_video_search_row(row) for row in rows]
+        return results
+
+    def _search_global_like(
+        self,
+        connection: sqlite3.Connection,
+        term: str,
+        selected: Sequence[str],
+        limit: int,
+    ) -> dict[str, list[dict[str, Any]]]:
+        pattern = f"%{term}%"
+        results: dict[str, list[dict[str, Any]]] = {item: [] for item in selected}
+        if "shows" in results:
+            rows = connection.execute(
+                """SELECT DISTINCT shows.id,shows.title,shows.status,shows.latest_season,
+                    shows.latest_episode,shows.is_following,shows.is_ignored
+                FROM shows LEFT JOIN show_aliases ON show_aliases.show_id=shows.id
+                WHERE shows.title LIKE ? COLLATE NOCASE
+                   OR shows.normalized_title LIKE ? COLLATE NOCASE
+                   OR show_aliases.alias LIKE ? COLLATE NOCASE
+                ORDER BY shows.latest_update_at DESC,shows.id DESC LIMIT ?""",
+                (pattern, f"%{normalize_title(term)}%", pattern, limit),
+            ).fetchall()
+            show_ids = [int(row["id"]) for row in rows]
+            aliases = self._aliases_for_shows(connection, show_ids)
+            results["shows"] = [
+                {
+                    "id": int(row["id"]),
+                    "title": str(row["title"]),
+                    "aliases": aliases.get(int(row["id"]), []),
+                    "status": str(row["status"]),
+                    "latest_season": row["latest_season"],
+                    "latest_episode": row["latest_episode"],
+                    "is_following": bool(row["is_following"]),
+                    "is_ignored": bool(row["is_ignored"]),
+                }
+                for row in rows
+            ]
+        if "accounts" in results:
+            rows = connection.execute(
+                """SELECT id,nickname,avatar_url FROM accounts
+                WHERE nickname LIKE ? COLLATE NOCASE
+                ORDER BY nickname COLLATE NOCASE LIMIT ?""",
+                (pattern, limit),
+            ).fetchall()
+            results["accounts"] = [
+                {"id": str(row["id"]), "nickname": str(row["nickname"]), "avatar_url": row["avatar_url"]}
+                for row in rows
+            ]
+        if "videos" in results:
+            rows = connection.execute(
+                """SELECT videos.id,videos.aweme_id,videos.display_title,videos.description,
+                    videos.parsed_show_title,videos.account_id,accounts.nickname AS account_nickname,
+                    videos.cover_url,videos.publish_time,videos.classification_status
+                FROM videos JOIN accounts ON accounts.id=videos.account_id
+                WHERE videos.display_title LIKE ? COLLATE NOCASE
+                   OR videos.description LIKE ? COLLATE NOCASE
+                   OR videos.parsed_show_title LIKE ? COLLATE NOCASE
+                   OR videos.aweme_id LIKE ? COLLATE NOCASE
+                ORDER BY COALESCE(videos.publish_time,videos.created_at) DESC,videos.id DESC
+                LIMIT ?""",
+                (pattern, pattern, pattern, pattern, limit),
+            ).fetchall()
+            results["videos"] = [_global_video_search_row(row) for row in rows]
+        return results
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.database_path, timeout=SQLITE_BUSY_TIMEOUT_MS / 1000)
@@ -2240,6 +2633,31 @@ class ShortDramaRepository:
         sort: str = "recent",
         limit: int = 100,
     ) -> list[dict[str, Any]]:
+        return self.paginate_show_summaries(
+            account_id=account_id,
+            ignored=ignored,
+            following=following,
+            include_empty=include_empty,
+            q=q,
+            sort=sort,
+            page=1,
+            page_size=max(1, min(int(limit), 500)),
+            max_page_size=500,
+        )["shows"]
+
+    def paginate_show_summaries(
+        self,
+        *,
+        account_id: str | None = None,
+        ignored: str = "normal",
+        following: bool | None = None,
+        include_empty: bool = False,
+        q: str | None = None,
+        sort: str = "recent",
+        page: int = 1,
+        page_size: int = 24,
+        max_page_size: int = 100,
+    ) -> dict[str, Any]:
         """Return filterable library rows derived from persisted episodes and sources."""
         if ignored not in {"normal", "ignored", "all"}:
             raise ValueError("短剧忽略状态筛选无效")
@@ -2251,7 +2669,8 @@ class ShortDramaRepository:
         }.get(sort)
         if order_by is None:
             raise ValueError("短剧排序方式无效")
-        safe_limit = max(1, min(int(limit), 500))
+        safe_page = max(1, int(page))
+        safe_size = max(1, min(int(page_size), max(1, int(max_page_size))))
         conditions: list[str] = []
         params: list[Any] = []
         if ignored != "all":
@@ -2286,6 +2705,12 @@ class ShortDramaRepository:
             params.extend((f"%{search}%", f"%{normalize_title(search)}%", f"%{search}%"))
         where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
         with self._transaction() as connection:
+            total = int(
+                connection.execute(
+                    f"SELECT COUNT(*) FROM shows {where_clause}",
+                    tuple(params),
+                ).fetchone()[0]
+            )
             rows = connection.execute(
                 f"""
                 SELECT
@@ -2336,9 +2761,9 @@ class ShortDramaRepository:
                 {where_clause}
                 GROUP BY shows.id
                 ORDER BY {order_by}
-                LIMIT ?
+                LIMIT ? OFFSET ?
                 """,
-                (*params, safe_limit),
+                (*params, safe_size, (safe_page - 1) * safe_size),
             ).fetchall()
             result = [_show_row(row) for row in rows]
             source_accounts = self._source_accounts_for_shows(
@@ -2397,7 +2822,13 @@ class ShortDramaRepository:
                     int(show.get("latest_season") or 1),
                     watched,
                 )
-            return result
+            return {
+                "shows": result,
+                "total": total,
+                "page": safe_page,
+                "page_size": safe_size,
+                "total_pages": (total + safe_size - 1) // safe_size,
+            }
 
     def _continue_watching_row(
         self,
@@ -4311,6 +4742,28 @@ def _json_value_richness(value: Any) -> int:
 
 def _row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
     return {key: row[key] for key in row.keys()}
+
+
+def _fts_match_query(value: str) -> str:
+    tokens = [token for token in str(value).split() if token]
+    if not tokens:
+        raise ValueError("搜索关键词不能为空")
+    return " ".join(f'"{token.replace(chr(34), chr(34) * 2)}"*' for token in tokens)
+
+
+def _global_video_search_row(row: sqlite3.Row) -> dict[str, Any]:
+    return {
+        "id": int(row["id"]),
+        "aweme_id": str(row["aweme_id"]),
+        "display_title": _optional_text(row["display_title"]),
+        "description": str(row["description"] or ""),
+        "parsed_show_title": _optional_text(row["parsed_show_title"]),
+        "account_id": str(row["account_id"]),
+        "account_nickname": str(row["account_nickname"]),
+        "cover_url": _optional_text(row["cover_url"]),
+        "publish_time": row["publish_time"],
+        "classification_status": str(row["classification_status"]),
+    }
 
 
 def _account_row(row: sqlite3.Row) -> dict[str, Any]:

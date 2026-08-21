@@ -12,6 +12,7 @@ from douyin_user_monitor.maintenance import (
     verify_backup,
 )
 from douyin_user_monitor.parser_eval import evaluate_parser_golden, format_parser_eval
+from douyin_user_monitor.repositories.sqlite import ShortDramaRepository
 from douyin_user_monitor.short_drama_settings import load_short_drama_settings
 
 
@@ -36,6 +37,7 @@ def main() -> int:
     parser_eval = sub.add_parser("parser-eval")
     parser_eval.add_argument("--json", action="store_true", dest="json_output")
     parser_eval.add_argument("--file", type=str)
+    sub.add_parser("search-rebuild")
     args = parser.parse_args()
     if args.command == "parser-eval":
         report = evaluate_parser_golden(args.file) if args.file else evaluate_parser_golden()
@@ -67,6 +69,10 @@ def main() -> int:
         return 0
     if args.command == "db-stats":
         print(json.dumps(database_stats(settings.database_path, checkpoint=args.checkpoint), ensure_ascii=False, indent=2))
+        return 0
+    if args.command == "search-rebuild":
+        report = ShortDramaRepository(settings.database_path).rebuild_search_index()
+        print(json.dumps(report, ensure_ascii=False, indent=2))
         return 0
     report = doctor_database(settings.database_path, repair=args.repair)
     print(json.dumps({"ok": report.ok, "repaired": report.repaired, "checks": report.checks}, ensure_ascii=False, indent=2))

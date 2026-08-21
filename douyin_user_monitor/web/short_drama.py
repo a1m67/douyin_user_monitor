@@ -140,19 +140,47 @@ def create_short_drama_router(
         following: bool | None = None,
         q: str | None = Query(default=None, max_length=120),
         sort: str = Query(default="recent", pattern="^(recent|title|episode_count|latest_episode)$"),
-        limit: int = Query(default=100, ge=1, le=500),
+        page: int = Query(default=1, ge=1),
+        page_size: int = Query(default=24, ge=1, le=100),
+        limit: int | None = Query(default=None, ge=1, le=500),
     ) -> dict[str, Any]:
         ignored_filter = ignored or ("all" if include_ignored else "normal")
-        shows = repository.list_show_summaries(
+        result = repository.paginate_show_summaries(
             account_id=account_id,
             ignored=ignored_filter,
             following=following,
             include_empty=include_empty,
             q=q,
             sort=sort,
-            limit=limit,
+            page=page,
+            page_size=limit or page_size,
+            max_page_size=500 if limit is not None else 100,
         )
-        return {"shows": [localize_media(show, "show") for show in shows]}
+        result["shows"] = [localize_media(show, "show") for show in result["shows"]]
+        return result
+
+    @api.get("/search")
+    async def global_search(
+        q: str = Query(default="", max_length=200),
+        types: str | None = Query(default=None),
+        limit: int = Query(default=8, ge=1, le=25),
+    ) -> dict[str, Any]:
+        selected = None
+        if types:
+            selected = [item.strip() for item in types.split(",") if item.strip()]
+        try:
+            result = repository.search_global(q, types=selected, limit=limit)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        for entity_type in ("shows", "accounts", "videos"):
+            if entity_type in result["results"]:
+                singular = {"shows": "show", "accounts": "account", "videos": "video"}[
+                    entity_type
+                ]
+                result["results"][entity_type] = [
+                    localize_media(item, singular) for item in result["results"][entity_type]
+                ]
+        return result
 
     @api.get("/shows/{show_id}")
     async def get_show(show_id: int) -> dict[str, Any]:
