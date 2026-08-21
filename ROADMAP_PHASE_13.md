@@ -10,7 +10,7 @@ Security, delivery reliability, maintainability, long-running storage, and daily
 - [x] Phase 4: Complete web module split
 - [x] Phase 5: Build identity and cache-safe PWA delivery
 - [x] Phase 6: Automatic backups and maintenance worker
-- [ ] Phase 7: Bounded Douyin raw payload storage
+- [x] Phase 7: Bounded Douyin raw payload storage
 - [ ] Phase 8: Avatar, cover, and continue-watching UX
 - [ ] Phase 9: Optional adaptive scheduler
 
@@ -72,11 +72,11 @@ Security, delivery reliability, maintainability, long-running storage, and daily
 
 ### Phase 7
 
-- Status: pending
-- Main design: compact and prune stored Douyin raw payloads while preserving fields required for reparsing and audit.
-- Schema changes: pending.
-- Tests: pending.
-- Commit: pending.
+- Status: complete
+- Main design: compact new/refreshed Douyin payloads to a versioned audit projection and let maintenance rewrite bounded batches of legacy rows while preserving all parser-relevant fields.
+- Schema changes: none expected; schema remains v19.
+- Tests: compact projection, storage-size bound, refresh semantics, reparse preservation, bounded legacy batches, and maintenance reporting; full suite passed with 241 tests.
+- Commit: `perf: bound stored douyin raw payloads`.
 - Production verification still needed: pending.
 
 ### Phase 8

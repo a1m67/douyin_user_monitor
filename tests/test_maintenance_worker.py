@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import sqlite3
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -18,6 +20,30 @@ class MaintenanceWorkerTests(unittest.IsolatedAsyncioTestCase):
         self.temp.cleanup()
 
     async def test_run_once_creates_due_backup_and_passive_checkpoint(self):
+        account = self.repository.create_account(
+            sec_uid="maintenance-raw",
+            nickname="维护测试",
+            homepage_url="https://www.douyin.com/user/maintenance-raw",
+        )
+        video, _ = self.repository.create_video(
+            aweme_id="maintenance-raw-1",
+            account_id=account["id"],
+            description="《维护测试》第1集",
+            hashtags=[],
+            publish_time=None,
+            video_url="https://www.douyin.com/video/maintenance-raw-1",
+            cover_url=None,
+            raw={},
+        )
+        connection = sqlite3.connect(self.repository.database_path)
+        try:
+            connection.execute(
+                "UPDATE videos SET raw_json=? WHERE id=?",
+                (json.dumps({"desc": "《维护测试》第1集", "video": {"payload": "x" * 5000}}), video["id"]),
+            )
+            connection.commit()
+        finally:
+            connection.close()
         worker = MaintenanceWorker(
             self.repository,
             MaintenanceWorkerConfig(backup_retention_count=2, backup_interval_hours=24),
@@ -25,6 +51,7 @@ class MaintenanceWorkerTests(unittest.IsolatedAsyncioTestCase):
         result = await worker.run_once(now=datetime(2026, 8, 22, tzinfo=timezone.utc))
         self.assertIsNotNone(result["backup"])
         self.assertIsNotNone(result["checkpoint"])
+        self.assertEqual(result["raw_payloads_compacted"], 1)
         self.assertTrue((self.repository.database_path.parent / "backups" / result["backup"]).is_file())
         self.assertIsNotNone(worker.health_status()["last_backup_at"])
 

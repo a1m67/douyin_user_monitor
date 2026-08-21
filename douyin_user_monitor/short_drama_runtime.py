@@ -169,6 +169,7 @@ def build_short_drama_runtime(settings: ShortDramaSettings | None = None) -> Sho
             checkpoint_interval_hours=resolved_settings.wal_checkpoint_interval_hours,
             backup_retention_count=resolved_settings.backup_retention_count,
             scan_run_retention_days=resolved_settings.scan_run_retention_days,
+            raw_json_prune_batch_size=resolved_settings.raw_json_prune_batch_size,
         ),
     )
     return ShortDramaRuntime(

@@ -14,6 +14,7 @@ from typing import Any, Iterator, Mapping, Sequence
 
 from douyin_user_monitor.parsers.regex import normalize_title
 from douyin_user_monitor.maintenance import backup_database
+from douyin_user_monitor.raw_payload import compact_video_raw
 
 
 SCHEMA_VERSION = 19
@@ -1287,7 +1288,7 @@ class ShortDramaRepository:
                     _optional_text(publish_time),
                     video_url.strip(),
                     _optional_text(cover_url),
-                    json.dumps(raw, ensure_ascii=False, sort_keys=True),
+                    json.dumps(compact_video_raw(raw), ensure_ascii=False, sort_keys=True),
                     _optional_text(display_title),
                     _json_text_sources(text_sources),
                     now,
@@ -1352,8 +1353,8 @@ class ShortDramaRepository:
             if row is None:
                 raise KeyError("视频不存在")
             existing = _video_row(row)
-            existing_raw = _json_object(existing.get("raw_json"))
-            merged_raw = _merge_richer_json(existing_raw, raw)
+            existing_raw = compact_video_raw(_json_object(existing.get("raw_json")))
+            merged_raw = compact_video_raw(_merge_richer_json(existing_raw, compact_video_raw(raw)))
             merged_sources = _merge_text_sources(existing.get("text_sources"), text_sources)
             merged_description = _prefer_richer_text(existing.get("description"), description)
             merged_display_title = _prefer_richer_text(existing.get("display_title"), display_title)
@@ -1393,6 +1394,22 @@ class ShortDramaRepository:
             if updated is None:
                 raise RuntimeError("更新视频 metadata 后无法读取记录")
             return _video_row(updated), True
+
+    def compact_video_raw_payloads(self, *, limit: int = 500) -> int:
+        """Rewrite a bounded batch of legacy oversized raw payloads."""
+        with self._write_transaction() as connection:
+            rows = connection.execute(
+                "SELECT id, raw_json FROM videos WHERE raw_json NOT LIKE '%\"_storage_version\": 1%' "
+                "ORDER BY id LIMIT ?",
+                (max(1, int(limit)),),
+            ).fetchall()
+            for row in rows:
+                compacted = compact_video_raw(_json_object(row["raw_json"]))
+                connection.execute(
+                    "UPDATE videos SET raw_json=? WHERE id=?",
+                    (json.dumps(compacted, ensure_ascii=False, sort_keys=True), int(row["id"])),
+                )
+            return len(rows)
 
     def get_video(self, video_id: int) -> dict[str, Any] | None:
         with self._transaction() as connection:

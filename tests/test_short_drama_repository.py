@@ -158,8 +158,9 @@ class ShortDramaRepositoryTests(unittest.TestCase):
         )
         self.assertTrue(changed)
         raw = json.loads(refreshed["raw_json"])
-        self.assertEqual(raw["kept"], "value")
-        self.assertEqual(raw["new_field"], "new value")
+        self.assertEqual(raw["_storage_version"], 1)
+        self.assertNotIn("kept", raw)
+        self.assertNotIn("new_field", raw)
         self.assertEqual(refreshed["display_title"], "第8集 | 旧标题")
         self.assertEqual(
             refreshed["text_sources"]["series_play_info.item_title_prefix.text"],
@@ -171,6 +172,71 @@ class ShortDramaRepositoryTests(unittest.TestCase):
             "https://www.douyin.com/video/metadata-refresh-1?source=latest",
         )
         self.assertEqual(refreshed["cover_url"], "https://cover.example/old.jpg")
+
+    def test_video_raw_payload_is_compact_and_preserves_reparse_fields(self):
+        account = self.create_account("raw-compact")
+        oversized = {
+            "aweme_id": "raw-compact-1",
+            "desc": "原创ai漫剧《契鬼人》义庄副本第一夜",
+            "item_title": "原创ai漫剧《契鬼人》义庄副本第一夜",
+            "series_play_info": {"item_title_prefix": {"text": "第8集"}, "huge": "x" * 5000},
+            "text_extra": [
+                {"hashtag_name": "AI漫剧", "start": 1, "end": 5},
+                {"hashtag_name": "AI漫剧"},
+                {"hashtag_name": "契鬼人"},
+            ],
+            "video": {"play_addr": {"url_list": ["x" * 10000]}},
+            "images": [{"url_list": ["y" * 10000]}],
+        }
+        video, created = self.repository.create_video(
+            aweme_id="raw-compact-1",
+            account_id=account["id"],
+            description=oversized["desc"],
+            hashtags=["AI漫剧", "契鬼人"],
+            publish_time=None,
+            video_url="https://www.douyin.com/video/raw-compact-1",
+            cover_url=None,
+            raw=oversized,
+        )
+
+        self.assertTrue(created)
+        stored = json.loads(video["raw_json"])
+        self.assertLess(len(video["raw_json"]), len(json.dumps(oversized)) // 10)
+        self.assertEqual(stored["series_play_info"]["item_title_prefix"]["text"], "第8集")
+        self.assertEqual(stored["item_title"], oversized["item_title"])
+        self.assertEqual(stored["text_extra"], [{"hashtag_name": "AI漫剧"}, {"hashtag_name": "契鬼人"}])
+        self.assertNotIn("video", stored)
+        self.assertNotIn("images", stored)
+
+    def test_legacy_video_raw_payload_compaction_is_bounded(self):
+        account = self.create_account("raw-legacy")
+        videos = [self.create_video(account["id"], f"raw-legacy-{number}") for number in range(3)]
+        legacy_payload = json.dumps(
+            {
+                "desc": "《末日重生》第27集",
+                "series_play_info": {"item_title_prefix": {"text": "第27集"}},
+                "video": {"play_addr": {"url_list": ["x" * 5000]}},
+            },
+            ensure_ascii=False,
+        )
+        connection = sqlite3.connect(self.repository.database_path)
+        try:
+            connection.executemany(
+                "UPDATE videos SET raw_json=? WHERE id=?",
+                [(legacy_payload, video["id"]) for video in videos],
+            )
+            connection.commit()
+        finally:
+            connection.close()
+
+        self.assertEqual(self.repository.compact_video_raw_payloads(limit=2), 2)
+        first_pass = [json.loads(self.repository.get_video(video["id"])["raw_json"]) for video in videos]
+        self.assertEqual(sum(payload.get("_storage_version") == 1 for payload in first_pass), 2)
+        self.assertEqual(self.repository.compact_video_raw_payloads(limit=2), 1)
+        self.assertEqual(self.repository.compact_video_raw_payloads(limit=2), 0)
+        final_payload = json.loads(self.repository.get_video(videos[-1]["id"])["raw_json"])
+        self.assertEqual(final_payload["series_play_info"]["item_title_prefix"]["text"], "第27集")
+        self.assertNotIn("video", final_payload)
 
     def test_system_status_includes_accounts_with_sync_errors(self):
         account = self.create_account()

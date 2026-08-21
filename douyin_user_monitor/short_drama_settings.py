@@ -58,6 +58,7 @@ class ShortDramaSettings:
     auto_backup_interval_hours: int
     maintenance_poll_seconds: float
     wal_checkpoint_interval_hours: int
+    raw_json_prune_batch_size: int
     ocr_enabled: bool
     ocr_timeout_seconds: float
     ocr_api_url: str
@@ -151,6 +152,7 @@ def load_short_drama_settings(
         auto_backup_interval_hours=_positive_int(values, "AUTO_BACKUP_INTERVAL_HOURS", 24),
         maintenance_poll_seconds=_positive_float(values, "MAINTENANCE_POLL_SECONDS", 300),
         wal_checkpoint_interval_hours=_positive_int(values, "WAL_CHECKPOINT_INTERVAL_HOURS", 6),
+        raw_json_prune_batch_size=_positive_int(values, "RAW_JSON_PRUNE_BATCH_SIZE", 500),
         ocr_enabled=_boolean(values, "OCR_ENABLED", False),
         ocr_timeout_seconds=_positive_float(values, "OCR_TIMEOUT_SECONDS", 15),
         ocr_api_url=_value(values, "OCR_API_URL", ""),

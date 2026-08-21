@@ -126,6 +126,7 @@ PowerShell 下可将 `.venv/Scripts/python` 替换为 `.venv\Scripts\python.exe`
 | `AUTO_BACKUP_INTERVAL_HOURS` | `24` | 自动在线备份间隔。 |
 | `MAINTENANCE_POLL_SECONDS` | `300` | 维护任务到期检查间隔。 |
 | `WAL_CHECKPOINT_INTERVAL_HOURS` | `6` | PASSIVE WAL checkpoint 最小间隔。 |
+| `RAW_JSON_PRUNE_BATCH_SIZE` | `500` | 每轮维护最多压缩的历史 Douyin raw payload 数量。 |
 | `OCR_ENABLED` | `false` | 是否为仍需审核且有封面的作品启用 OCR fallback。 |
 | `OCR_TIMEOUT_SECONDS` | `15` | 单次封面 OCR 超时。 |
 | `OCR_API_URL` / `OCR_API_KEY` | 空 | HTTP-compatible OCR 服务地址及可选密钥；密钥不记录。 |

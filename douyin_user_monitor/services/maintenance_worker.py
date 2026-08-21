@@ -22,6 +22,7 @@ class MaintenanceWorkerConfig:
     checkpoint_interval_hours: int = 6
     backup_retention_count: int = 14
     scan_run_retention_days: int = 30
+    raw_json_prune_batch_size: int = 500
 
 
 class MaintenanceWorker:
@@ -66,6 +67,10 @@ class MaintenanceWorker:
             self._repository.prune_scan_runs,
             retention_days=self._config.scan_run_retention_days,
         )
+        compacted = await asyncio.to_thread(
+            self._repository.compact_video_raw_payloads,
+            limit=self._config.raw_json_prune_batch_size,
+        )
         backup_path: Path | None = None
         if force_backup or self._due(self._last_backup_at, current, self._config.backup_interval_hours):
             backup_path = await asyncio.to_thread(
@@ -79,7 +84,8 @@ class MaintenanceWorker:
             checkpoint = await asyncio.to_thread(passive_wal_checkpoint, self._repository.database_path)
             self._last_checkpoint_at = current
         self._last_run_at = current
-        return {"backup": backup_path.name if backup_path else None, "scan_runs_pruned": removed, "checkpoint": checkpoint}
+        return {"backup": backup_path.name if backup_path else None, "scan_runs_pruned": removed,
+                "raw_payloads_compacted": compacted, "checkpoint": checkpoint}
 
     def health_status(self) -> dict[str, Any]:
         return {
