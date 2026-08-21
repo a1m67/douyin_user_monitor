@@ -117,6 +117,10 @@ def create_short_drama_router(
         _ = show_id
         return page()
 
+    @router.get("/following", response_class=HTMLResponse, include_in_schema=False)
+    async def following_page() -> HTMLResponse:
+        return page()
+
     @router.get("/accounts", response_class=HTMLResponse, include_in_schema=False)
     async def accounts_page() -> HTMLResponse:
         return page()
@@ -176,6 +180,7 @@ def create_short_drama_router(
         include_ignored: bool = False,
         ignored: str | None = Query(default=None, pattern="^(normal|ignored|all)$"),
         include_empty: bool = False,
+        following: bool | None = None,
         q: str | None = Query(default=None, max_length=120),
         sort: str = Query(default="recent", pattern="^(recent|title|episode_count|latest_episode)$"),
         limit: int = Query(default=100, ge=1, le=500),
@@ -185,6 +190,7 @@ def create_short_drama_router(
             "shows": repository.list_show_summaries(
                 account_id=account_id,
                 ignored=ignored_filter,
+                following=following,
                 include_empty=include_empty,
                 q=q,
                 sort=sort,
@@ -232,6 +238,20 @@ def create_short_drama_router(
         except (ValueError, KeyError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"show": show}
+
+    @api.post("/shows/{show_id}/follow")
+    async def follow_show(show_id: int) -> dict[str, Any]:
+        try:
+            return {"show": repository.set_show_following(show_id, following=True)}
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @api.post("/shows/{show_id}/unfollow")
+    async def unfollow_show(show_id: int) -> dict[str, Any]:
+        try:
+            return {"show": repository.set_show_following(show_id, following=False)}
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     @api.delete("/shows/{show_id}/episodes/{episode_id}")
     async def remove_episode(show_id: int, episode_id: int) -> dict[str, Any]:

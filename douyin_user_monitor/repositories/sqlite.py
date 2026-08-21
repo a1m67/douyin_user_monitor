@@ -15,7 +15,7 @@ from douyin_user_monitor.parsers.regex import normalize_title
 from douyin_user_monitor.maintenance import backup_database
 
 
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 SHOW_STATUSES = frozenset({"updating", "completed", "paused"})
 VIDEO_CLASSIFICATIONS = frozenset({"matched", "ignored", "review"})
 VIDEO_CONTENT_TYPES = frozenset({"episode", "trailer", "show_content", "unknown", "non_drama"})
@@ -179,12 +179,15 @@ class ShortDramaRepository:
                 is_ignored INTEGER NOT NULL DEFAULT 0,
                 ignored_at TEXT,
                 ignore_reason TEXT,
+                is_following INTEGER NOT NULL DEFAULT 0,
+                followed_at TEXT,
                 status TEXT NOT NULL DEFAULT 'updating',
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 CHECK (status IN ('updating', 'completed', 'paused')),
                 CHECK (expected_episode_count IS NULL OR expected_episode_count > 0),
-                CHECK (is_ignored IN (0, 1))
+                CHECK (is_ignored IN (0, 1)),
+                CHECK (is_following IN (0, 1))
             );
 
             CREATE TABLE IF NOT EXISTS episodes (
@@ -308,6 +311,8 @@ class ShortDramaRepository:
             "ignored_at": "TEXT",
             "ignore_reason": "TEXT",
             "latest_season": "INTEGER",
+            "is_following": "INTEGER NOT NULL DEFAULT 0",
+            "followed_at": "TEXT",
         }.items():
             if not _table_has_column(connection, "shows", column):
                 connection.execute(f"ALTER TABLE shows ADD COLUMN {column} {definition}")
@@ -1427,6 +1432,7 @@ class ShortDramaRepository:
         *,
         account_id: str | None = None,
         ignored: str = "normal",
+        following: bool | None = None,
         include_empty: bool = False,
         q: str | None = None,
         sort: str = "recent",
@@ -1449,6 +1455,9 @@ class ShortDramaRepository:
         if ignored != "all":
             conditions.append("shows.is_ignored = ?")
             params.append(1 if ignored == "ignored" else 0)
+        if following is not None:
+            conditions.append("shows.is_following = ?")
+            params.append(int(following))
         if not include_empty:
             conditions.append("EXISTS (SELECT 1 FROM episodes e0 WHERE e0.show_id = shows.id)")
         if account_id:
@@ -1766,6 +1775,22 @@ class ShortDramaRepository:
                 WHERE id = ?
                 """,
                 (now, show_id),
+            )
+            if cursor.rowcount == 0:
+                raise KeyError("短剧不存在")
+            row = connection.execute("SELECT * FROM shows WHERE id = ?", (show_id,)).fetchone()
+            return _show_row(row)
+
+    def set_show_following(self, show_id: int, *, following: bool) -> dict[str, Any]:
+        now = utc_now()
+        with self._transaction() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE shows
+                SET is_following = ?, followed_at = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (int(following), now if following else None, now, show_id),
             )
             if cursor.rowcount == 0:
                 raise KeyError("短剧不存在")
@@ -2668,6 +2693,7 @@ def _show_row(row: sqlite3.Row) -> dict[str, Any]:
     result = _row_to_dict(row)
     result["aliases"] = _json_list(result.get("aliases"))
     result["is_ignored"] = bool(result.get("is_ignored", 0))
+    result["is_following"] = bool(result.get("is_following", 0))
     if result.get("expected_episode_count") is not None:
         result["expected_episode_count"] = int(result["expected_episode_count"])
     return result

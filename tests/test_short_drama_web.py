@@ -76,7 +76,7 @@ class ShortDramaWebTests(unittest.IsolatedAsyncioTestCase):
     async def test_dashboard_pages_and_show_api(self):
         response = self.client.get("/shows")
         self.assertEqual(response.status_code, 200)
-        self.assertIn("短剧库", response.text)
+        self.assertIn("全部短剧", response.text)
         self.assertIn("人工审核", response.text)
         self.assertIn("startEditAccount", response.text)
         self.assertIn("batchIgnoreReviews", response.text)
@@ -124,6 +124,18 @@ class ShortDramaWebTests(unittest.IsolatedAsyncioTestCase):
         show_id = show["id"]
         episode = self.repository.get_show_episodes(show_id)[0]
         source = self.repository.get_episode_sources(episode["id"])[0]
+
+        following_page = self.client.get("/following")
+        self.assertEqual(following_page.status_code, 200)
+        followed = self.client.post(f"/api/short-drama/shows/{show_id}/follow")
+        self.assertEqual(followed.status_code, 200)
+        self.assertTrue(followed.json()["show"]["is_following"])
+        followed_items = self.client.get(
+            "/api/short-drama/shows", params={"following": True}
+        ).json()["shows"]
+        self.assertEqual([item["id"] for item in followed_items], [show_id])
+        unfollowed = self.client.post(f"/api/short-drama/shows/{show_id}/unfollow")
+        self.assertFalse(unfollowed.json()["show"]["is_following"])
 
         updated = self.client.patch(
             f"/api/short-drama/shows/{show_id}",

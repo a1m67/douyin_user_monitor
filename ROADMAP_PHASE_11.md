@@ -6,7 +6,7 @@ short-drama tracker. Phases are implemented, tested, and committed in order.
 ## Progress
 
 - [x] Phase 1: Smart Douyin account and share-link input
-- [ ] Phase 2: Personal show following
+- [x] Phase 2: Personal show following
 - [ ] Phase 3: Episode update feed and unread state
 - [ ] Phase 4: Advanced episode corrections
 - [ ] Phase 5: Web cookie management
@@ -26,17 +26,17 @@ and production behavior that has not yet been verified.
 - Main design: Provider-scoped `AccountInputResolver` locally parses canonical profile URLs and advanced bare ids, extracts the first official URL from share text, manually validates every official redirect hop, and resolves video/note authors through the existing one-video crawler method. All persisted homepages are canonical profile URLs and pipeline deduplication remains based on `sec_uid`.
 - Schema changes: none.
 - Tests: focused resolver/provider/web suite - 25 passed; full suite - 183 passed.
-- Commit: this phase commit (SHA recorded during final roadmap pass)
+- Commit: `bc4d336`
 - Not yet verified: real Douyin short-link redirect variants, live video-detail author payloads, and production network timeout behavior.
 
 ### Phase 2
 
-- Status: pending
-- Main design: pending
-- Schema changes: pending
-- Tests: pending
-- Commit: pending
-- Not yet verified: pending
+- Status: complete
+- Main design: Following is an independent Show preference exposed through idempotent follow/unfollow endpoints, boolean filtering, a dedicated `/following` page, stars on library cards, and detail actions. It does not alter ignored-Show behavior or notification dispatch.
+- Schema changes: schema v12 adds `shows.is_following` defaulting to false and nullable `followed_at`; existing rows remain unfollowed.
+- Tests: focused repository/web suite - 42 passed; full suite - 184 passed.
+- Commit: this phase commit (SHA recorded during final roadmap pass)
+- Not yet verified: mobile interaction and production migration against the VPS database.
 
 ### Phase 3
 

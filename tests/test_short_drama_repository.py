@@ -803,6 +803,35 @@ class ShortDramaRepositoryTests(unittest.TestCase):
         self.assertFalse(restored["is_ignored"])
         self.assertEqual(self.repository.list_show_candidates()[0]["id"], show["id"])
 
+    def test_show_following_is_independent_from_ignored_state_and_filterable(self):
+        first = self.repository.create_show(title="追更剧", normalized_title="追更剧")
+        second = self.repository.create_show(title="普通剧", normalized_title="普通剧")
+
+        followed = self.repository.set_show_following(first["id"], following=True)
+        self.assertTrue(followed["is_following"])
+        self.assertIsNotNone(followed["followed_at"])
+        self.assertEqual(
+            [item["id"] for item in self.repository.list_show_summaries(
+                following=True, include_empty=True
+            )],
+            [first["id"]],
+        )
+        self.assertEqual(
+            [item["id"] for item in self.repository.list_show_summaries(
+                following=False, include_empty=True
+            )],
+            [second["id"]],
+        )
+
+        ignored = self.repository.ignore_show(first["id"], reason="测试")
+        self.assertTrue(ignored["is_ignored"])
+        self.assertTrue(ignored["is_following"])
+        restored = self.repository.restore_show(first["id"])
+        self.assertTrue(restored["is_following"])
+        unfollowed = self.repository.set_show_following(first["id"], following=False)
+        self.assertFalse(unfollowed["is_following"])
+        self.assertIsNone(unfollowed["followed_at"])
+
     def test_remove_episode_and_source_preserve_videos_and_refresh_show(self):
         first = self.create_account("remove-a")
         second = self.create_account("remove-b")
@@ -871,6 +900,8 @@ class ShortDramaRepositoryTests(unittest.TestCase):
         show = migrated.get_show(1)
         self.assertIsNone(show["expected_episode_count"])
         self.assertFalse(show["is_ignored"])
+        self.assertFalse(show["is_following"])
+        self.assertIsNone(show["followed_at"])
 
     def test_batch_ignore_only_changes_review_videos(self):
         account = self.create_account()
