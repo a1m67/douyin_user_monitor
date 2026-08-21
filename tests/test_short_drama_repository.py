@@ -1089,6 +1089,25 @@ class ShortDramaRepositoryTests(unittest.TestCase):
         self.assertEqual(self.repository.get_show(target_show["id"])["latest_episode"], None)
         self.assertEqual(self.repository.get_video(second["id"])["classification_status"], "ignored")
 
+    def test_data_quality_report_covers_review_low_confidence_missing_and_stale(self):
+        account = self.create_account()
+        show = self.repository.create_show(title="质量剧", normalized_title="质量剧")
+        for number in (1, 3):
+            video = self.create_video(account["id"], f"quality-{number}")
+            self.repository.update_video_processing(video["id"], is_processed=True, needs_review=False,
+                classification_status="matched", parser_confidence=0.8, parsed_show_title="质量剧",
+                parsed_episode_number=number, parser_method="regex:test")
+            self.repository.record_episode_source(show_id=show["id"], episode_number=number,
+                video_id=video["id"], account_id=account["id"], published_at=video["publish_time"])
+        review = self.create_video(account["id"], "quality-review")
+        self.repository.update_video_processing(review["id"], is_processed=False, needs_review=True,
+            classification_status="review", parser_confidence=0.4, parser_method="regex:test")
+        report = self.repository.data_quality_report(stale_days=1)
+        self.assertEqual(report["categories"]["review"]["count"], 1)
+        self.assertEqual(report["categories"]["low_confidence"]["count"], 3)
+        self.assertEqual(report["categories"]["missing_episodes"]["count"], 1)
+        self.assertEqual(report["categories"]["stale_shows"]["count"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -555,6 +555,12 @@ class ShortDramaWebTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("token", str(data).lower())
         self.assertTrue(self.client.post("/api/short-drama/diagnostics/doctor").json()["ok"])
 
+    async def test_quality_page_and_api_expose_all_categories(self):
+        self.assertEqual(self.client.get("/quality").status_code, 200)
+        data = self.client.get("/api/short-drama/quality").json()
+        self.assertEqual(set(data["categories"]), {"review", "missing_episodes", "suspicious_jumps",
+            "expected_count_conflicts", "source_less_episodes", "low_confidence", "ocr_only", "stale_shows"})
+
 
 if __name__ == "__main__":
     unittest.main()

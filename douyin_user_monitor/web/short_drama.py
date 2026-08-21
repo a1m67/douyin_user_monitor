@@ -182,6 +182,10 @@ def create_short_drama_router(
     async def diagnostics_page() -> HTMLResponse:
         return page()
 
+    @router.get("/quality", response_class=HTMLResponse, include_in_schema=False)
+    async def quality_page() -> HTMLResponse:
+        return page()
+
     def health_payload() -> dict[str, str]:
         repository.counts()
         return {
@@ -394,6 +398,10 @@ def create_short_drama_router(
                 "crawler": scheduler.crawler_status() if scheduler and hasattr(scheduler,"crawler_status") else {},
                 "cookie": cookie_manager.status() if cookie_manager else {"status":"not_configured"},
                 "features": {"llm": "configured_or_disabled", "ocr": "configured_or_disabled"}}
+
+    @api.get("/quality")
+    async def data_quality(stale_days: int = Query(default=30, ge=1, le=3650)) -> dict[str, Any]:
+        return repository.data_quality_report(stale_days=stale_days)
 
     @api.post("/diagnostics/doctor")
     async def run_doctor() -> dict[str, Any]:

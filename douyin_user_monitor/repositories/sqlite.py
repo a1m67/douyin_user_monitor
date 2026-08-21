@@ -7,7 +7,7 @@ import threading
 import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterator, Mapping, Sequence
 
@@ -2108,6 +2108,29 @@ class ShortDramaRepository:
         with self._transaction() as connection:
             rows = connection.execute("SELECT * FROM manual_corrections ORDER BY id DESC LIMIT ?", (max(1, min(limit, 500)),)).fetchall()
         return [{**dict(row), "old_value": json.loads(row["old_value"]), "new_value": json.loads(row["new_value"])} for row in rows]
+
+    def data_quality_report(self, *, stale_days: int = 30, limit: int = 50) -> dict[str, Any]:
+        safe_limit = max(1, min(int(limit), 200))
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=max(1, stale_days))).isoformat(timespec="seconds")
+        definitions = {
+            "review": ("SELECT videos.id,accounts.nickname,COALESCE(videos.display_title,videos.description) title FROM videos JOIN accounts ON accounts.id=videos.account_id WHERE videos.classification_status='review' ORDER BY videos.created_at DESC", ()),
+            "missing_episodes": ("""SELECT shows.id,shows.title,shows.latest_season,shows.latest_episode,
+                (SELECT MAX(e.episode_number)-MIN(e.episode_number)+1-COUNT(*) FROM episodes e WHERE e.show_id=shows.id AND e.season_number=shows.latest_season AND e.episode_number>0) issue_count
+                FROM shows WHERE is_ignored=0 AND COALESCE((SELECT MAX(e.episode_number)-MIN(e.episode_number)+1-COUNT(*) FROM episodes e WHERE e.show_id=shows.id AND e.season_number=shows.latest_season AND e.episode_number>0),0)>0 ORDER BY issue_count DESC""", ()),
+            "suspicious_jumps": ("""SELECT shows.id,shows.title,MAX(episodes.episode_number)-MIN(episodes.episode_number) jump_size FROM shows JOIN episodes ON episodes.show_id=shows.id WHERE episodes.episode_number>0 GROUP BY shows.id HAVING jump_size>20 AND COUNT(*)<4 ORDER BY jump_size DESC""", ()),
+            "expected_count_conflicts": ("""SELECT shows.id,shows.title,shows.expected_episode_count,shows.latest_episode,COUNT(episodes.id) collected_count FROM shows LEFT JOIN episodes ON episodes.show_id=shows.id WHERE shows.expected_episode_count IS NOT NULL GROUP BY shows.id HAVING shows.expected_episode_count<COUNT(episodes.id) OR shows.expected_episode_count<COALESCE(shows.latest_episode,0) ORDER BY shows.id""", ()),
+            "source_less_episodes": ("""SELECT episodes.id,shows.id show_id,shows.title,episodes.season_number,episodes.episode_number FROM episodes JOIN shows ON shows.id=episodes.show_id LEFT JOIN episode_sources ON episode_sources.episode_id=episodes.id WHERE episode_sources.id IS NULL ORDER BY episodes.id""", ()),
+            "low_confidence": ("""SELECT videos.id,accounts.nickname,COALESCE(videos.display_title,videos.description) title,videos.parser_confidence FROM videos JOIN accounts ON accounts.id=videos.account_id WHERE videos.classification_status!='ignored' AND videos.parser_confidence<0.90 ORDER BY videos.parser_confidence ASC""", ()),
+            "ocr_only": ("""SELECT videos.id,accounts.nickname,COALESCE(videos.display_title,videos.description) title,videos.ocr_confidence FROM videos JOIN accounts ON accounts.id=videos.account_id WHERE videos.ocr_text IS NOT NULL AND videos.ocr_text!='' AND videos.parser_method LIKE 'ocr:%' ORDER BY videos.created_at DESC""", ()),
+            "stale_shows": ("""SELECT id,title,latest_update_at FROM shows WHERE is_ignored=0 AND status='updating' AND (latest_update_at IS NULL OR latest_update_at<?) ORDER BY latest_update_at""", (cutoff,)),
+        }
+        result: dict[str, Any] = {"stale_days": max(1, stale_days), "categories": {}}
+        with self._transaction() as connection:
+            for name, (query, params) in definitions.items():
+                rows = connection.execute(query, params).fetchall()
+                result["categories"][name] = {"count": len(rows), "items": [dict(row) for row in rows[:safe_limit]]}
+        result["total_issues"] = sum(item["count"] for item in result["categories"].values())
+        return result
 
     def repair_episode_and_show_consistency(self) -> dict[str, int]:
         """Rebuild canonical episode sources and cached show metadata safely."""
