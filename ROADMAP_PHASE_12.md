@@ -96,5 +96,5 @@ tested, and committed independently without pushing during the phase.
 - Main design: extracted the dashboard CSS and application JavaScript into stable `/static/app.css`, `/static/api.js`, and `/static/app.js` resources; kept the server-rendered shell and all existing routes; moved update burst grouping into a presentation helper; replaced startup/shutdown event handlers with FastAPI lifespan; and deferred default runtime/crawler construction until lifespan startup while preserving explicit runtime injection and legacy lifecycle helpers.
 - Schema changes: none; schema remains v18.
 - Tests: static asset and PWA tests, page/API compatibility tests, lifecycle tests including deferred runtime construction, dashboard UI tests, and full suite (226 tests passed).
-- Commit: recorded after the Phase 9 implementation commit.
+- Commit: `9eaf0d0` (`refactor: modularize short drama web app`)
 - Production verification still needed: exercise the static-resource cache behavior and lifespan start/stop on the VPS, then verify all dashboard routes and service-worker updates after deployment.
